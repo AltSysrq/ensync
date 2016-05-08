@@ -158,3 +158,10 @@ insensitive filesystem considers the same. If this happens, or if equivalent
 but different names are created on the server and client, the result will
 generally involve one version overwriting the other or the two being merged. No
 guarantees are made here, nor is Ensync tested in these conditions.
+
+Building from Source
+--------------------
+
+Install Rust and Cargo 1.7.0 or later (https://www.rust-lang.org/).
+
+Install `gpgme`, eg, `pkg install gpgme` as root.
