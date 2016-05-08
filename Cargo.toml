@@ -1,0 +1,6 @@
+[package]
+name = "ensync"
+version = "0.1.0"
+authors = ["Jason Lingle <jason@lin.gl>"]
+
+[dependencies]
