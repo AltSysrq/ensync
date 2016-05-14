@@ -26,6 +26,81 @@ about this type of identification.
 Sync Model
 ----------
 
+Abstractly, Ensync compares three parallel streams of linearised directory
+hierarchies, referred to as "client", "ancestor", and "server". The ancestor is
+essentially a lightweight record of the last point at which the client and
+server agreed. Each item in the stream is one of the following:
+
+- Directory: name, mode, (contents)
+- Regular file: name, mode, size, (last-modified), content hash
+- Symlink: name, content
+- Special (devices, sockets, etc): name
+
+Two items "match" if they are of the same type and all properties not notated
+in parentheses are equal.
+
+Regular files use the content hash from the corresponding ancestor file if the
+size and last-modified fields match, and otherwise use an "unknown" hash, so
+that files are not read in unnecessarily.
+
+### Reconciliation
+
+As the three streams are iterated, items are intersected by their name, and the
+resulting tuples are _reconciled_, producing zero to two outputs on each
+stream and performing operations on the server and client as needed.
+
+The exact behaviour of reconciliation is dependent on the _sync mode_ of the
+item. A sync mode is notated like "cud/cud", using hyphens instead of letters
+to indicate "off", lowercase letters for "on", and uppercase letters for
+"force". The six settings are: sync inbound create, sync inbound update, sync
+inbound delete, sync outbound create, sync outbound update, sync outbound
+delete. Thus the sync mode "cud/cud" is a standard conservative symmetric sync;
+"---/CUD" forces the server to look like the client; "---/---" causes no
+changes to propagate, and so on.
+
+"Special" items always have mode "---/---".
+
+"Inbound" and "outbound" refer to changes propagating from server to client and
+from client to server, respectively. "Create" describes the behaviour of new
+files (ie, the name is found only on one side and not in the ancestor);
+"update" describes the behaviour of changed files (ie, the name is found on
+both client and ancestor); "delete" describes the behaviour of deleted files
+(ie, the name is found on one of client and server and is found in the
+ancestor).
+
+An edit/edit conflict occurs when the client, ancestor, and server all mutually
+mismatch. By default, the server file is renamed to avoid the conflict and the
+ancestor discarded, generally resulting in one create each way. If "sync
+inbound update" is set to force and "sync outbound update" is not, conflicts
+will instead be resolved by discarding the client version and replacing it with
+the server version. Conversely, if "sync outbound create" is set to force and
+"sync inbound update" is not, the client version replaces the server version.
+If both update settings are set to "force", the version with the later
+last-modified value wins and the other is discarded; ties go to the client.
+
+Edit/edit conflicts over file modes alone are handled specially. If a rename
+due to the conflict would occur, instead the client mode is simply used. Note
+that this means that two directory versions cannot be subject to an edit/edit
+conflict resulting in the renaming of one of them; they will always be merged
+recursively.
+
+An edit/delete conflict occurs when the client or server mismatches the
+ancestor, and the other side does not exist. By default, this is resolved by
+discarding the ancestor, allowing the edit to propagate as a create. If the
+side with the deleted version has the "sync delete" mode set to force, the file
+is instead deleted on the other side.
+
+There is a subtlety here with respect to directories. Ordinarily, if a
+directory is to be deleted, it is "provisionally" emitted anyway in case it is
+found that new files have been created within it. Setting a delete mode to
+"force" prevents this; all files within force-deleted directories are dropped,
+even if this would ordinarily be considered an edit/delete conflict (and even
+if those files would have had a mode that caused them to be resurrected in that
+case).
+
+Operational Model
+-----------------
+
 Ensync uses a simple client-server model, where the client operates on the
 cleartext files and makes most decisions, and the server provides a dumb blob
 store. Typically the server is invoked over SSH, but it can also be run locally
@@ -35,83 +110,15 @@ to, eg, sync with a removable device.
 
 The server, for the most part, knows nothing about the sync model. Its main
 functionality is storing a mapping from client-supplied 256-bit identifiers to
-data payloads and reference counts. In practise, the identifiers are SHA-3 sums
-of the cleartext with the pepper prepended and appended, though the server has
-no way to verify this. The reference counts are also maintained via commands
-from the client, since the server cannot identify references itself.
+data payloads. In practise, the identifiers are SHA-3 sums of the cleartext
+with the pepper prepended and appended, though the server has no way to verify
+this. The reference counts are also maintained via commands from the client,
+since the server cannot identify references itself.
 
 The server also maintains a table of cleartext identifiers to blob identifiers,
-which serve as the roots of the file trees.
-
-### Client Side
-
-#### Regular Files and Symlinks
-
-When Ensync encounters a regular file or symlink, it reads its mode and
-contents into memory, determines its hash value, and queries the server whether
-such a blob exists. If not, it is uploaded.
-
-Files larger than 1MB are split into 1MB pieces and each piece is processed
-separately, and a separate blob listing the pieces is created to stand in for
-the file.
-
-The hash values for files are cached, and it is assumed the file is unmodified
-since the last sync if the modified date and mode are both unchanged.
-
-The client attempts to map cleartext hashes to existing files, so that syncs of
-file movement do not need to redownload the files from the server. When files
-are created or updated in the client, they are first written in a temporary
-location and then renamed into the desired location. When files are deleted in
-the client, they are moved to a temporary location and deleted on exit.
-
-#### Directories
-
-Syncing directories is more complicated. A directory is modelled as a simple
-sequence of (name,type,hash) tuples, sorted by name. The changes in a directory
-are reconciled by comparing the below three states and deriving new
-client/server states according to the current sync mode.
-
-- The local state of the directory as calculated by the client.
-
-- The state of the directory as stored in a blob on the server.
-
-- The "ancestor state" stored locally by the client, which lists tuples which
-  were in the same state at the end of the previous sync.
-
-During reconciliation, tuples are paired by name, represented as
-(client,ancestor,server) below. The sync mode is a set of 6 bits, notated
-"cud/cud" for everything on (symmetric sync) or "---/---" for everything off
-(no changes). These bits indicate respectively:
-
-- Create Inbound. (nil,nil,a) -> (a,a,a). Ie, if the entry exists on the server
-  but not in the client or ancestor state, bring it onto the client.
-
-- Update Inbound. (a,a,b) -> (b,b,b). Ie, if the entry exists on both sides,
-  but is unchanged on the client and updated on the server, throw the client's
-  version away and fetch the server's version.
-
-- Delete Inbound. (a,a,nil) -> nil. Ie, if the entry exists on the client and
-  in the ancestor state but not on the server, delete from the client.
-
-- Create Outbound. (a,nil,nil) -> (a,a,a). Ie, if the entry exists on the
-  client but not in the server or the ancestor state, upload it to the server.
-
-- Update Outbound. (b,a,a) -> (b,b,b). Ie, if the entry exists on both sides,
-  but the client version differs from the ancestor state and the server version
-  matches the ancestor state, throw the server version away and copy the client
-  version to the server.
-
-- Delete Outbound. (nil,a,a) -> nac. Ie, if the entry exists on the server and
-  in the ancostr state mut not on the client, remove the entry from the server.
-
-Regardless of sync mode, (a,a,a) is left unchanged, (a,nil,a) is reconciled to
-(a,a,a), and (nil,a,nil) is reconciled to nil.
-
-If each member of the sync triple is in a different state, it is termed
-_unreconcilable_. When this occurs, the name in the server tuple is changed by
-appending `~` and a number to make it unique, and the original sync triple is
-reconciled as if the server had the same state as the ancestor. That is,
-(a,b,c) is reconciled as two separate triples, (a,b,b) and (nil,nil,c).
+which serve as the roots of the file trees and the targets of directory
+entries. (Note however that it is not possible to use these pointers alone to
+reconstruct the directory structure.)
 
 Concurrency and Failure
 -----------------------
@@ -123,8 +130,8 @@ than useful.
 
 Multiple Ensync instances should not be run concurrently over the same
 directory tree. A best effort is made to detect this condition and abort when
-it happens. It is safe to run multiple Ensync instances concurrently against
-the same server store.
+it happens. Ensync does not permit multiple instances to run over the same
+server store at once.
 
 If the server process is killed gracelessly, it may leak temporary files but
 will not corrupt the store.
@@ -145,7 +152,7 @@ Filesystem Limitations
 ----------------------
 
 Only regular files, symlinks, and directories are supported. Other types of
-files are treated as empty symlinks.
+files are not synced.
 
 The basic read/write/execute permissions of regular files and directories are
 synced. Other attributes and alternate data streams are ignored.
@@ -158,6 +165,17 @@ insensitive filesystem considers the same. If this happens, or if equivalent
 but different names are created on the server and client, the result will
 generally involve one version overwriting the other or the two being merged. No
 guarantees are made here, nor is Ensync tested in these conditions.
+
+Ensync is not aware of hard links. Since it never overwrites files in-place,
+having hard links will not cause issues, but Ensync may turn them into separate
+files, and they will be created as separate files on other systems. Hard links
+between directories, should your filesystem actually support them, are not
+supported at all and will likely cause numerous issues.
+
+If your system permits opening directories as regular files (eg, FreeBSD), you
+may end up in a weird situation if something changes a regular file into a
+directory at just the right moment. No data will be lost locally, but the raw
+content of the directory may propagate as a regular file instead.
 
 Building from Source
 --------------------
