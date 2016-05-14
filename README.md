@@ -162,6 +162,6 @@ guarantees are made here, nor is Ensync tested in these conditions.
 Building from Source
 --------------------
 
-Install Rust and Cargo 1.7.0 or later (https://www.rust-lang.org/).
+Install Rust 1.7.0 and Cargo 0.9.0 or later (https://www.rust-lang.org/).
 
 Install `gpgme`, eg, `pkg install gpgme` as root.
