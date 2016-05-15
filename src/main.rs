@@ -18,6 +18,7 @@ extern crate gpgme;
 extern crate libc;
 
 mod defs;
+mod file_stream;
 mod mutator;
 mod reconcile;
 

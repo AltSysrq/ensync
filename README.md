@@ -29,14 +29,14 @@ Sync Model
 Abstractly, Ensync compares three parallel streams of linearised directory
 hierarchies, referred to as "client", "ancestor", and "server". The ancestor is
 essentially a lightweight record of the last point at which the client and
-server agreed. Each item in the stream is one of the following:
+server agreed. Each file in the stream is one of the following:
 
 - Directory: name, mode, (contents)
 - Regular file: name, mode, size, (last-modified), content hash
 - Symlink: name, content
 - Special (devices, sockets, etc): name
 
-Two items "match" if they are of the same type and all properties not notated
+Two files "match" if they are of the same type and all properties not notated
 in parentheses are equal.
 
 Regular files use the content hash from the corresponding ancestor file if the
@@ -45,12 +45,12 @@ that files are not read in unnecessarily.
 
 ### Reconciliation
 
-As the three streams are iterated, items are intersected by their name, and the
+As the three streams are iterated, files are intersected by their name, and the
 resulting tuples are _reconciled_, producing zero to two outputs on each
 stream and performing operations on the server and client as needed.
 
 The exact behaviour of reconciliation is dependent on the _sync mode_ of the
-item. A sync mode is notated like "cud/cud", using hyphens instead of letters
+file. A sync mode is notated like "cud/cud", using hyphens instead of letters
 to indicate "off", lowercase letters for "on", and uppercase letters for
 "force". The six settings are: sync inbound create, sync inbound update, sync
 inbound delete, sync outbound create, sync outbound update, sync outbound
@@ -58,7 +58,7 @@ delete. Thus the sync mode "cud/cud" is a standard conservative symmetric sync;
 "---/CUD" forces the server to look like the client; "---/---" causes no
 changes to propagate, and so on.
 
-"Special" items always have mode "---/---".
+Special files always have mode "---/---".
 
 "Inbound" and "outbound" refer to changes propagating from server to client and
 from client to server, respectively. "Create" describes the behaviour of new
