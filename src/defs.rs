@@ -69,45 +69,6 @@ impl FileData {
     }
 }
 
-/// Extension trait for Option<FileData>.
-pub trait OptionFileDataExt {
-    fn with_hash_from(self, &Self) -> Self;
-    fn matches(&self, &Self) -> bool;
-}
-
-impl OptionFileDataExt for Option<FileData> {
-    /// Infers the hash of this file from another.
-    ///
-    /// If `self` and `that` are both present regular files with the same size
-    /// and modification time, the hash from `that` replaces the hash from
-    /// `self`. Otherwise, `self` is returned unmodified.
-    fn with_hash_from(self, that: &Option<FileData>) -> Option<FileData> {
-        use self::FileData::*;
-
-        match (self, that) {
-            (Some(Regular(mode, size1, modified1, ref hash1)),
-             &Some(Regular(_, size2, modified2, ref hash2))) => {
-                let hash = if modified1 == modified2 &&
-                    size1 == size2 { *hash2 } else { *hash1 };
-                Some(Regular(mode, size1, modified1, hash))
-            },
-            (res, _) => res
-        }
-    }
-
-    /// Returns whether `self` and `that` match.
-    ///
-    /// This is essentially `FileData::matches()` lifted up to operate on two
-    /// `Option`s.
-    fn matches(&self, that: &Self) -> bool {
-        match (self, that) {
-            (&None, &None) => true,
-            (&Some(ref a), &Some(ref b)) => a.matches(b),
-            _ => false,
-        }
-    }
-}
-
 /// A file, both its name and shallow data.
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct File (OsString, FileData);
