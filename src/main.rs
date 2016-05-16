@@ -18,6 +18,9 @@ extern crate gpgme;
 extern crate libc;
 
 mod defs;
+mod replica;
+#[cfg(test)]
+mod memory_replica;
 
 fn main() {
     println!("hello world");

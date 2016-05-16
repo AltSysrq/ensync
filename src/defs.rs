@@ -29,20 +29,24 @@ pub type HashId = [u8;32];
 /// case.
 pub const UNKNOWN_HASH : HashId = [0;32];
 
+// Maybe someday we can move to rust's platform-independent stuff, but time
+// support is missing from 1.7.0 and the permissions model is sufficiently
+// awkward that it's not really comfortable to trust for file syncing.
+pub type FileMode = libc::mode_t;
+pub type FileSize = libc::off_t;
+pub type FileTime = libc::time_t;
+
 /// Shallow data about a file in the sync process, excluding its name.
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub enum FileData {
-    // Maybe someday we can move to rust's platform-independent stuff, but time
-    // support is missing from 1.7.0 and the permissions model is sufficiently
-    // awkward that it's not really comfortable to trust for file syncing.
     /// A directory. The only immediate data is its mode. In a file stream, the
     /// receiver must either push the new directory or request it to be
     /// discarded.
-    Directory(libc::mode_t),
+    Directory(FileMode),
     /// A regular file. Data is mode, size in bytes, last modified, content
     /// hash. Note that the content hash may be incorrect, and always will be
     /// for files freshly streamed off the client filesystem.
-    Regular(libc::mode_t, libc::off_t, libc::time_t, HashId),
+    Regular(FileMode, FileSize, FileTime, HashId),
     /// A symbolic link. The only data is its actual content.
     Symlink(OsString),
     /// Any other type of non-regular file.
@@ -71,7 +75,7 @@ impl FileData {
 
 /// A file, both its name and shallow data.
 #[derive(Clone,Debug,PartialEq,Eq)]
-pub struct File (OsString, FileData);
+pub struct File (pub OsString, pub FileData);
 
 impl File {
     pub fn is_dir(&self) -> bool {
