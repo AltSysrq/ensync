@@ -45,7 +45,7 @@ pub trait Replica {
     /// Returns whether the given directory has been marked dirty for this
     /// session.
     ///
-    /// Returns true if the directory cannot be accessed.
+    /// Returns false if the directory cannot be accessed.
     fn is_dirty_dir(&self, &Self::Directory) -> bool;
     /// Returns the root directory for this replica.
     fn root(&self) -> Result<Self::Directory>;
@@ -66,6 +66,9 @@ pub trait Replica {
     /// The file identified by `target` is removed from the directory. A best
     /// effort is made to prevent deleting the file if it does not match
     /// `target`.
+    ///
+    /// If `target` is a directory, this call must fail if the directory is not
+    /// actually empty.
     fn remove(&self, &mut Self::Directory, target: &File) -> Result<()>;
     /// Creates a file within a directory.
     ///
@@ -96,7 +99,13 @@ pub trait Replica {
     /// rename/create/delete sequence is needed to perform the operation.
     ///
     /// A best effort is made to avoid replacing a file which does not match
-    /// `old`.
+    /// `old`. If `old` is a directory and `new` is not, the directory must be
+    /// empty. This is a special case; if the underlying system cannot
+    /// atomically check that the directory is empty, remove it, and replace it
+    /// with the new item, it should remove the directory _first_, so that the
+    /// failure mode is to either take no action at all, or to fail halfway,
+    /// resulting in the loss of the directory (which isn't generally a big
+    /// deal), rather than possibly renaming a whole directory tree.
     ///
     /// Returns the actual file version resulting from this update. This may be
     /// different from `new` if the hash on `new` was incorrect.
@@ -116,7 +125,7 @@ pub trait Replica {
     ///
     /// `Replica::ls()` always returns the empty vector for synthetic
     /// directories that have not yet materialised.
-    fn synthdir(&self, &Self::Directory, subdir: &OsStr, mode: FileMode)
+    fn synthdir(&self, &mut Self::Directory, subdir: &OsStr, mode: FileMode)
                 -> Self::Directory;
     /// Returns an object which can be used to transfer `file` out of this
     /// replica.
