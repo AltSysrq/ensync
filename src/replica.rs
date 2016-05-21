@@ -21,6 +21,13 @@ use defs::*;
 
 pub type Result<T> = StdResult<T, Box<Error>>;
 
+/// Trait for the `Replica::Directory` type.
+pub trait ReplicaDirectory {
+    /// Returns the full path of this directory, suitable for display to the
+    /// user.
+    fn full_path(&self) -> &OsStr;
+}
+
 /// Represents one of the two replicas; ie, the client filesystem or the
 /// encrypted mirror on the server.
 ///
@@ -35,7 +42,7 @@ pub type Result<T> = StdResult<T, Box<Error>>;
 /// allow the mutable state to be moved into the directory objects instead.
 pub trait Replica {
     /// Type representing an operating directory.
-    type Directory;
+    type Directory : ReplicaDirectory;
     /// Type which this replica uses to transfer data in from the other
     /// replica.
     type TransferIn;

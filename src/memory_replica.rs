@@ -33,7 +33,7 @@ use std::ffi::{OsStr,OsString};
 use std::sync::{Mutex,MutexGuard};
 
 use defs::*;
-use replica::{Replica,Result,NullTransfer};
+use replica::{Replica,ReplicaDirectory,Result,NullTransfer};
 
 /// Identifies an operation for purposes of mapping to a fault.
 #[derive(Clone,Debug,Hash,PartialEq,Eq)]
@@ -191,6 +191,12 @@ impl MemoryReplicaImpl {
 pub struct DirHandle {
     path: OsString,
     synthetics: Vec<(OsString, OsString, FileMode)>,
+}
+
+impl ReplicaDirectory for DirHandle {
+    fn full_path(&self) -> &OsStr {
+        &self.path
+    }
 }
 
 pub struct MemoryReplica {

@@ -18,6 +18,7 @@ extern crate gpgme;
 extern crate libc;
 
 mod defs;
+mod log;
 mod replica;
 #[cfg(test)]
 mod memory_replica;
