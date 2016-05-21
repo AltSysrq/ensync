@@ -33,7 +33,7 @@ use std::ffi::{OsStr,OsString};
 use std::sync::{Mutex,MutexGuard};
 
 use defs::*;
-use replica::{Replica,Result};
+use replica::{Replica,Result,NullTransfer};
 
 /// Identifies an operation for purposes of mapping to a fault.
 #[derive(Clone,Debug,Hash,PartialEq,Eq)]
@@ -476,6 +476,15 @@ impl Replica for MemoryReplica {
             }
         } else {
             simple_error()
+        }
+    }
+}
+
+impl NullTransfer for MemoryReplica {
+    fn null_transfer(file: &FileData) -> Result<HashId> {
+        match file {
+            &FileData::Regular(_,_,_,h) => Ok(h),
+            _ => simple_error(),
         }
     }
 }

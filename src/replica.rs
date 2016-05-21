@@ -132,3 +132,12 @@ pub trait Replica {
     fn transfer(&self, &Self::Directory, file: &File)
                 -> Self::TransferOut;
 }
+
+/// A Replica which supports a "null transfer" input.
+pub trait NullTransfer : Replica {
+    /// Produces a `TransferIn` that can be used to use `Replica::create()` or
+    /// `Replica::update()` with the given `FileData`.
+    ///
+    /// The hash on the `FileData` is assumed correct.
+    fn null_transfer(file: &FileData) -> Self::TransferIn;
+}
