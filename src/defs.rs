@@ -13,7 +13,7 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::OsString;
+use std::ffi::{CStr,CString};
 use libc;
 
 /// Type for content hashes of regular files and for blob identifiers on the
@@ -47,7 +47,7 @@ pub enum FileData {
     /// for files freshly streamed off the client filesystem.
     Regular(FileMode, FileSize, FileTime, HashId),
     /// A symbolic link. The only data is its actual content.
-    Symlink(OsString),
+    Symlink(CString),
     /// Any other type of non-regular file.
     Special,
 }
@@ -98,22 +98,14 @@ impl FileData {
     }
 }
 
-/// A file, both its name and shallow data.
+/// Convenience for passing a file name and data together.
 #[derive(Clone,Debug,PartialEq,Eq)]
-pub struct File (pub OsString, pub FileData);
+pub struct File<'a> (pub &'a CStr, pub &'a FileData);
 
-impl File {
-    pub fn is_dir(&self) -> bool {
-        match self {
-            &File (_, FileData::Directory(_)) => true,
-            _ => false,
-        }
-    }
-}
 
 #[cfg(test)]
 mod test {
-    use std::ffi::OsString;
+    use std::ffi::CString;
 
     use super::*;
 
@@ -136,9 +128,9 @@ mod test {
         let f4 = FileData::Regular(0o777, 0, 42, [1;32]);
         let d1 = FileData::Directory(0o777);
         let d2 = FileData::Directory(0o666);
-        let s1 = FileData::Symlink(OsString::from("foo"));
-        let s2 = FileData::Symlink(OsString::from("bar"));
-        let s3 = FileData::Symlink(OsString::from("foo"));
+        let s1 = FileData::Symlink(CString::new("foo").unwrap());
+        let s2 = FileData::Symlink(CString::new("bar").unwrap());
+        let s3 = FileData::Symlink(CString::new("foo").unwrap());
         let special = FileData::Special;
 
         assert!(f1.matches(&f1));

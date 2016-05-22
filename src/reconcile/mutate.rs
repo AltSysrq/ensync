@@ -17,7 +17,7 @@
 
 use std::cmp::{Ord,Ordering};
 use std::collections::{BinaryHeap,BTreeMap};
-use std::ffi::{OsStr,OsString};
+use std::ffi::{CStr,CString};
 
 use defs::*;
 use rules::*;
@@ -109,7 +109,7 @@ struct SingleDirContext<T> {
     /// The `Replica::Directory` object.
     dir: T,
     /// The files in this directory when it was listed.
-    files: BTreeMap<OsString,FileData>,
+    files: BTreeMap<CString,FileData>,
 }
 
 /// Directory-specific context information.
@@ -120,12 +120,12 @@ pub struct DirContext<'a, I : Interface<'a>> {
     /// Queue of filenames to process. Files are processed in approximately
     /// asciibetical order so that informational messages can give a rough idea
     /// of progress.
-    todo: BinaryHeap<Reversed<OsString>>,
+    todo: BinaryHeap<Reversed<CString>>,
     rules: I::Rules,
 }
 
 impl<'a, I : Interface<'a>> DirContext<'a,I> {
-    fn name_in_use(&self, name: &OsStr) -> bool {
+    fn name_in_use(&self, name: &CStr) -> bool {
         self.cli.files.contains_key(name) ||
             self.anc.files.contains_key(name) ||
             self.srv.files.contains_key(name)
@@ -153,7 +153,7 @@ enum ActionAfterRecurse {
 #[cfg(test)]
 mod test {
     use std::collections::HashSet;
-    use std::ffi::{OsString,OsStr};
+    use std::ffi::{CString,CStr};
 
     use super::*;
     use rules::*;
@@ -165,8 +165,8 @@ mod test {
     struct ConstantRules<'a>(&'a SyncMode);
 
     impl<'a> RulesMatcher for ConstantRules<'a> {
-        fn dir_contains(&mut self, _: &OsStr) { }
-        fn child(&self, _: &OsStr) -> Self { self.clone() }
+        fn dir_contains(&mut self, _: &CStr) { }
+        fn child(&self, _: &CStr) -> Self { self.clone() }
         fn sync_mode(&self) -> SyncMode { *self.0 }
     }
 
@@ -203,7 +203,7 @@ mod test {
         }
     }
 
-    fn oss(s: &str) -> OsString {
-        OsString::from(s)
+    fn oss(s: &str) -> CString {
+        CString::new(s).unwrap()
     }
 }

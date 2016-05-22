@@ -13,7 +13,7 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::OsStr;
+use std::ffi::{CStr,CString};
 use std::error::Error;
 use std::result::Result as StdResult;
 
@@ -25,7 +25,7 @@ pub type Result<T> = StdResult<T, Box<Error>>;
 pub trait ReplicaDirectory {
     /// Returns the full path of this directory, suitable for display to the
     /// user.
-    fn full_path(&self) -> &OsStr;
+    fn full_path(&self) -> &CStr;
 }
 
 /// Represents one of the two replicas; ie, the client filesystem or the
@@ -38,7 +38,7 @@ pub trait ReplicaDirectory {
 /// Replicas are intended to use interior mutability if they must keep mutable
 /// state. All methods on `Replica` therefore take an immutable `self`
 /// reference. This is a consequence of there currently being no way to express
-/// something like `fn chdir<'a>(&'a self, &OsStr) -> Self::Directory<'a>` to
+/// something like `fn chdir<'a>(&'a self, &CStr) -> Self::Directory<'a>` to
 /// allow the mutable state to be moved into the directory objects instead.
 pub trait Replica {
     /// Type representing an operating directory.
@@ -61,12 +61,12 @@ pub trait Replica {
     /// On success, the full conents of the directory (excluding "." and ".."
     /// if returned by the underlying system) after transform/filtering are
     /// returned, in no particular order.
-    fn list(&self, &Self::Directory) -> Result<Vec<File>>;
+    fn list(&self, &Self::Directory) -> Result<Vec<(CString,FileData)>>;
     /// Renames a file within a directory.
     ///
     /// The file of any type named by `old` is renamed to `new`. A best effort
     /// is made to prevent renaming onto an existing file.
-    fn rename(&self, &mut Self::Directory, old: &OsStr, new: &OsStr)
+    fn rename(&self, &mut Self::Directory, old: &CStr, new: &CStr)
               -> Result<()>;
     /// Deletes the file within a directory.
     ///
@@ -76,7 +76,7 @@ pub trait Replica {
     ///
     /// If `target` is a directory, this call must fail if the directory is not
     /// actually empty.
-    fn remove(&self, &mut Self::Directory, target: &File) -> Result<()>;
+    fn remove(&self, &mut Self::Directory, target: File) -> Result<()>;
     /// Creates a file within a directory.
     ///
     /// A file in the given directory is created conforming to `source`. If
@@ -92,7 +92,7 @@ pub trait Replica {
     ///
     /// Returns the actual file version resulting from this creation. This may
     /// be different from `source` if the hash on `source` is incorrect.
-    fn create(&self, &mut Self::Directory, source: &File,
+    fn create(&self, &mut Self::Directory, source: File,
               xfer: Self::TransferIn) -> Result<FileData>;
     /// Updates a file within a directory.
     ///
@@ -116,11 +116,11 @@ pub trait Replica {
     ///
     /// Returns the actual file version resulting from this update. This may be
     /// different from `new` if the hash on `new` was incorrect.
-    fn update(&self, &mut Self::Directory, name: &OsStr,
+    fn update(&self, &mut Self::Directory, name: &CStr,
               old: &FileData, new: &FileData,
               xfer: Self::TransferIn) -> Result<FileData>;
     /// Creates a new context within the subdirectory identified by `subdir`.
-    fn chdir(&self, &Self::Directory, subdir: &OsStr)
+    fn chdir(&self, &Self::Directory, subdir: &CStr)
              -> Result<Self::Directory>;
     /// Creates a "synthetic" subdirectory and returns a context that can be
     /// used to manipulate it.
@@ -132,11 +132,11 @@ pub trait Replica {
     ///
     /// `Replica::ls()` always returns the empty vector for synthetic
     /// directories that have not yet materialised.
-    fn synthdir(&self, &mut Self::Directory, subdir: &OsStr, mode: FileMode)
+    fn synthdir(&self, &mut Self::Directory, subdir: &CStr, mode: FileMode)
                 -> Self::Directory;
     /// Returns an object which can be used to transfer `file` out of this
     /// replica.
-    fn transfer(&self, &Self::Directory, file: &File)
+    fn transfer(&self, &Self::Directory, file: File)
                 -> Self::TransferOut;
 }
 

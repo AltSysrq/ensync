@@ -14,7 +14,7 @@
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 use std::error::Error;
-use std::ffi::OsStr;
+use std::ffi::CStr;
 use std::fmt;
 use std::str::FromStr;
 
@@ -175,10 +175,10 @@ pub trait RulesMatcher : Sized + Clone {
     ///
     /// This should be called for all such names before accessing `sync_mode()`
     /// or creating children with `child()`.
-    fn dir_contains(&mut self, name: &OsStr);
+    fn dir_contains(&mut self, name: &CStr);
     /// Produces a matcher operating on the given named subdirectory or file in
     /// a subdirectory.
-    fn child(&self, name: &OsStr) -> Self;
+    fn child(&self, name: &CStr) -> Self;
     /// Returns the sync mode effective for the current file.
     fn sync_mode(&self) -> SyncMode;
 }
