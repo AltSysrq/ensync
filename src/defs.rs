@@ -13,7 +13,6 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::fmt;
 use std::ffi::OsString;
 use libc;
 
@@ -54,7 +53,18 @@ pub enum FileData {
 }
 
 impl FileData {
-    /// Returns whether this `FileData` and another one represent the same
+    /// Returns whether both `self` and `other` are regular files and `self`'s
+    /// modification time is greater than `other`'s.
+    pub fn newer_than(&self, other: &Self) -> bool {
+        match (self, other) {
+            (&FileData::Regular(_, _, tself, _),
+             &FileData::Regular(_, _, tother, _)) =>
+                tself > tother,
+            _ => false,
+        }
+    }
+
+    /// Returns whether this file object and another one represent the same
     /// content.
     ///
     /// This is slightly less strict than a full equality test, ignoring some
@@ -66,6 +76,21 @@ impl FileData {
             (&Directory(m1), &Directory(m2)) => m1 == m2,
             (&Regular(m1, _, _, ref h1), &Regular(m2, _, _, ref h2)) =>
                 m1 == m2 && *h1 == *h2,
+            (&Symlink(ref t1), &Symlink(ref t2)) => *t1 == *t2,
+            (&Special, &Special) => true,
+            _ => false,
+        }
+    }
+
+    /// Returns whether this file object and another one have the same content
+    /// except for file mode.
+    pub fn matches_content(&self, that: &FileData) -> bool {
+        use self::FileData::*;
+
+        match (self, that) {
+            (&Directory(_), &Directory(_)) => true,
+            (&Regular(_, _, _, ref h1), &Regular(_, _, _, ref h2)) =>
+                *h1 == *h2,
             (&Symlink(ref t1), &Symlink(ref t2)) => *t1 == *t2,
             (&Special, &Special) => true,
             _ => false,
@@ -86,72 +111,74 @@ impl File {
     }
 }
 
-/// A single field of a sync mode.
-#[derive(Clone,Copy,PartialEq,Eq,Debug,PartialOrd,Ord)]
-pub enum SyncModeSetting {
-    /// This type of propagation shall not happen.
-    Off,
-    /// This type of propagation shall happen. Handle conflicts regarding it
-    /// conservatively.
-    On,
-    /// This type of propagation shall happen. In case of conflict, "force" the
-    /// resolution to be this particular propagation.
-    Force,
-}
+#[cfg(test)]
+mod test {
+    use std::ffi::OsString;
 
-impl SyncModeSetting {
-    /// Returns whether the given setting is in any enabled state.
-    pub fn on(self) -> bool {
-        self >= SyncModeSetting::On
+    use super::*;
+
+    #[test]
+    fn file_newer_than() {
+        let older = FileData::Regular(0o777, 0, 42, [1;32]);
+        let newer = FileData::Regular(0o666, 0, 56, [2;32]);
+
+        assert!(newer.newer_than(&older));
+        assert!(!older.newer_than(&newer));
+        assert!(!FileData::Special.newer_than(&older));
+        assert!(!newer.newer_than(&FileData::Special));
     }
 
-    /// Returns whether the given setting is in any forced state.
-    pub fn force(self) -> bool {
-        self >= SyncModeSetting::Force
-    }
+    #[test]
+    fn file_matches() {
+        let f1 = FileData::Regular(0o777, 0, 42, [1;32]);
+        let f2 = FileData::Regular(0o666, 0, 56, [1;32]);
+        let f3 = FileData::Regular(0o777, 0, 42, [2;32]);
+        let f4 = FileData::Regular(0o777, 0, 42, [1;32]);
+        let d1 = FileData::Directory(0o777);
+        let d2 = FileData::Directory(0o666);
+        let s1 = FileData::Symlink(OsString::from("foo"));
+        let s2 = FileData::Symlink(OsString::from("bar"));
+        let s3 = FileData::Symlink(OsString::from("foo"));
+        let special = FileData::Special;
 
-    fn ch(self, when_on: char, when_force: char) -> char {
-        use self::SyncModeSetting::*;
+        assert!(f1.matches(&f1));
+        assert!(f1.matches(&f4));
+        assert!(!f1.matches(&f2));
+        assert!(!f1.matches(&f3));
+        assert!(!f1.matches(&d1));
+        assert!(!f1.matches(&s1));
+        assert!(!f1.matches(&special));
 
-        match self {
-            Off => '-',
-            On => when_on,
-            Force => when_force,
-        }
-    }
-}
+        assert!(d1.matches(&d1));
+        assert!(!d1.matches(&d2));
+        assert!(!d1.matches(&f1));
 
-/// The sync settings for one direction of propagation.
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
-pub struct HalfSyncMode {
-    /// Whether creates should happen in this direction.
-    pub create: SyncModeSetting,
-    /// Whether updates should happen in this direction.
-    pub update: SyncModeSetting,
-    /// Whether deletes should happen in this direction.
-    pub delete: SyncModeSetting,
-}
+        assert!(s1.matches(&s1));
+        assert!(s1.matches(&s3));
+        assert!(!s1.matches(&s2));
+        assert!(!s1.matches(&special));
 
-impl fmt::Display for HalfSyncMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}{}", self.create.ch('c','C'),
-               self.update.ch('u','U'), self.delete.ch('d','D'))
-    }
-}
+        assert!(special.matches(&special));
+        assert!(!special.matches(&f1));
 
-/// A full description of a sync mode.
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
-pub struct SyncMode {
-    /// Whether particular types of changes should propagate from server to
-    /// client.
-    pub inbound: HalfSyncMode,
-    /// Whether particular types of changes should propagate from client to
-    /// server.
-    pub outbound: HalfSyncMode,
-}
+        assert!(f1.matches_content(&f1));
+        assert!(f1.matches_content(&f4));
+        assert!(f1.matches_content(&f2));
+        assert!(!f1.matches_content(&f3));
+        assert!(!f1.matches_content(&d1));
+        assert!(!f1.matches_content(&s1));
+        assert!(!f1.matches_content(&special));
 
-impl fmt::Display for SyncMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}/{}", self.inbound, self.outbound)
+        assert!(d1.matches_content(&d1));
+        assert!(d1.matches_content(&d2));
+        assert!(!d1.matches_content(&f1));
+
+        assert!(s1.matches_content(&s1));
+        assert!(s1.matches_content(&s3));
+        assert!(!s1.matches_content(&s2));
+        assert!(!s1.matches_content(&special));
+
+        assert!(special.matches_content(&special));
+        assert!(!special.matches_content(&f1));
     }
 }

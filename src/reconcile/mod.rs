@@ -13,18 +13,5 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-extern crate tiny_keccak as keccak;
-extern crate gpgme;
-extern crate libc;
-
-mod defs;
-mod rules;
-mod log;
-mod replica;
-#[cfg(test)]
-mod memory_replica;
-mod reconcile;
-
-fn main() {
-    println!("hello world");
-}
+mod compute;
+mod mutate;

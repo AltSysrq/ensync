@@ -43,7 +43,7 @@ pub const INFO: LogLevel = 4;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ReplicaSide {
-    Client, Server
+    Client, Ancestor, Server
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -71,6 +71,7 @@ pub enum ErrorOperation<'a> {
 pub enum Log<'a> {
     EnterDirectory(&'a OsStr),
     LeaveDirectory(&'a OsStr),
+    Inspect(&'a OsStr, &'a OsStr),
     Create(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
     Update(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData, &'a FileData),
     Rename(ReplicaSide, &'a OsStr, &'a OsStr, &'a OsStr),
@@ -81,7 +82,7 @@ pub enum Log<'a> {
 }
 
 pub trait Logger {
-    fn log(level: LogLevel, what: &Log);
+    fn log(&self, level: LogLevel, what: &Log);
 }
 
 #[cfg(test)]
@@ -93,7 +94,7 @@ mod println_logger {
     pub struct PrintlnLogger;
 
     impl Logger for PrintlnLogger {
-        fn log(level: LogLevel, what: &Log) {
+        fn log(&self, level: LogLevel, what: &Log) {
             let level_str = match level {
                 FATAL => "FATAL",
                 ERROR => "ERROR",
