@@ -22,7 +22,8 @@
 #![allow(dead_code)]
 
 use std::error::Error;
-use std::ffi::OsStr;
+use std::ffi::CStr;
+use reconcile::compute::{Reconciliation,Conflict};
 
 use defs::*;
 
@@ -54,31 +55,29 @@ pub enum EditDeleteConflictResolution {
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum EditEditConflictResolution<'a> {
     Choose(ReplicaSide),
-    Rename(ReplicaSide, &'a OsStr),
+    Rename(ReplicaSide, &'a CStr),
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ErrorOperation<'a> {
     List,
-    Create(&'a OsStr),
-    Update(&'a OsStr),
-    Rename(&'a OsStr),
-    Remove(&'a OsStr),
-    Access(&'a OsStr),
+    Create(&'a CStr),
+    Update(&'a CStr),
+    Rename(&'a CStr),
+    Remove(&'a CStr),
+    Access(&'a CStr),
 }
 
 #[derive(Clone,Copy,Debug)]
 pub enum Log<'a> {
-    EnterDirectory(&'a OsStr),
-    LeaveDirectory(&'a OsStr),
-    Inspect(&'a OsStr, &'a OsStr),
-    Create(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
-    Update(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData, &'a FileData),
-    Rename(ReplicaSide, &'a OsStr, &'a OsStr, &'a OsStr),
-    Remove(ReplicaSide, &'a OsStr, &'a OsStr),
-    EditDeleteConflict(&'a OsStr, &'a OsStr, EditDeleteConflictResolution),
-    EditEditConflict(&'a OsStr, &'a OsStr, EditEditConflictResolution<'a>),
-    Error(ReplicaSide, &'a OsStr, ErrorOperation<'a>, &'a Error),
+    EnterDirectory(&'a CStr),
+    LeaveDirectory(&'a CStr),
+    Inspect(&'a CStr, &'a CStr, Reconciliation, Conflict),
+    Create(ReplicaSide, &'a CStr, &'a CStr, &'a FileData),
+    Update(ReplicaSide, &'a CStr, &'a CStr, &'a FileData, &'a FileData),
+    Rename(ReplicaSide, &'a CStr, &'a CStr, &'a CStr),
+    Remove(ReplicaSide, &'a CStr, &'a CStr, &'a FileData),
+    Error(ReplicaSide, &'a CStr, ErrorOperation<'a>, &'a Error),
 }
 
 pub trait Logger {

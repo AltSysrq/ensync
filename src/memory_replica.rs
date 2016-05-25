@@ -245,6 +245,16 @@ impl MemoryReplica {
 
         hash
     }
+
+    pub fn set_hashes_unknown(&self, dir: &mut DirHandle) {
+        let mut d = self.data();
+        let contents = d.dirs.get_mut(&dir.path).unwrap();
+        for (_, val) in &mut contents.contents {
+            if let &mut Entry::Regular(Regular { ref mut hash, .. }) = val {
+                *hash = UNKNOWN_HASH;
+            }
+        };
+    }
 }
 
 impl Replica for MemoryReplica {

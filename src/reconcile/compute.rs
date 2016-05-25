@@ -13,7 +13,7 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::{CStr,CString,OsString};
+use std::ffi::{CStr,CString};
 use std::path::PathBuf;
 
 use defs::*;
@@ -87,8 +87,7 @@ pub enum Reconciliation {
     /// the client or server.
     InSync,
     /// The client and server are not in-sync and are to be left that way. Take
-    /// no action. Recurse only if the client and server both have directories
-    /// and one is marked dirty.
+    /// no action and do not recurse.
     Unsync,
     /// The client and server are not in-sync and are to be left that way, but
     /// this is due to a potentially unexpected situation. Warn the user if
@@ -767,5 +766,13 @@ mod test {
             .f("---/cud", Split(Server, SplitAncestorState::Move))
             .f("CUD/---", Use(Server))
             .f("cud/cud", Split(Server, SplitAncestorState::Move));
+
+        assert_reconciliation(dir777, dir777, None, NoConflict)
+            .f("---/---", Unsync)
+            .f("cud/---", Use(Server))
+            .f("---/cud", Unsync)
+            .f("---/CUD", Use(Client))
+            .f("cud/cud", Use(Server))
+            .f("CUD/CUD", Use(Server));
     }
 }
