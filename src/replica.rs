@@ -148,3 +148,33 @@ pub trait NullTransfer : Replica {
     /// The hash on the `FileData` is assumed correct.
     fn null_transfer(file: &FileData) -> Self::TransferIn;
 }
+
+/// Trait for replicas which also support the "condemn" operation.
+pub trait Condemn : Replica {
+    /// Marks a filename within a directory as condemned.
+    ///
+    /// The name given by `file` within `dir` is marked as condemned. When
+    /// `Replica::list()` is invoked on a directory with condemned filenames,
+    /// any matching files are deleted, recursively as needed, and all
+    /// condemned names are cleared.
+    ///
+    /// Note that it is specifically the *names*, not the *files* that are
+    /// condemned. It is permissible to condemn a name which is not bound to
+    /// any file; renaming a file under a condemned name to a different name
+    /// does not bring the condemnation with it (ie, the original name remains
+    /// condemned).
+    ///
+    /// When this call returns, the condemnation must be committed and
+    /// persisted, such that it will take effect even if the process exits
+    /// gracelessly.
+    ///
+    /// Condemning a name which is already condemned has no effect.
+    fn condemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()>;
+    /// Reverses a call to `condemn()`.
+    ///
+    /// Uncondemning a name which is not condemned has no effect.
+    fn uncondemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()>;
+    /// Queries whether the given name within the given directory has been
+    /// condemned.
+    fn is_condemned(&self, dir: &Self::Directory, file: &CStr) -> Result<bool>;
+}

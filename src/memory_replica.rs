@@ -28,12 +28,12 @@
 //! For the most part, it behaves like an idealised POSIX filesystem, except
 //! that the root directory is addressed as "" rather than "/".
 
-use std::collections::HashMap;
+use std::collections::{HashMap,HashSet};
 use std::ffi::{CStr,CString};
 use std::sync::{Mutex,MutexGuard};
 
 use defs::*;
-use replica::{Replica,ReplicaDirectory,Result,NullTransfer};
+use replica::{Replica,ReplicaDirectory,Result,NullTransfer,Condemn};
 
 /// Identifies an operation for purposes of mapping to a fault.
 #[derive(Clone,Debug,Hash,PartialEq,Eq)]
@@ -86,6 +86,8 @@ pub enum Entry {
 pub struct Directory {
     /// The files in this directory. Defaults to empty.
     pub contents: HashMap<CString, Entry>,
+    /// The names which have been condemned in this directory.
+    pub condemned: HashSet<CString>,
     /// Whether this directory is marked dirty. Defaults to false.
     pub dirty: bool,
 }
@@ -276,7 +278,21 @@ impl Replica for MemoryReplica {
     fn list(&self, dir: &DirHandle) -> Result<Vec<(CString,FileData)>> {
         let mut d = self.data();
         try!(d.test_op(&Op::List(dir.path.clone())));
-        if let Some(contents) = d.dirs.get(&dir.path) {
+
+        let mut prefices_to_remove = vec![];
+
+        let result = if let Some(contents) = d.dirs.get_mut(&dir.path) {
+            // Remove any condemned entries. Note that we need to save such
+            // directories until after we exit this if-let since we're
+            // borrowing d.dirs.
+            for condemned in contents.condemned.drain() {
+                if let Some(Entry::Directory(_)) =
+                    contents.contents.remove(&condemned)
+                {
+                    prefices_to_remove.push(catpath(&dir.path, &condemned));
+                }
+            }
+
             Ok(contents.contents.iter().map(|(name,val)| {
                 (name.clone(), val.into())
             }).collect())
@@ -284,7 +300,34 @@ impl Replica for MemoryReplica {
             Ok(vec![])
         } else {
             simple_error()
+        };
+
+        // Find any subdirectories which would be "recursively" removed via
+        // condemnation above. Since `HashMap` doesn't currently have a
+        // `filter_keys` or similar method, we need to make another pass to
+        // first find what keys to remove, and another to remove them.
+        let mut to_remove = vec![];
+        for prefix in prefices_to_remove {
+            fn is_under(c_big: &CStr, c_prefix: &CStr) -> bool {
+                let big = c_big.to_bytes();
+                let prefix = c_prefix.to_bytes();
+
+                prefix == big || (
+                    prefix.len() < big.len() &&
+                    prefix == &big[0..prefix.len()] &&
+                    '/' as u8 == big[prefix.len()])
+            }
+
+            for tr in d.dirs.keys().filter(|k| is_under(k, &prefix)) {
+                to_remove.push(tr.to_owned());
+            }
         }
+
+        for tr in to_remove {
+            d.dirs.remove(&tr);
+        }
+
+        result
     }
 
     fn rename(&self, dir: &mut DirHandle, old: &CStr, new: &CStr)
@@ -506,6 +549,41 @@ impl NullTransfer for MemoryReplica {
         match file {
             &FileData::Regular(_,_,_,h) => Ok(h),
             _ => simple_error(),
+        }
+    }
+}
+
+impl Condemn for MemoryReplica {
+    fn condemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()> {
+        let mut d = self.data();
+
+        if let Some(contents) = d.dirs.get_mut(&dir.path) {
+            contents.condemned.insert(file.to_owned());
+            Ok(())
+        } else {
+            simple_error()
+        }
+    }
+
+    fn uncondemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()> {
+        let mut d = self.data();
+
+        if let Some(contents) = d.dirs.get_mut(&dir.path) {
+            contents.condemned.remove(file);
+            Ok(())
+        } else {
+            simple_error()
+        }
+    }
+
+    fn is_condemned(&self, dir: &Self::Directory, file: &CStr)
+                    -> Result<bool> {
+        let d = self.data();
+
+        if let Some(contents) = d.dirs.get(&dir.path) {
+            Ok(contents.condemned.contains(file))
+        } else {
+            simple_error()
         }
     }
 }
@@ -1050,5 +1128,45 @@ mod test {
 
         assert_eq!(1, replica.list(&subdir).unwrap().len());
         assert!(replica.chdir(&root, &oss("foo")).is_ok());
+    }
+
+    #[test]
+    fn condemn_single_file() {
+        let (replica, mut root) = init();
+        mkspec(&replica, &mut root, "foo").unwrap();
+        mkspec(&replica, &mut root, "bar").unwrap();
+
+        replica.condemn(&mut root, &oss("foo")).unwrap();
+        assert!(replica.is_condemned(&mut root, &oss("foo")).unwrap());
+
+        let condemned_list = replica.list(&root).unwrap();
+        assert_eq!(1, condemned_list.len());
+        assert_eq!(oss("bar"), condemned_list[0].0);
+
+        replica.uncondemn(&mut root, &oss("foo")).unwrap();
+        assert!(!replica.is_condemned(&mut root, &oss("foo")).unwrap());
+
+        assert_eq!(1, replica.list(&root).unwrap().len());
+    }
+
+    #[test]
+    fn condemn_dir_tree() {
+        let (replica, mut root) = init();
+        mkdir(&replica, &mut root, "foo", 0o777).unwrap();
+        let mut subdir_foo = replica.chdir(&root, &oss("foo")).unwrap();
+        mkdir(&replica, &mut subdir_foo, "bar", 0o777).unwrap();
+        let mut subdir_bar = replica.chdir(&subdir_foo, &oss("bar")).unwrap();
+        mkspec(&replica, &mut subdir_bar, "xyzzy").unwrap();
+        mkdir(&replica, &mut root, "fooo", 0o777).unwrap();
+
+        replica.condemn(&mut root, &oss("foo")).unwrap();
+        let condemned_list = replica.list(&root).unwrap();
+        assert_eq!(1, condemned_list.len());
+        assert_eq!(oss("fooo"), condemned_list[0].0);
+
+        assert!(replica.list(&subdir_foo).is_err());
+        assert!(replica.list(&subdir_bar).is_err());
+        assert!(replica.list(&replica.chdir(&root, &oss("fooo"))
+                             .unwrap()).is_ok());
     }
 }

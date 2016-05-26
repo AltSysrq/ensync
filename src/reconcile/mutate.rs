@@ -24,7 +24,7 @@ use rules::*;
 use log;
 use log::{Logger,ReplicaSide,EditDeleteConflictResolution};
 use log::{EditEditConflictResolution,ErrorOperation,Log};
-use replica::{Replica,ReplicaDirectory,Result,NullTransfer};
+use replica::{Replica,ReplicaDirectory,Result,NullTransfer,Condemn};
 use super::compute::{Reconciliation,ReconciliationSide,gen_alternate_name};
 use super::compute::SplitAncestorState;
 
@@ -38,7 +38,7 @@ pub trait Interface<'a> {
     type AncDir : ReplicaDirectory;
     type SrvDir : ReplicaDirectory;
     type Cli : 'a + Replica<Directory = Self::CliDir>;
-    type Anc : 'a + Replica<Directory = Self::AncDir> + NullTransfer;
+    type Anc : 'a + Replica<Directory = Self::AncDir> + NullTransfer + Condemn;
     type Srv : 'a + Replica<Directory = Self::SrvDir,
                             TransferIn = <Self::Cli as Replica>::TransferOut,
                             TransferOut = <Self::Cli as Replica>::TransferIn>;
@@ -54,7 +54,7 @@ pub trait Interface<'a> {
 
 pub struct Context<'a,
                    CLI : 'a + Replica,
-                   ANC : 'a + Replica + NullTransfer,
+                   ANC : 'a + Replica + NullTransfer + Condemn,
                    SRV : 'a + Replica<TransferIn = CLI::TransferOut,
                                       TransferOut = CLI::TransferIn>,
                    LOG : 'a + Logger,
@@ -68,7 +68,7 @@ pub struct Context<'a,
 
 impl<'a,
      CLI : 'a + Replica,
-     ANC : 'a + Replica + NullTransfer,
+     ANC : 'a + Replica + NullTransfer + Condemn,
      SRV : 'a + Replica<TransferIn = CLI::TransferOut,
                         TransferOut = CLI::TransferIn>,
      LOG : 'a + Logger,
@@ -451,8 +451,14 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
         Split(side, anc_state) => {
             let new_name = gen_alternate_name(name, |n| dir.name_in_use(n));
 
-            // Instead of renaming the ancestor, remove it, then rename the end
-            // replica, and then recreate the ancestor if it was to be renamed.
+            // Instead of renaming the ancestor, effectively remove it, then
+            // rename the end replica, and then recreate the ancestor if it was
+            // to be renamed.
+            //
+            // For the "renaming the ancestor" case, we actually condemn the
+            // old name, rename the end replica, then rename the ancestor and
+            // uncondemn the old name; thus, effectively, the ancestor will
+            // cease to exist if we crash in this process.
             //
             // This guarantees that at no point will the ancestor be associated
             // with a lone file in a way that could result in deleting an
@@ -463,14 +469,24 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
             // renamed the end replica first, it would be event worse, since we
             // could leave the *possibly matching* ancestor associated with the
             // old file, causing the next sync to delete it incorrectly.
-            //
-            // TODO: This is broken for directories, since it destroys their
-            // contents.
             let old_ancestor = dir.anc.files.get(name).cloned();
 
-            let ok = try_replace_ancestor(
-                i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-                dir_name, name, old_ancestor.as_ref(), None, i.log())
+            let ok = match anc_state {
+                SplitAncestorState::Delete => try_replace_ancestor(
+                    i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
+                    dir_name, name, old_ancestor.as_ref(), None, i.log()),
+
+                SplitAncestorState::Move =>
+                    match i.anc().condemn(&mut dir.anc.dir, name) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            i.log().log(log::ERROR, &Log::Error(
+                                ReplicaSide::Ancestor, dir_name,
+                                ErrorOperation::Access(name), &*error));
+                            false
+                        }
+                    }
+            }
 
             && match side {
                 ReconciliationSide::Client => try_rename_replica(
@@ -485,9 +501,21 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
             && match anc_state {
                 SplitAncestorState::Delete => true,
 
-                SplitAncestorState::Move => try_replace_ancestor(
-                    i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-                    dir_name, &new_name, None, old_ancestor.as_ref(), i.log())
+                SplitAncestorState::Move => {
+                    try_rename_replica(
+                        i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
+                        dir_name, name, &new_name, i.log(), ReplicaSide::Ancestor)
+
+                    && match i.anc().uncondemn(&mut dir.anc.dir, name) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            i.log().log(log::ERROR, &Log::Error(
+                                ReplicaSide::Ancestor, dir_name,
+                                ErrorOperation::Access(name), &*error));
+                            false
+                        }
+                    }
+                },
             };
 
             // If everything worked out, reprocess the now split files
