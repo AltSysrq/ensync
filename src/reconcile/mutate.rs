@@ -18,6 +18,7 @@
 use std::cmp::{Ord,Ordering};
 use std::collections::{BinaryHeap,BTreeMap};
 use std::ffi::{CStr,CString};
+use std::result;
 
 use defs::*;
 use rules::*;
@@ -221,6 +222,23 @@ fn replace_ancestor<A : Replica + NullTransfer>(
     Ok(())
 }
 
+trait ResultToBoolExt {
+    type Error;
+
+    fn to_bool<F: FnOnce (Self::Error)>(self, f: F) -> bool;
+}
+
+impl<E> ResultToBoolExt for result::Result<(),E> {
+    type Error = E;
+
+    fn to_bool<F: FnOnce(E)>(self, f: F) -> bool {
+        self.map(|_| true).unwrap_or_else(|error| {
+            f(error);
+            false
+        })
+    }
+}
+
 /// Like `replace_ancestor()`, but handles errors by sending them to the
 /// logger.
 ///
@@ -232,15 +250,11 @@ fn try_replace_ancestor<A : Replica + NullTransfer, LOG : Logger>(
     old: Option<&FileData>, new: Option<&FileData>,
     log: &LOG) -> bool
 {
-    match replace_ancestor(replica, in_dir, files, name, old, new) {
-        Ok(_) => true,
-        Err(error) => {
-            log.log(log::ERROR, &Log::Error(
+    replace_ancestor(replica, in_dir, files, name, old, new)
+        .to_bool(|error| log.log(
+            log::ERROR, &Log::Error(
                 ReplicaSide::Ancestor, dir_name,
-                ErrorOperation::Update(name), &*error));
-            false
-        },
-    }
+                ErrorOperation::Update(name), &*error)))
 }
 
 /// Updates an end replica as necessary.
@@ -477,15 +491,10 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
                     dir_name, name, old_ancestor.as_ref(), None, i.log()),
 
                 SplitAncestorState::Move =>
-                    match i.anc().condemn(&mut dir.anc.dir, name) {
-                        Ok(_) => true,
-                        Err(error) => {
-                            i.log().log(log::ERROR, &Log::Error(
-                                ReplicaSide::Ancestor, dir_name,
-                                ErrorOperation::Access(name), &*error));
-                            false
-                        }
-                    }
+                    i.anc().condemn(&mut dir.anc.dir, name).to_bool(
+                        |error|  i.log().log(log::ERROR, &Log::Error(
+                            ReplicaSide::Ancestor, dir_name,
+                            ErrorOperation::Access(name), &*error))),
             }
 
             && match side {
@@ -506,15 +515,10 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
                         i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
                         dir_name, name, &new_name, i.log(), ReplicaSide::Ancestor)
 
-                    && match i.anc().uncondemn(&mut dir.anc.dir, name) {
-                        Ok(_) => true,
-                        Err(error) => {
-                            i.log().log(log::ERROR, &Log::Error(
-                                ReplicaSide::Ancestor, dir_name,
-                                ErrorOperation::Access(name), &*error));
-                            false
-                        }
-                    }
+                    && i.anc().uncondemn(&mut dir.anc.dir, name).to_bool(
+                        |error| i.log().log(log::ERROR, &Log::Error(
+                            ReplicaSide::Ancestor, dir_name,
+                            ErrorOperation::Access(name), &*error)))
                 },
             };
 
