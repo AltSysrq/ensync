@@ -134,24 +134,6 @@ impl<'a, I : Interface<'a>> DirContext<'a,I> {
     }
 }
 
-/// Indicates whether reconciliation should recurse into a subdirectory.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Recurse {
-    /// Do not recurse.
-    No,
-    /// Recurse, and take the specified action afterwards.
-    Recurse(ActionAfterRecurse),
-}
-
-/// Describes what to do once a recursion level completes.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum ActionAfterRecurse {
-    /// Take no further action.
-    Nop,
-    /// If the directory we recursed into is now empty, remove it.
-    DeleteIfEmpty,
-}
-
 fn is_dir(fd: Option<&FileData>) -> bool {
     match fd {
         Some(&FileData::Directory(_)) => true,
@@ -381,18 +363,31 @@ fn try_rename_replica<A : Replica, LOG : Logger>(
     }
 }
 
+/// Return type from `apply_reconciliation()`.
+pub enum ApplyResult {
+    /// Any changes needed have been applied. The field indicates whether the
+    /// final file is a directory and should be entered recursively.
+    Clean(bool),
+    /// Changes have failed. Do not mark parent directories clean.
+    Fail,
+    /// A directory on the identified side is being (probably) recursively
+    /// deleted. Recurse, creating a synthetic directory on the opposite end
+    /// replica. After recursion, if the directories are empty,
+    RecursiveDelete(ReconciliationSide),
+}
+
 /// Applies the determined reconciliation for one file.
 ///
 /// Returns whether recursion is necessary to process this file, and if so,
 /// what should happen afterwards.
 ///
 /// Errors are passed down the context's logger.
-fn apply_reconciliation<'a, I : Interface<'a>>(
+pub fn apply_reconciliation<'a, I : Interface<'a>>(
     i: &I, dir: &mut DirContext<'a, I>,
     dir_name: &CStr, name: &CStr,
     recon: Reconciliation,
     old_cli: Option<FileData>, old_srv: Option<FileData>)
-    -> Recurse
+    -> ApplyResult
 {
     use super::compute::Reconciliation::*;
 
@@ -432,29 +427,39 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
             // If we're deleting a directory, we need to recurse first and let
             // reconciliation empty it naturally.
             if is_dir(old_srv.as_ref()) && old_cli.is_none() {
-                return Recurse::Recurse(ActionAfterRecurse::DeleteIfEmpty);
+                return ApplyResult::RecursiveDelete(ReconciliationSide::Server);
             }
             // Other than the directory deletion case, the compute stage is
             // supposed to never give us Use(x) which replaces a directory with
             // a non-directory.
             assert!(is_dir(old_cli.as_ref()) || !is_dir(old_srv.as_ref()));
             // Do the actual replacement.
-            replace_replica(i.srv(), &mut dir.srv.dir, &mut dir.srv.files,
-                            i.cli(), &dir.cli.dir,
-                            dir_name, name,
-                            old_srv.as_ref(), old_cli.as_ref(),
-                            i.log(), ReplicaSide::Server).ok()
+            match replace_replica(
+                i.srv(), &mut dir.srv.dir, &mut dir.srv.files,
+                i.cli(), &dir.cli.dir,
+                dir_name, name,
+                old_srv.as_ref(), old_cli.as_ref(),
+                i.log(), ReplicaSide::Server)
+            {
+                Ok(r) => Some(r),
+                Err(_) => return ApplyResult::Fail,
+            }
         },
         Use(ReconciliationSide::Server) => {
             if is_dir(old_cli.as_ref()) && old_srv.is_none() {
-                return Recurse::Recurse(ActionAfterRecurse::DeleteIfEmpty);
+                return ApplyResult::RecursiveDelete(ReconciliationSide::Client);
             }
             assert!(is_dir(old_srv.as_ref()) || !is_dir(old_cli.as_ref()));
-            replace_replica(i.cli(), &mut dir.cli.dir, &mut dir.cli.files,
-                            i.srv(), &dir.srv.dir,
-                            dir_name, name,
-                            old_srv.as_ref(), old_cli.as_ref(),
-                            i.log(), ReplicaSide::Client).ok()
+            match replace_replica(
+                i.cli(), &mut dir.cli.dir, &mut dir.cli.files,
+                i.srv(), &dir.srv.dir,
+                dir_name, name,
+                old_srv.as_ref(), old_cli.as_ref(),
+                i.log(), ReplicaSide::Client)
+            {
+                Ok(r) => Some(r),
+                Err(_) => return ApplyResult::Fail,
+            }
         },
         // The special Split case.
         //
@@ -526,6 +531,8 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
             if ok {
                 dir.todo.push(Reversed(name.to_owned()));
                 dir.todo.push(Reversed(new_name));
+            } else {
+                return ApplyResult::Fail;
             }
 
             None
@@ -544,14 +551,14 @@ fn apply_reconciliation<'a, I : Interface<'a>>(
         // directory. Testing the ancestor is sufficient to know that all three
         // branches are directories, since we only write the ancestor if it
         // agrees with the client and server replicas.
-        if ok && is_dir(new_ancestor.as_ref()) {
-            Recurse::Recurse(ActionAfterRecurse::Nop)
+        if !ok {
+            ApplyResult::Fail
         } else {
-            Recurse::No
+            ApplyResult::Clean(is_dir(new_ancestor.as_ref()))
         }
     } else {
-        // Something broke or we're not syncing, don't recurse.
-        Recurse::No
+        // Not syncing
+        ApplyResult::Clean(false)
     }
 }
 

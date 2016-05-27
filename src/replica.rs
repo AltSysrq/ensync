@@ -52,7 +52,8 @@ pub trait Replica {
     /// Returns whether the given directory has been marked dirty for this
     /// session.
     ///
-    /// Returns false if the directory cannot be accessed.
+    /// Returns true if the directory cannot be accessed (including if the
+    /// directory is synthetic).
     fn is_dirty_dir(&self, &Self::Directory) -> bool;
     /// Returns the root directory for this replica.
     fn root(&self) -> Result<Self::Directory>;
