@@ -573,7 +573,7 @@ mod test {
     struct ConstantRules<'a>(&'a SyncMode);
 
     impl<'a> RulesMatcher for ConstantRules<'a> {
-        fn dir_contains(&mut self, _: &CStr) { }
+        fn dir_contains(&mut self, _: File) { }
         fn child(&self, _: &CStr) -> Self { self.clone() }
         fn sync_mode(&self) -> SyncMode { *self.0 }
     }

@@ -18,6 +18,8 @@ use std::ffi::CStr;
 use std::fmt;
 use std::str::FromStr;
 
+use defs::File;
+
 /// A single field of a sync mode.
 #[derive(Clone,Copy,PartialEq,Eq,Debug,PartialOrd,Ord)]
 pub enum SyncModeSetting {
@@ -170,12 +172,12 @@ impl FromStr for SyncMode {
 
 /// Provides access to the user-defined sync rules.
 pub trait RulesMatcher : Sized + Clone {
-    /// Informs the matcher of the existence of a file with the given name in
-    /// the current directory.
+    /// Informs the matcher of the existence of a file in the current
+    /// directory.
     ///
-    /// This should be called for all such names before accessing `sync_mode()`
-    /// or creating children with `child()`.
-    fn dir_contains(&mut self, name: &CStr);
+    /// This should be called for all files in the directory before accessing
+    /// `sync_mode()` or creating children with `child()`.
+    fn dir_contains(&mut self, name: File);
     /// Produces a matcher operating on the given named subdirectory or file in
     /// a subdirectory.
     fn child(&self, name: &CStr) -> Self;
