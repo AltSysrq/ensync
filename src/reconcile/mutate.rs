@@ -13,8 +13,6 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#![allow(dead_code)]
-
 use std::cmp::{Ord,Ordering};
 use std::collections::{BinaryHeap,BTreeMap};
 use std::ffi::{CStr,CString};
@@ -23,8 +21,7 @@ use std::result;
 use defs::*;
 use rules::*;
 use log;
-use log::{Logger,ReplicaSide,EditDeleteConflictResolution};
-use log::{EditEditConflictResolution,ErrorOperation,Log};
+use log::{Logger,ReplicaSide,ErrorOperation,Log};
 use replica::{Replica,ReplicaDirectory,Result,NullTransfer,Condemn};
 use super::compute::{Reconciliation,ReconciliationSide,gen_alternate_name};
 use super::compute::SplitAncestorState;
@@ -90,7 +87,6 @@ Interface<'a> for Context<'a, CLI, ANC, SRV, LOG, RULES> {
     fn log(&self) -> &Self::Log { self.logger }
     fn root_rules(&self) -> Self::Rules { self.root_rules.clone() }
 }
-
 
 #[derive(PartialEq,Eq)]
 struct Reversed<T : Ord + PartialEq + Eq>(T);
@@ -364,6 +360,7 @@ fn try_rename_replica<A : Replica, LOG : Logger>(
 }
 
 /// Return type from `apply_reconciliation()`.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ApplyResult {
     /// Any changes needed have been applied. The field indicates whether the
     /// final file is a directory and should be entered recursively.
@@ -372,8 +369,54 @@ pub enum ApplyResult {
     Fail,
     /// A directory on the identified side is being (probably) recursively
     /// deleted. Recurse, creating a synthetic directory on the opposite end
-    /// replica. After recursion, if the directories are empty,
+    /// replica. After recursion, if the directories are empty, remove them in
+    /// the ancestor and this end replica.
     RecursiveDelete(ReconciliationSide),
+}
+
+fn apply_use<DST : Replica,
+             ANC : Replica + NullTransfer,
+             SRC : Replica<TransferOut = DST::TransferIn>,
+             LOG : Logger>
+    (dst: &DST, dst_dir: &mut DST::Directory,
+     dst_files: &mut BTreeMap<CString,FileData>,
+     anc: &ANC, anc_dir: &mut ANC::Directory,
+     anc_files: &mut BTreeMap<CString,FileData>,
+     src: &SRC, src_dir: &SRC::Directory,
+     dir_name: &CStr, name: &CStr,
+     old_dst: Option<&FileData>, old_src: Option<&FileData>,
+     log: &LOG, side: ReconciliationSide)
+    -> result::Result<Option<Option<FileData>>, ApplyResult>
+{
+    // If we're deleting a directory, we need to recurse first and let
+    // reconciliation empty it naturally.
+    if is_dir(old_dst) && old_src.is_none() {
+        // Ensure the ancestor is a directory matching the side we're going to
+        // delete, so (a) we can chdir into it; (b) should we end up
+        // propagating files out of the recursive "delete", there's something
+        // to hold them.
+        let old_anc = anc_files.get(name).cloned();
+        if try_replace_ancestor(anc, anc_dir, anc_files, dir_name, name,
+                                old_anc.as_ref(), old_dst, log) {
+            Err(ApplyResult::RecursiveDelete(side.rev()))
+        } else {
+            Err(ApplyResult::Fail)
+        }
+    } else {
+        // Other than the directory deletion case, the compute stage is
+        // supposed to never give us Use(x) which replaces a directory with
+        // a non-directory.
+        assert!(is_dir(old_src) || !is_dir(old_dst));
+        // Do the actual replacement.
+        match replace_replica(
+            dst, dst_dir, dst_files, src, src_dir,
+            dir_name, name, old_dst, old_src,
+            log, side.into())
+        {
+            Ok(r) => Ok(Some(r)),
+            Err(_) => return Err(ApplyResult::Fail),
+        }
+    }
 }
 
 /// Applies the determined reconciliation for one file.
@@ -386,7 +429,7 @@ pub fn apply_reconciliation<'a, I : Interface<'a>>(
     i: &I, dir: &mut DirContext<'a, I>,
     dir_name: &CStr, name: &CStr,
     recon: Reconciliation,
-    old_cli: Option<FileData>, old_srv: Option<FileData>)
+    old_cli: Option<&FileData>, old_srv: Option<&FileData>)
     -> ApplyResult
 {
     use super::compute::Reconciliation::*;
@@ -415,52 +458,32 @@ pub fn apply_reconciliation<'a, I : Interface<'a>>(
     let set_ancestor = match recon {
         // If already in-sync, we just need to ensure the ancestor matches.
         // Whether we choose old_cli or old_srv is mostly moot.
-        InSync => Some(old_cli.clone()),
+        InSync => Some(old_cli.cloned()),
         // For Unsync and Irreconcilable, the end replicas do not agree and
         // will not agree, so it doesn't make sense to change the ancestor at
-        // all.
-        Unsync => None,
-        Irreconcilable => None,
+        // all or to recurse.
+        Unsync | Irreconcilable => None,
         // For the Use(x) cases, we propagate the change, and use the resulting
         // FileData for the ancestor.
-        Use(ReconciliationSide::Client) => {
-            // If we're deleting a directory, we need to recurse first and let
-            // reconciliation empty it naturally.
-            if is_dir(old_srv.as_ref()) && old_cli.is_none() {
-                return ApplyResult::RecursiveDelete(ReconciliationSide::Server);
-            }
-            // Other than the directory deletion case, the compute stage is
-            // supposed to never give us Use(x) which replaces a directory with
-            // a non-directory.
-            assert!(is_dir(old_cli.as_ref()) || !is_dir(old_srv.as_ref()));
-            // Do the actual replacement.
-            match replace_replica(
-                i.srv(), &mut dir.srv.dir, &mut dir.srv.files,
-                i.cli(), &dir.cli.dir,
-                dir_name, name,
-                old_srv.as_ref(), old_cli.as_ref(),
-                i.log(), ReplicaSide::Server)
-            {
-                Ok(r) => Some(r),
-                Err(_) => return ApplyResult::Fail,
-            }
-        },
-        Use(ReconciliationSide::Server) => {
-            if is_dir(old_cli.as_ref()) && old_srv.is_none() {
-                return ApplyResult::RecursiveDelete(ReconciliationSide::Client);
-            }
-            assert!(is_dir(old_srv.as_ref()) || !is_dir(old_cli.as_ref()));
-            match replace_replica(
-                i.cli(), &mut dir.cli.dir, &mut dir.cli.files,
-                i.srv(), &dir.srv.dir,
-                dir_name, name,
-                old_srv.as_ref(), old_cli.as_ref(),
-                i.log(), ReplicaSide::Client)
-            {
-                Ok(r) => Some(r),
-                Err(_) => return ApplyResult::Fail,
-            }
-        },
+        Use(ReconciliationSide::Client) =>
+            match apply_use(i.srv(), &mut dir.srv.dir, &mut dir.srv.files,
+                            i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
+                            i.cli(), &dir.cli.dir,
+                            dir_name, name, old_srv, old_cli,
+                            i.log(), ReconciliationSide::Client) {
+                Ok(r) => r,
+                Err(r) => return r,
+            },
+        Use(ReconciliationSide::Server) =>
+            match apply_use(i.cli(), &mut dir.cli.dir, &mut dir.cli.files,
+                            i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
+                            i.srv(), &dir.srv.dir,
+                            dir_name, name, old_cli, old_srv,
+                            i.log(), ReconciliationSide::Server) {
+                Ok(r) => r,
+                Err(r) => return r,
+            },
+
         // The special Split case.
         //
         // We never write an ancestor external to this branch, because this
@@ -563,8 +586,8 @@ pub fn apply_reconciliation<'a, I : Interface<'a>>(
 }
 
 #[cfg(test)]
-mod test {
-    use std::collections::{BTreeMap};
+pub mod test {
+    use std::collections::{BTreeMap,BinaryHeap};
     use std::ffi::{CString,CStr};
 
     use defs::*;
@@ -573,11 +596,14 @@ mod test {
     use memory_replica::{self,MemoryReplica,DirHandle,simple_error};
     use rules::*;
 
+    use super::super::compute::{Reconciliation,ReconciliationSide};
+    use super::super::compute::{SplitAncestorState};
     use super::*;
     use super::{replace_ancestor,replace_replica,try_rename_replica};
+    use super::{SingleDirContext};
 
     #[derive(Clone)]
-    struct ConstantRules<'a>(&'a SyncMode);
+    pub struct ConstantRules<'a>(&'a SyncMode);
 
     impl<'a> RulesMatcher for ConstantRules<'a> {
         fn dir_contains(&mut self, _: File) { }
@@ -585,10 +611,10 @@ mod test {
         fn sync_mode(&self) -> SyncMode { *self.0 }
     }
 
-    type TContext<'a> = Context<'a, MemoryReplica, MemoryReplica, MemoryReplica,
-                                PrintlnLogger, ConstantRules<'a>>;
+    pub type TContext<'a> = Context<'a, MemoryReplica, MemoryReplica, MemoryReplica,
+                                    PrintlnLogger, ConstantRules<'a>>;
 
-    struct Fixture {
+    pub struct Fixture {
         client: MemoryReplica,
         ancestor: MemoryReplica,
         server: MemoryReplica,
@@ -597,7 +623,7 @@ mod test {
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub fn new() -> Self {
             Fixture {
                 client: MemoryReplica::empty(),
                 ancestor: MemoryReplica::empty(),
@@ -607,7 +633,7 @@ mod test {
             }
         }
 
-        fn context(&self) -> TContext {
+        pub fn context(&self) -> TContext {
             Context {
                 cli: &self.client,
                 anc: &self.ancestor,
@@ -618,23 +644,42 @@ mod test {
         }
     }
 
-    fn oss(s: &str) -> CString {
+    pub fn oss(s: &str) -> CString {
         CString::new(s).unwrap()
     }
 
-    fn replica() -> (MemoryReplica, DirHandle) {
+    pub fn replica() -> (MemoryReplica, DirHandle) {
         let mr = MemoryReplica::empty();
         let root = mr.root().unwrap();
         (mr, root)
     }
 
-    fn genreg(replica: &mut MemoryReplica) -> FileData {
+    pub fn root_dir_context(fx: &Fixture) -> DirContext<TContext> {
+        DirContext {
+            cli: SingleDirContext {
+                dir: fx.client.root().unwrap(),
+                files: BTreeMap::new(),
+            },
+            anc: SingleDirContext {
+                dir: fx.ancestor.root().unwrap(),
+                files: BTreeMap::new(),
+            },
+            srv: SingleDirContext {
+                dir: fx.server.root().unwrap(),
+                files: BTreeMap::new(),
+            },
+            todo: BinaryHeap::new(),
+            rules: ConstantRules(&fx.mode),
+        }
+    }
+
+    pub fn genreg(replica: &mut MemoryReplica) -> FileData {
         FileData::Regular(0o777, 0, 0, replica.gen_hash())
     }
 
-    fn mkreg(replica: &mut MemoryReplica, dir: &mut DirHandle,
-             files: &mut BTreeMap<CString,FileData>,
-             name: &CStr) -> FileData {
+    pub fn mkreg(replica: &mut MemoryReplica, dir: &mut DirHandle,
+                 files: &mut BTreeMap<CString,FileData>,
+                 name: &CStr) -> FileData {
         let fd = genreg(replica);
         replica.create(dir, File(name, &fd), MemoryReplica::null_transfer(&fd))
             .unwrap();
@@ -642,9 +687,29 @@ mod test {
         fd
     }
 
-    fn mkdir(replica: &MemoryReplica, dir: &mut DirHandle,
-             files: &mut BTreeMap<CString,FileData>,
-             name: &CStr, mode: FileMode) -> FileData {
+    pub fn mksym(replica: &MemoryReplica, dir: &mut DirHandle,
+                 files: &mut BTreeMap<CString,FileData>,
+                 name: &CStr, target: &str) -> FileData {
+        let fd = FileData::Symlink(oss(target));
+        replica.create(dir, File(name, &fd), MemoryReplica::null_transfer(&fd))
+            .unwrap();
+        files.insert(name.to_owned(), fd.clone());
+        fd
+    }
+
+    pub fn mkspec(replica: &MemoryReplica, dir: &mut DirHandle,
+                  files: &mut BTreeMap<CString,FileData>,
+                  name: &CStr) -> FileData {
+        let fd = FileData::Special;
+        replica.create(dir, File(name, &fd), MemoryReplica::null_transfer(&fd))
+            .unwrap();
+        files.insert(name.to_owned(), fd.clone());
+        fd
+    }
+
+    pub fn mkdir(replica: &MemoryReplica, dir: &mut DirHandle,
+                 files: &mut BTreeMap<CString,FileData>,
+                 name: &CStr, mode: FileMode) -> FileData {
         let fd = FileData::Directory(mode);
         replica.create(dir, File(name, &fd),
                        MemoryReplica::null_transfer(&fd)).unwrap();
@@ -901,5 +966,483 @@ mod test {
         assert_eq!(1, files.len());
         assert!(files.contains_key(&foo));
         assert_eq!(&foo, &replica.list(&root).unwrap()[0].0);
+    }
+
+    #[test]
+    fn apply_recon_unsync() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir, &mut root.cli.files,
+                        &foo, 0o777);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir, &mut root.srv.files,
+                        &foo, 0o666);
+
+        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::Unsync,
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(None, root.anc.files.get(&foo));
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_insync_creates_ancestor() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkspec(&fx.client, &mut root.cli.dir,
+                         &mut root.cli.files, &foo);
+        let sfd = mkspec(&fx.server, &mut root.srv.dir,
+                         &mut root.srv.files, &foo);
+
+        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::InSync,
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(Some(&cfd), root.anc.files.get(&foo));
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_insync_ancestor_create_fail() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkspec(&fx.client, &mut root.cli.dir,
+                         &mut root.cli.files, &foo);
+        let sfd = mkspec(&fx.server, &mut root.srv.dir,
+                         &mut root.srv.files, &foo);
+
+        fx.ancestor.data().faults.insert(
+            memory_replica::Op::Create(oss(""), foo.clone()),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail, apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::InSync,
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(None, root.anc.files.get(&foo));
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_insync_recurses_into_directories() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mkdir(&fx.ancestor, &mut root.anc.dir, &mut root.anc.files,
+              &foo, 0o777);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o777);
+
+        assert_eq!(ApplyResult::Clean(true), apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::InSync,
+            Some(&cfd), Some(&sfd)));
+    }
+
+    #[test]
+    fn apply_recon_use_client_normal_success() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mksym(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, "client");
+        mksym(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, "ancestor");
+        let sfd = mksym(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, "server");
+
+        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(Some(&cfd), root.anc.files.get(&foo));
+        assert_eq!(Some(&cfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_use_client_create_dir() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mksym(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, "ancestor");
+        let sfd = mksym(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, "server");
+
+        assert_eq!(ApplyResult::Clean(true), apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(Some(&cfd), root.anc.files.get(&foo));
+        assert_eq!(Some(&cfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_use_client_mutate_server_error() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+
+        fx.server.data().faults.insert(
+            memory_replica::Op::Create(oss(""), foo.clone()),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail, apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
+            Some(&cfd), None));
+
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(None, root.anc.files.get(&foo));
+        assert_eq!(None, root.srv.files.get(&foo));
+        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert!(fx.server.list(&root.srv.dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn apply_recon_use_client_mutate_ancestor_error() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+
+        fx.ancestor.data().faults.insert(
+            memory_replica::Op::Create(oss(""), foo.clone()),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail, apply_reconciliation(
+            &fx.context(), &mut root,
+            &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
+            Some(&cfd), None));
+
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(None, root.anc.files.get(&foo));
+        assert_eq!(Some(&cfd), root.srv.files.get(&foo));
+        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert_eq!(cfd, fx.server.list(&root.srv.dir).unwrap()[0].1);
+    }
+
+    #[test]
+    fn apply_recon_use_client_recursive_delete_success() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        mkspec(&fx.ancestor, &mut root.anc.dir,
+               &mut root.anc.files, &foo);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o777);
+
+        assert_eq!(ApplyResult::RecursiveDelete(ReconciliationSide::Server),
+                   apply_reconciliation(
+                       &fx.context(), &mut root, &oss(""), &foo,
+                       Reconciliation::Use(ReconciliationSide::Client),
+                       None, Some(&sfd)));
+        assert_eq!(None, root.cli.files.get(&foo));
+        assert_eq!(Some(&sfd), root.anc.files.get(&foo));
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_use_client_recursive_delete_ancestor_error() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let afd = mkspec(&fx.ancestor, &mut root.anc.dir,
+                         &mut root.anc.files, &foo);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o777);
+
+        fx.ancestor.data().faults.insert(
+            memory_replica::Op::Update(oss(""), foo.clone()),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail,
+                   apply_reconciliation(
+                       &fx.context(), &mut root, &oss(""), &foo,
+                       Reconciliation::Use(ReconciliationSide::Client),
+                       None, Some(&sfd)));
+        assert_eq!(None, root.cli.files.get(&foo));
+        assert_eq!(Some(&afd), root.anc.files.get(&foo));
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_use_server() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o777);
+
+        assert_eq!(ApplyResult::Clean(true), apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Use(ReconciliationSide::Server),
+            None, Some(&sfd)));
+
+        assert_eq!(Some(&sfd), root.cli.files.get(&foo));
+        assert_eq!(Some(&sfd), root.anc.files.get(&foo));
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+    }
+
+    #[test]
+    fn apply_recon_split_client_delete_success() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+        let foo1 = oss("foo~1");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mkdir(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, 0o770);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o700);
+
+        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Split(ReconciliationSide::Client,
+                                  SplitAncestorState::Delete),
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(1, root.cli.files.len());
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
+        assert_eq!(&foo1, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert!(root.anc.files.is_empty());
+        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert_eq!(1, root.srv.files.len());
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+    }
+
+    #[test]
+    fn apply_recon_split_server_delete_success() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+        let foo1 = oss("foo~1");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mkdir(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, 0o770);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o700);
+
+        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Split(ReconciliationSide::Server,
+                                  SplitAncestorState::Delete),
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(1, root.cli.files.len());
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert!(root.anc.files.is_empty());
+        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert_eq!(1, root.srv.files.len());
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo1));
+        assert_eq!(&foo1, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+    }
+
+    #[test]
+    fn apply_recon_split_client_delete_client_error() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mkdir(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, 0o770);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o700);
+
+        fx.client.data().faults.insert(
+            memory_replica::Op::Rename(oss(""), foo.clone(), oss("foo~1")),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail, apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Split(ReconciliationSide::Client,
+                                  SplitAncestorState::Delete),
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(1, root.cli.files.len());
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert!(root.anc.files.is_empty());
+        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert_eq!(1, root.srv.files.len());
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+    }
+
+    #[test]
+    fn apply_recon_split_client_delete_ancestor_error() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mkdir(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, 0o770);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o700);
+
+        fx.ancestor.data().faults.insert(
+            memory_replica::Op::Remove(oss(""), foo.clone()),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail, apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Split(ReconciliationSide::Client,
+                                  SplitAncestorState::Delete),
+            Some(&cfd), Some(&sfd)));
+
+        assert_eq!(1, root.cli.files.len());
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(1, root.srv.files.len());
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+    }
+
+    #[test]
+    fn apply_recon_split_client_move_ancestor_success() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+        let foo1 = oss("foo~1");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        let afd = mkdir(&fx.ancestor, &mut root.anc.dir,
+                        &mut root.anc.files, &foo, 0o770);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o700);
+
+        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Split(ReconciliationSide::Client,
+                                  SplitAncestorState::Move),
+            Some(&cfd), Some(&sfd)));
+        assert_eq!(2, root.todo.len());
+
+        assert_eq!(1, root.cli.files.len());
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
+        assert_eq!(&foo1, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(1, root.anc.files.len());
+        assert_eq!(Some(&afd), root.anc.files.get(&foo1));
+        assert_eq!(1, fx.ancestor.list(&root.anc.dir).unwrap().len());
+        assert_eq!(&foo1, &fx.ancestor.list(&root.anc.dir).unwrap()[0].0);
+        assert_eq!(1, root.srv.files.len());
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+    }
+
+    #[test]
+    fn apply_recon_split_client_move_ancestor_client_error() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+        let foo1 = oss("foo~1");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mkdir(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, 0o770);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o700);
+
+        fx.client.data().faults.insert(
+            memory_replica::Op::Rename(oss(""), foo.clone(), foo1.clone()),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail, apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Split(ReconciliationSide::Client,
+                                  SplitAncestorState::Move),
+            Some(&cfd), Some(&sfd)));
+        assert!(root.todo.is_empty());
+
+        assert_eq!(1, root.cli.files.len());
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo));
+        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        // root.anc.files will be out of date, but listing the ancestor will
+        // effect the condemnation of the old name.
+        assert_eq!(1, root.anc.files.len());
+        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert_eq!(1, root.srv.files.len());
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+    }
+
+    #[test]
+    fn apply_recon_split_client_move_ancestor_ancestor_error() {
+        let fx = Fixture::new();
+        let mut root = root_dir_context(&fx);
+        let foo = oss("foo");
+        let foo1 = oss("foo~1");
+
+        let cfd = mkdir(&fx.client, &mut root.cli.dir,
+                        &mut root.cli.files, &foo, 0o777);
+        mkdir(&fx.ancestor, &mut root.anc.dir,
+              &mut root.anc.files, &foo, 0o770);
+        let sfd = mkdir(&fx.server, &mut root.srv.dir,
+                        &mut root.srv.files, &foo, 0o700);
+
+        fx.ancestor.data().faults.insert(
+            memory_replica::Op::Rename(oss(""), foo.clone(), foo1.clone()),
+            Box::new(|_| simple_error()));
+
+        assert_eq!(ApplyResult::Fail, apply_reconciliation(
+            &fx.context(), &mut root, &oss(""), &foo,
+            Reconciliation::Split(ReconciliationSide::Client,
+                                  SplitAncestorState::Move),
+            Some(&cfd), Some(&sfd)));
+        assert!(root.todo.is_empty());
+
+        assert_eq!(1, root.cli.files.len());
+        assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
+        assert_eq!(&foo1, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        // root.anc.files will be out of date, but listing the ancestor will
+        // effect the condemnation of the old name.
+        assert_eq!(1, root.anc.files.len());
+        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert_eq!(1, root.srv.files.len());
+        assert_eq!(Some(&sfd), root.srv.files.get(&foo));
+        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
     }
 }

@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use defs::*;
 use rules::*;
+use log::ReplicaSide;
 
 /// Generates a new string based on `orig` for which `in_use` returns `false`.
 ///
@@ -66,6 +67,24 @@ pub fn gen_alternate_name<F : Fn (&CStr) -> bool>(
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ReconciliationSide {
     Client, Server
+}
+
+impl From<ReconciliationSide> for ReplicaSide {
+    fn from(r: ReconciliationSide) -> ReplicaSide {
+        match r {
+            ReconciliationSide::Client => ReplicaSide::Client,
+            ReconciliationSide::Server => ReplicaSide::Server,
+        }
+    }
+}
+
+impl ReconciliationSide {
+    pub fn rev(self) -> Self {
+        match self {
+            ReconciliationSide::Client => ReconciliationSide::Server,
+            ReconciliationSide::Server => ReconciliationSide::Client,
+        }
+    }
 }
 
 /// Indicates how the ancestor replica is to be treated for
