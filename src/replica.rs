@@ -54,7 +54,20 @@ pub trait Replica {
     ///
     /// Returns true if the directory cannot be accessed (including if the
     /// directory is synthetic).
-    fn is_dirty_dir(&self, &Self::Directory) -> bool;
+    fn is_dir_dirty(&self, &Self::Directory) -> bool;
+    /// Marks the given directory as clean, if no modifications to its contents
+    /// have occurred since the last call to list() except through the
+    /// directory handle itself.
+    ///
+    /// Returns true if the directory is now clean; false if it is not clean
+    /// because there were concurrent modifications; error if checking whether
+    /// the directory is clean, or marking it clean, failed.
+    ///
+    /// This call is not required to test explicitly for concurrent
+    /// modifications; it is permitted to return `true` even if the directory
+    /// is actually still dirty as long as the next run will return true from
+    /// `is_dir_dirty()`.
+    fn set_dir_clean(&self, &Self::Directory) -> Result<bool>;
     /// Returns the root directory for this replica.
     fn root(&self) -> Result<Self::Directory>;
     /// Reads the contents of the given directory.
@@ -62,7 +75,7 @@ pub trait Replica {
     /// On success, the full conents of the directory (excluding "." and ".."
     /// if returned by the underlying system) after transform/filtering are
     /// returned, in no particular order.
-    fn list(&self, &Self::Directory) -> Result<Vec<(CString,FileData)>>;
+    fn list(&self, &mut Self::Directory) -> Result<Vec<(CString,FileData)>>;
     /// Renames a file within a directory.
     ///
     /// The file of any type named by `old` is renamed to `new`. A best effort

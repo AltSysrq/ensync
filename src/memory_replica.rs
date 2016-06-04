@@ -27,6 +27,10 @@
 //!
 //! For the most part, it behaves like an idealised POSIX filesystem, except
 //! that the root directory is addressed as "" rather than "/".
+//!
+//! `set_dir_clean()` is only partially implemented; it does not check for
+//! concurrent modifications of any kind. Any tests which simulate these should
+//! simply set the dirty flag again.
 
 use std::collections::{HashMap,HashSet};
 use std::ffi::{CStr,CString};
@@ -264,8 +268,18 @@ impl Replica for MemoryReplica {
     type TransferIn = Result<HashId>;
     type TransferOut = Result<HashId>;
 
-    fn is_dirty_dir(&self, dir: &DirHandle) -> bool {
+    fn is_dir_dirty(&self, dir: &DirHandle) -> bool {
         self.data().dirs.get(&dir.path).map_or(false, |d| d.dirty)
+    }
+
+    fn set_dir_clean(&self, dir: &DirHandle) -> Result<bool> {
+        let mut d = self.data();
+        if let Some(contents) = d.dirs.get_mut(&dir.path) {
+            contents.dirty = false;
+            Ok(true)
+        } else {
+            simple_error()
+        }
     }
 
     fn root(&self) -> Result<DirHandle> {
@@ -275,7 +289,7 @@ impl Replica for MemoryReplica {
                        synthetics: vec![] })
     }
 
-    fn list(&self, dir: &DirHandle) -> Result<Vec<(CString,FileData)>> {
+    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(CString,FileData)>> {
         let mut d = self.data();
         try!(d.test_op(&Op::List(dir.path.clone())));
 
@@ -609,8 +623,8 @@ mod test {
     #[test]
     fn empty() {
         let (replica, mut root) = init();
-        assert!(!replica.is_dirty_dir(&root));
-        assert!(replica.list(&root).unwrap().is_empty());
+        assert!(!replica.is_dir_dirty(&root));
+        assert!(replica.list(&mut root).unwrap().is_empty());
         assert!(replica.rename(&mut root, &oss("foo"), &oss("bar")).is_err());
         assert!(replica.remove(
             &mut root, File(&oss("foo"), &FileData::Special)).is_err());
@@ -622,8 +636,8 @@ mod test {
     #[test]
     fn synthetic_dir_looks_empty() {
         let (replica, mut root) = init();
-        let synth = replica.synthdir(&mut root, &oss("foo"), 0o777);
-        let list = replica.list(&synth).unwrap();
+        let mut synth = replica.synthdir(&mut root, &oss("foo"), 0o777);
+        let list = replica.list(&mut synth).unwrap();
         assert!(list.is_empty());
     }
 
@@ -639,7 +653,7 @@ mod test {
             unexpected => panic!("Unexpected file data: {:?}", unexpected),
         }
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         let created = &list[0];
         assert_eq!(oss("foo"), created.0);
@@ -668,7 +682,7 @@ mod test {
             unexpected => panic!("Unexpected file data: {:?}", unexpected),
         }
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         let created = &list[0];
         assert_eq!(oss("foo"), created.0);
@@ -693,7 +707,7 @@ mod test {
             unexpected => panic!("Unexpected file data: {:?}", unexpected),
         }
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         let created = &list[0];
         assert_eq!(oss("foo"), created.0);
@@ -717,7 +731,7 @@ mod test {
             unexpected => panic!("Unexpected file data: {:?}", unexpected),
         }
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         let created = &list[0];
         assert_eq!(oss("foo"), created.0);
@@ -726,8 +740,8 @@ mod test {
             ref unexpected => panic!("Unexpected file data: {:?}", unexpected),
         }
 
-        let subdir = replica.chdir(&root, &created.0).unwrap();
-        assert!(replica.list(&subdir).unwrap().is_empty());
+        let mut subdir = replica.chdir(&root, &created.0).unwrap();
+        assert!(replica.list(&mut subdir).unwrap().is_empty());
     }
 
     fn mkdir(replica: &MemoryReplica, dir: &mut DirHandle,
@@ -758,7 +772,7 @@ mod test {
         replica.remove(&mut root, File(
             &oss("foo"), &FileData::Regular(0o777, 99, 99, hash))).unwrap();
 
-        assert!(replica.list(&root).unwrap().is_empty());
+        assert!(replica.list(&mut root).unwrap().is_empty());
     }
 
     #[test]
@@ -793,7 +807,7 @@ mod test {
         mksym(&replica, &mut root, "foo", "bar").unwrap();
         replica.remove(&mut root, File(
             &oss("foo"), &FileData::Symlink(oss("bar")))).unwrap();
-        assert!(replica.list(&root).unwrap().is_empty());
+        assert!(replica.list(&mut root).unwrap().is_empty());
     }
 
     #[test]
@@ -810,7 +824,7 @@ mod test {
         mkspec(&replica, &mut root, "foo").unwrap();
         replica.remove(&mut root, File(&oss("foo"), &FileData::Special))
             .unwrap();
-        assert!(replica.list(&root).unwrap().is_empty());
+        assert!(replica.list(&mut root).unwrap().is_empty());
     }
 
     #[test]
@@ -818,14 +832,14 @@ mod test {
         let (replica, mut root) = init();
         mkdir(&replica, &mut root, "foo", 0o777).unwrap();
 
-        let subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        assert!(replica.list(&subdir).unwrap().is_empty());
+        let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
+        assert!(replica.list(&mut subdir).unwrap().is_empty());
 
         replica.remove(&mut root, File(
             &oss("foo"), &FileData::Directory(0o777))).unwrap();
-        assert!(replica.list(&root).unwrap().is_empty());
+        assert!(replica.list(&mut root).unwrap().is_empty());
 
-        assert!(replica.list(&subdir).is_err());
+        assert!(replica.list(&mut subdir).is_err());
         assert!(replica.chdir(&root, &oss("foo")).is_err());
     }
 
@@ -834,13 +848,13 @@ mod test {
         let (replica, mut root) = init();
         mkdir(&replica, &mut root, "foo", 0o777).unwrap();
 
-        let subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        assert!(replica.list(&subdir).unwrap().is_empty());
+        let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
+        assert!(replica.list(&mut subdir).unwrap().is_empty());
 
         assert!(replica.remove(&mut root, File(
             &oss("foo"), &FileData::Directory(0o666))).is_err());
-        assert_eq!(1, replica.list(&root).unwrap().len());
-        assert!(replica.list(&subdir).unwrap().is_empty());
+        assert_eq!(1, replica.list(&mut root).unwrap().len());
+        assert!(replica.list(&mut subdir).unwrap().is_empty());
         replica.chdir(&root, &oss("foo")).unwrap();
     }
 
@@ -851,12 +865,12 @@ mod test {
 
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         mkdir(&replica, &mut subdir, "bar", 0o777).unwrap();
-        assert_eq!(1, replica.list(&subdir).unwrap().len());
+        assert_eq!(1, replica.list(&mut subdir).unwrap().len());
 
         assert!(replica.remove(&mut root, File(
             &oss("foo"), &FileData::Directory(0o777))).is_err());
-        assert_eq!(1, replica.list(&root).unwrap().len());
-        assert_eq!(1, replica.list(&subdir).unwrap().len());
+        assert_eq!(1, replica.list(&mut root).unwrap().len());
+        assert_eq!(1, replica.list(&mut subdir).unwrap().len());
         replica.chdir(&root, &oss("foo")).unwrap();
         replica.chdir(&subdir, &oss("bar")).unwrap();
     }
@@ -868,7 +882,7 @@ mod test {
             .unwrap().clone();
         replica.rename(&mut root, &oss("foo"), &oss("bar")).unwrap();
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         let file = &list[0];
         assert_eq!(oss("bar"), file.0);
@@ -883,16 +897,16 @@ mod test {
         mkspec(&replica, &mut subdir_foo, "xyzzy").unwrap();
 
         replica.rename(&mut root, &oss("foo"), &oss("bar")).unwrap();
-        assert!(replica.list(&subdir_foo).is_err());
+        assert!(replica.list(&mut subdir_foo).is_err());
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         let file = &list[0];
         assert_eq!(oss("bar"), file.0);
         assert_eq!(FileData::Directory(0o777), file.1);
 
-        let subdir_bar = replica.chdir(&root, &oss("bar")).unwrap();
-        assert_eq!(1, replica.list(&subdir_bar).unwrap().len());
+        let mut subdir_bar = replica.chdir(&root, &oss("bar")).unwrap();
+        assert_eq!(1, replica.list(&mut subdir_bar).unwrap().len());
     }
 
     #[test]
@@ -901,14 +915,14 @@ mod test {
         mkdir(&replica, &mut root, "foo", 0o777).unwrap();
         mkspec(&replica, &mut root, "bar").unwrap();
 
-        let subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        assert!(replica.list(&subdir).unwrap().is_empty());
+        let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
+        assert!(replica.list(&mut subdir).unwrap().is_empty());
 
         assert!(replica.rename(&mut root, &oss("foo"), &oss("bar")).is_err());
 
-        assert!(replica.list(&subdir).is_ok());
+        assert!(replica.list(&mut subdir).is_ok());
         assert!(replica.chdir(&root, &oss("foo")).is_ok());
-        assert_eq!(2, replica.list(&root).unwrap().len());
+        assert_eq!(2, replica.list(&mut root).unwrap().len());
     }
 
     #[test]
@@ -925,25 +939,25 @@ mod test {
         mkspec(&replica, &mut subdir_foo_bar_xyzzy, "x").unwrap();
         mkspec(&replica, &mut subdir_foo_bar_plugh, "x").unwrap();
 
-        let root_list = replica.list(&root).unwrap();
+        let root_list = replica.list(&mut root).unwrap();
         assert_eq!(1, root_list.len());
         assert_eq!(oss("foo"), root_list[0].0);
         assert_eq!(FileData::Directory(0o777), root_list[0].1);
 
-        let foo_list = replica.list(&subdir_foo).unwrap();
+        let foo_list = replica.list(&mut subdir_foo).unwrap();
         assert_eq!(1, foo_list.len());
         assert_eq!(oss("bar"), foo_list[0].0);
         assert_eq!(FileData::Directory(0o666), foo_list[0].1);
 
-        let bar_list = replica.list(&subdir_foo_bar).unwrap();
+        let bar_list = replica.list(&mut subdir_foo_bar).unwrap();
         assert_eq!(2, bar_list.len());
         assert_eq!(1, bar_list.iter().filter(|v| oss("xyzzy") == v.0).count());
         assert_eq!(1, bar_list.iter().filter(|v| oss("plugh") == v.0).count());
 
-        let xyzzy_list = replica.list(&subdir_foo_bar_xyzzy).unwrap();
+        let xyzzy_list = replica.list(&mut subdir_foo_bar_xyzzy).unwrap();
         assert_eq!(1, xyzzy_list.len());
 
-        let plugh_list = replica.list(&subdir_foo_bar_plugh).unwrap();
+        let plugh_list = replica.list(&mut subdir_foo_bar_plugh).unwrap();
         assert_eq!(1, plugh_list.len());
     }
 
@@ -964,7 +978,7 @@ mod test {
                        &FileData::Symlink(oss("plugh")),
                        simple_error()).unwrap();
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(FileData::Symlink(oss("plugh")), list[0].1);
     }
@@ -978,7 +992,7 @@ mod test {
                                &FileData::Symlink(oss("plugh")),
                                simple_error()).is_err());
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(FileData::Symlink(oss("bar")), list[0].1);
     }
@@ -995,9 +1009,9 @@ mod test {
                        &FileData::Directory(0o700),
                        simple_error()).unwrap();
 
-        replica.list(&subdir).unwrap();
+        replica.list(&mut subdir).unwrap();
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(FileData::Directory(0o700), list[0].1);
     }
@@ -1014,9 +1028,9 @@ mod test {
                                &FileData::Directory(0o700),
                                simple_error()).is_err());
 
-        replica.list(&subdir).unwrap();
+        replica.list(&mut subdir).unwrap();
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(FileData::Directory(0o777), list[0].1);
     }
@@ -1084,29 +1098,29 @@ mod test {
                        &FileData::Directory(0o777),
                        simple_error()).unwrap();
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(FileData::Directory(0o777), list[0].1);
 
-        let subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        assert!(replica.list(&subdir).unwrap().is_empty());
+        let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
+        assert!(replica.list(&mut subdir).unwrap().is_empty());
     }
 
     #[test]
     fn update_directory_into_special() {
         let (replica, mut root) = init();
         mkdir(&replica, &mut root, "foo", 0o777).unwrap();
-        let subdir = replica.chdir(&root, &oss("foo")).unwrap();
+        let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         replica.update(&mut root, &oss("foo"),
                        &FileData::Directory(0o777),
                        &FileData::Special,
                        simple_error()).unwrap();
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(FileData::Special, list[0].1);
 
-        assert!(replica.list(&subdir).is_err());
+        assert!(replica.list(&mut subdir).is_err());
         assert!(replica.chdir(&root, &oss("foo")).is_err());
     }
 
@@ -1122,11 +1136,11 @@ mod test {
                                &FileData::Special,
                                simple_error()).is_err());
 
-        let list = replica.list(&root).unwrap();
+        let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(FileData::Directory(0o777), list[0].1);
 
-        assert_eq!(1, replica.list(&subdir).unwrap().len());
+        assert_eq!(1, replica.list(&mut subdir).unwrap().len());
         assert!(replica.chdir(&root, &oss("foo")).is_ok());
     }
 
@@ -1139,14 +1153,14 @@ mod test {
         replica.condemn(&mut root, &oss("foo")).unwrap();
         assert!(replica.is_condemned(&mut root, &oss("foo")).unwrap());
 
-        let condemned_list = replica.list(&root).unwrap();
+        let condemned_list = replica.list(&mut root).unwrap();
         assert_eq!(1, condemned_list.len());
         assert_eq!(oss("bar"), condemned_list[0].0);
 
         replica.uncondemn(&mut root, &oss("foo")).unwrap();
         assert!(!replica.is_condemned(&mut root, &oss("foo")).unwrap());
 
-        assert_eq!(1, replica.list(&root).unwrap().len());
+        assert_eq!(1, replica.list(&mut root).unwrap().len());
     }
 
     #[test]
@@ -1160,13 +1174,13 @@ mod test {
         mkdir(&replica, &mut root, "fooo", 0o777).unwrap();
 
         replica.condemn(&mut root, &oss("foo")).unwrap();
-        let condemned_list = replica.list(&root).unwrap();
+        let condemned_list = replica.list(&mut root).unwrap();
         assert_eq!(1, condemned_list.len());
         assert_eq!(oss("fooo"), condemned_list[0].0);
 
-        assert!(replica.list(&subdir_foo).is_err());
-        assert!(replica.list(&subdir_bar).is_err());
-        assert!(replica.list(&replica.chdir(&root, &oss("fooo"))
+        assert!(replica.list(&mut subdir_foo).is_err());
+        assert!(replica.list(&mut subdir_bar).is_err());
+        assert!(replica.list(&mut replica.chdir(&root, &oss("fooo"))
                              .unwrap()).is_ok());
     }
 }

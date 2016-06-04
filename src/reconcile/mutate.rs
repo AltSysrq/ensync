@@ -736,7 +736,7 @@ pub mod test {
         let name = oss("foo");
         replace_ancestor(&replica, &mut root, &mut files,
                          &name, None, Some(&fd)).unwrap();
-        assert_eq!(1, replica.list(&root).unwrap().len());
+        assert_eq!(1, replica.list(&mut root).unwrap().len());
         assert_eq!(Some(&fd), files.get(&name));
     }
 
@@ -753,7 +753,7 @@ pub mod test {
                          &name, Some(&fd1), Some(&fd2)).unwrap();
         assert_eq!(1, files.len());
         assert_eq!(Some(&fd2), files.get(&name));
-        assert_eq!(fd2, replica.list(&root).unwrap()[0].1);
+        assert_eq!(fd2, replica.list(&mut root).unwrap()[0].1);
     }
 
     #[test]
@@ -767,7 +767,7 @@ pub mod test {
         replace_ancestor(&replica, &mut root, &mut files,
                          &name, Some(&fd), None).unwrap();
         assert!(!files.contains_key(&name));
-        assert!(replica.list(&root).unwrap().is_empty());
+        assert!(replica.list(&mut root).unwrap().is_empty());
     }
 
     #[test]
@@ -787,7 +787,7 @@ pub mod test {
         replace_ancestor(&replica, &mut root, &mut files, &foo,
                          Some(&fd_foo), None).unwrap();
         assert!(!files.contains_key(&foo));
-        assert!(replica.list(&root).unwrap().is_empty());
+        assert!(replica.list(&mut root).unwrap().is_empty());
     }
 
     #[test]
@@ -808,7 +808,7 @@ pub mod test {
         replace_ancestor(&replica, &mut root, &mut files, &foo,
                          Some(&fd_foo), Some(&fd2)).unwrap();
         assert_eq!(Some(&fd2), files.get(&foo));
-        assert!(replica.list(&subdir_foo).is_err());
+        assert!(replica.list(&mut subdir_foo).is_err());
     }
 
     #[test]
@@ -829,8 +829,8 @@ pub mod test {
         replace_ancestor(&replica, &mut root, &mut files, &foo,
                          Some(&fd_foo), Some(&fd2)).unwrap();
         assert_eq!(Some(&fd2), files.get(&foo));
-        assert!(replica.list(&subdir_foo).is_ok());
-        assert_eq!(plugh, replica.list(&subdir_bar).unwrap()[0].0);
+        assert!(replica.list(&mut subdir_foo).is_ok());
+        assert_eq!(plugh, replica.list(&mut subdir_bar).unwrap()[0].0);
     }
 
     #[test]
@@ -845,7 +845,7 @@ pub mod test {
         replace_ancestor(&replica, &mut root, &mut files, &foo,
                          Some(&fd1), Some(&fd2)).unwrap();
         assert_eq!(Some(&fd2), files.get(&foo));
-        assert_eq!(fd2, replica.list(&root).unwrap()[0].1);
+        assert_eq!(fd2, replica.list(&mut root).unwrap()[0].1);
     }
 
     #[test]
@@ -877,7 +877,7 @@ pub mod test {
 
         let fd = mkreg(&mut src, &mut src_root, &mut BTreeMap::new(), &foo);
         src.set_hashes_unknown(&mut src_root);
-        let actual_fd = src.list(&src_root).unwrap()[0].1.clone();
+        let actual_fd = src.list(&mut src_root).unwrap()[0].1.clone();
         assert_eq!(FileData::Regular(0o777, 0, 0, UNKNOWN_HASH), actual_fd);
 
         let result = replace_replica(
@@ -901,7 +901,7 @@ pub mod test {
 
         let fd = mkreg(&mut src, &mut src_root, &mut BTreeMap::new(), &foo);
         src.set_hashes_unknown(&mut src_root);
-        let actual_fd = src.list(&src_root).unwrap()[0].1.clone();
+        let actual_fd = src.list(&mut src_root).unwrap()[0].1.clone();
         assert_eq!(FileData::Regular(0o777, 0, 0, UNKNOWN_HASH), actual_fd);
 
         let result = replace_replica(
@@ -945,7 +945,7 @@ pub mod test {
                                    &PrintlnLogger, ReplicaSide::Client));
         assert_eq!(1, files.len());
         assert!(files.contains_key(&bar));
-        assert_eq!(&bar, &replica.list(&root).unwrap()[0].0);
+        assert_eq!(&bar, &replica.list(&mut root).unwrap()[0].0);
     }
 
     #[test]
@@ -965,7 +965,7 @@ pub mod test {
                                     &PrintlnLogger, ReplicaSide::Server));
         assert_eq!(1, files.len());
         assert!(files.contains_key(&foo));
-        assert_eq!(&foo, &replica.list(&root).unwrap()[0].0);
+        assert_eq!(&foo, &replica.list(&mut root).unwrap()[0].0);
     }
 
     #[test]
@@ -1121,8 +1121,8 @@ pub mod test {
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
         assert_eq!(None, root.anc.files.get(&foo));
         assert_eq!(None, root.srv.files.get(&foo));
-        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
-        assert!(fx.server.list(&root.srv.dir).unwrap().is_empty());
+        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
+        assert!(fx.server.list(&mut root.srv.dir).unwrap().is_empty());
     }
 
     #[test]
@@ -1146,8 +1146,8 @@ pub mod test {
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
         assert_eq!(None, root.anc.files.get(&foo));
         assert_eq!(Some(&cfd), root.srv.files.get(&foo));
-        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
-        assert_eq!(cfd, fx.server.list(&root.srv.dir).unwrap()[0].1);
+        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
+        assert_eq!(cfd, fx.server.list(&mut root.srv.dir).unwrap()[0].1);
     }
 
     #[test]
@@ -1237,12 +1237,12 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
-        assert_eq!(&foo1, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
         assert!(root.anc.files.is_empty());
-        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1267,12 +1267,12 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
         assert!(root.anc.files.is_empty());
-        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo1));
-        assert_eq!(&foo1, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1300,12 +1300,12 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
         assert!(root.anc.files.is_empty());
-        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1333,10 +1333,10 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1362,14 +1362,14 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
-        assert_eq!(&foo1, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
         assert_eq!(1, root.anc.files.len());
         assert_eq!(Some(&afd), root.anc.files.get(&foo1));
-        assert_eq!(1, fx.ancestor.list(&root.anc.dir).unwrap().len());
-        assert_eq!(&foo1, &fx.ancestor.list(&root.anc.dir).unwrap()[0].0);
+        assert_eq!(1, fx.ancestor.list(&mut root.anc.dir).unwrap().len());
+        assert_eq!(&foo1, &fx.ancestor.list(&mut root.anc.dir).unwrap()[0].0);
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1399,14 +1399,14 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
         // root.anc.files will be out of date, but listing the ancestor will
         // effect the condemnation of the old name.
         assert_eq!(1, root.anc.files.len());
-        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1436,13 +1436,13 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
-        assert_eq!(&foo1, &fx.client.list(&root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
         // root.anc.files will be out of date, but listing the ancestor will
         // effect the condemnation of the old name.
         assert_eq!(1, root.anc.files.len());
-        assert!(fx.ancestor.list(&root.anc.dir).unwrap().is_empty());
+        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
     }
 }
