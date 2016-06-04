@@ -102,6 +102,12 @@ impl FileData {
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct File<'a> (pub &'a CStr, pub &'a FileData);
 
+pub fn is_dir(fd: Option<&FileData>) -> bool {
+    match fd {
+        Some(&FileData::Directory(_)) => true,
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 mod test {
