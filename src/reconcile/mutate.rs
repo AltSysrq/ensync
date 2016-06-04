@@ -41,7 +41,7 @@ pub trait Interface<'a> {
                             TransferIn = <Self::Cli as Replica>::TransferOut,
                             TransferOut = <Self::Cli as Replica>::TransferIn>;
     type Log : 'a + Logger;
-    type Rules : 'a + RulesMatcher;
+    type Rules : 'a + DirRules;
 
     fn cli(&self) -> &Self::Cli;
     fn anc(&self) -> &Self::Anc;
@@ -56,7 +56,7 @@ pub struct Context<'a,
                    SRV : 'a + Replica<TransferIn = CLI::TransferOut,
                                       TransferOut = CLI::TransferIn>,
                    LOG : 'a + Logger,
-                   RULES : 'a + RulesMatcher> {
+                   RULES : 'a + DirRules> {
     pub cli: &'a CLI,
     pub anc: &'a ANC,
     pub srv: &'a SRV,
@@ -70,7 +70,7 @@ impl<'a,
      SRV : 'a + Replica<TransferIn = CLI::TransferOut,
                         TransferOut = CLI::TransferIn>,
      LOG : 'a + Logger,
-     RULES : 'a + RulesMatcher>
+     RULES : 'a + DirRules>
 Interface<'a> for Context<'a, CLI, ANC, SRV, LOG, RULES> {
     type Cli = CLI;
     type CliDir = CLI::Directory;
@@ -602,13 +602,28 @@ pub mod test {
     use super::{replace_ancestor,replace_replica,try_rename_replica};
     use super::{SingleDirContext};
 
-    #[derive(Clone)]
+    #[derive(Clone,Debug)]
     pub struct ConstantRules<'a>(&'a SyncMode);
 
-    impl<'a> RulesMatcher for ConstantRules<'a> {
-        fn dir_contains(&mut self, _: File) { }
-        fn child(&self, _: &CStr) -> Self { self.clone() }
+    impl<'a> DirRules for ConstantRules<'a> {
+        type Builder = Self;
+        type FileRules = Self;
+
+        fn file(&self, _: File) -> Self { self.clone() }
+    }
+
+    impl<'a> FileRules for ConstantRules<'a> {
+        type DirRules = Self;
+
         fn sync_mode(&self) -> SyncMode { *self.0 }
+        fn subdir(self) -> Self { self }
+    }
+
+    impl<'a> DirRulesBuilder for ConstantRules<'a> {
+        type DirRules = Self;
+
+        fn contains(&mut self, _: File) { }
+        fn build(self) -> Self { self }
     }
 
     pub type TContext<'a> = Context<'a, MemoryReplica, MemoryReplica, MemoryReplica,
