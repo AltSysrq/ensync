@@ -259,7 +259,10 @@ pub enum ApplyResult {
     /// deleted. Recurse, creating a synthetic directory on the opposite end
     /// replica. After recursion, if the directories are empty, remove them in
     /// the ancestor and this end replica.
-    RecursiveDelete(ReconciliationSide),
+    ///
+    /// Should synthetic directories be created, they shall use the mode
+    /// indicated.
+    RecursiveDelete(ReconciliationSide, FileMode),
 }
 
 fn apply_use<DST : Replica,
@@ -276,6 +279,14 @@ fn apply_use<DST : Replica,
      log: &LOG, side: ReconciliationSide)
     -> result::Result<Option<Option<FileData>>, ApplyResult>
 {
+    fn dir_mode(v: Option<&FileData>) -> FileMode {
+        if let Some(&FileData::Directory(mode)) = v {
+            mode
+        } else {
+            panic!("dir_mode() called on non-directory")
+        }
+    }
+
     // If we're deleting a directory, we need to recurse first and let
     // reconciliation empty it naturally.
     if is_dir(old_dst) && old_src.is_none() {
@@ -286,7 +297,7 @@ fn apply_use<DST : Replica,
         let old_anc = anc_files.get(name).cloned();
         if try_replace_ancestor(anc, anc_dir, anc_files, dir_name, name,
                                 old_anc.as_ref(), old_dst, log) {
-            Err(ApplyResult::RecursiveDelete(side.rev()))
+            Err(ApplyResult::RecursiveDelete(side.rev(), dir_mode(old_dst)))
         } else {
             Err(ApplyResult::Fail)
         }
@@ -313,8 +324,8 @@ fn apply_use<DST : Replica,
 /// what should happen afterwards.
 ///
 /// Errors are passed down the context's logger.
-pub fn apply_reconciliation<'a, I : Interface<'a>>(
-    i: &I, dir: &mut DirContext<'a, I>,
+pub fn apply_reconciliation<I : Interface>(
+    i: &I, dir: &mut DirContext<I>,
     dir_name: &CStr, name: &CStr,
     recon: Reconciliation,
     old_cli: Option<&FileData>, old_srv: Option<&FileData>)
@@ -479,6 +490,7 @@ pub mod test {
     use std::ffi::{CString,CStr};
 
     use defs::*;
+    use work_stack::WorkStack;
     use log::{PrintlnLogger,ReplicaSide};
     use replica::{Replica,NullTransfer};
     use memory_replica::{self,MemoryReplica,DirHandle,simple_error};
@@ -491,23 +503,23 @@ pub mod test {
     use super::super::context::*;
 
     #[derive(Clone,Debug)]
-    pub struct ConstantRules<'a>(&'a SyncMode);
+    pub struct ConstantRules(SyncMode);
 
-    impl<'a> DirRules for ConstantRules<'a> {
+    impl DirRules for ConstantRules {
         type Builder = Self;
         type FileRules = Self;
 
-        fn file(&self, _: File) -> Self { self.clone() }
+        fn file(&self, _: &CStr, _: Option<&FileData>) -> Self { self.clone() }
     }
 
-    impl<'a> FileRules for ConstantRules<'a> {
+    impl FileRules for ConstantRules {
         type DirRules = Self;
 
-        fn sync_mode(&self) -> SyncMode { *self.0 }
+        fn sync_mode(&self) -> SyncMode { self.0 }
         fn subdir(self) -> Self { self }
     }
 
-    impl<'a> DirRulesBuilder for ConstantRules<'a> {
+    impl DirRulesBuilder for ConstantRules {
         type DirRules = Self;
 
         fn contains(&mut self, _: File) { }
@@ -515,14 +527,14 @@ pub mod test {
     }
 
     pub type TContext<'a> = Context<'a, MemoryReplica, MemoryReplica, MemoryReplica,
-                                    PrintlnLogger, ConstantRules<'a>>;
+                                    PrintlnLogger, ConstantRules>;
 
     pub struct Fixture {
-        client: MemoryReplica,
-        ancestor: MemoryReplica,
-        server: MemoryReplica,
-        logger: PrintlnLogger,
-        mode: SyncMode,
+        pub client: MemoryReplica,
+        pub ancestor: MemoryReplica,
+        pub server: MemoryReplica,
+        pub logger: PrintlnLogger,
+        pub mode: SyncMode,
     }
 
     impl Fixture {
@@ -542,7 +554,9 @@ pub mod test {
                 anc: &self.ancestor,
                 srv: &self.server,
                 logger: &self.logger,
-                root_rules: ConstantRules(&self.mode),
+                root_rules: ConstantRules(self.mode),
+                work: WorkStack::new(),
+                tasks: UnqueuedTasks::new(),
             }
         }
     }
@@ -558,7 +572,7 @@ pub mod test {
     }
 
     pub fn root_dir_context(fx: &Fixture) -> DirContext<TContext> {
-        DirContext {
+        DirContextRaw {
             cli: SingleDirContext {
                 dir: fx.client.root().unwrap(),
                 files: BTreeMap::new(),
@@ -572,7 +586,7 @@ pub mod test {
                 files: BTreeMap::new(),
             },
             todo: BinaryHeap::new(),
-            rules: ConstantRules(&fx.mode),
+            rules: ConstantRules(fx.mode),
         }
     }
 
@@ -861,7 +875,7 @@ pub mod test {
         mkreg(&mut replica, &mut root, &mut files, &foo);
 
         replica.data().faults.insert(
-            memory_replica::Op::Rename(oss(""), foo.clone(), bar.clone()),
+            memory_replica::Op::Rename(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
         assert!(!try_rename_replica(&replica, &mut root, &mut files,
                                     &oss(""), &foo, &bar,
@@ -1064,7 +1078,8 @@ pub mod test {
         let sfd = mkdir(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, 0o777);
 
-        assert_eq!(ApplyResult::RecursiveDelete(ReconciliationSide::Server),
+        assert_eq!(ApplyResult::RecursiveDelete(ReconciliationSide::Server,
+                                                0o777),
                    apply_reconciliation(
                        &fx.context(), &mut root, &oss(""), &foo,
                        Reconciliation::Use(ReconciliationSide::Client),
@@ -1192,7 +1207,7 @@ pub mod test {
                         &mut root.srv.files, &foo, 0o700);
 
         fx.client.data().faults.insert(
-            memory_replica::Op::Rename(oss(""), foo.clone(), oss("foo~1")),
+            memory_replica::Op::Rename(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
@@ -1280,7 +1295,6 @@ pub mod test {
         let fx = Fixture::new();
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
-        let foo1 = oss("foo~1");
 
         let cfd = mkdir(&fx.client, &mut root.cli.dir,
                         &mut root.cli.files, &foo, 0o777);
@@ -1290,7 +1304,7 @@ pub mod test {
                         &mut root.srv.files, &foo, 0o700);
 
         fx.client.data().faults.insert(
-            memory_replica::Op::Rename(oss(""), foo.clone(), foo1.clone()),
+            memory_replica::Op::Rename(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
@@ -1327,7 +1341,7 @@ pub mod test {
                         &mut root.srv.files, &foo, 0o700);
 
         fx.ancestor.data().faults.insert(
-            memory_replica::Op::Rename(oss(""), foo.clone(), foo1.clone()),
+            memory_replica::Op::Rename(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
         assert_eq!(ApplyResult::Fail, apply_reconciliation(

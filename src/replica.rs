@@ -42,7 +42,7 @@ pub trait ReplicaDirectory {
 /// allow the mutable state to be moved into the directory objects instead.
 pub trait Replica {
     /// Type representing an operating directory.
-    type Directory : ReplicaDirectory;
+    type Directory : ReplicaDirectory + 'static;
     /// Type which this replica uses to transfer data in from the other
     /// replica.
     type TransferIn;
@@ -148,6 +148,16 @@ pub trait Replica {
     /// directories that have not yet materialised.
     fn synthdir(&self, &mut Self::Directory, subdir: &CStr, mode: FileMode)
                 -> Self::Directory;
+    /// Deletes the directory identified by the given handle, if it is empty.
+    ///
+    /// If the directory already does not exist (regardless of whether the
+    /// handle is synthetic), this call succeeds.
+    ///
+    /// If the path indicated by the directory exists but is not actually a
+    /// directory, a best effort should be made to not remove that object;
+    /// whether the call succeeds in this case is unspecified.
+    fn rmdir(&self, &mut Self::Directory) -> Result<()>;
+
     /// Returns an object which can be used to transfer `file` out of this
     /// replica.
     fn transfer(&self, &Self::Directory, file: File)

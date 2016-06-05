@@ -61,10 +61,13 @@ pub enum EditEditConflictResolution<'a> {
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ErrorOperation<'a> {
     List,
+    MarkClean,
+    Chdir(&'a CStr),
     Create(&'a CStr),
     Update(&'a CStr),
     Rename(&'a CStr),
     Remove(&'a CStr),
+    Rmdir,
     Access(&'a CStr),
 }
 
@@ -77,6 +80,7 @@ pub enum Log<'a> {
     Update(ReplicaSide, &'a CStr, &'a CStr, &'a FileData, &'a FileData),
     Rename(ReplicaSide, &'a CStr, &'a CStr, &'a CStr),
     Remove(ReplicaSide, &'a CStr, &'a CStr, &'a FileData),
+    Rmdir(ReplicaSide, &'a CStr),
     Error(ReplicaSide, &'a CStr, ErrorOperation<'a>, &'a Error),
 }
 

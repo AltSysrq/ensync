@@ -18,3 +18,4 @@ pub use self::context::Context;
 
 pub mod compute;
 pub mod mutate;
+pub mod tree_walk;

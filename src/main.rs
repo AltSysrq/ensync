@@ -18,6 +18,7 @@ extern crate gpgme;
 extern crate libc;
 
 mod defs;
+mod work_stack;
 mod rules;
 mod log;
 mod replica;

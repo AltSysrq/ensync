@@ -30,7 +30,7 @@
 //!
 //! `set_dir_clean()` is only partially implemented; it does not check for
 //! concurrent modifications of any kind. Any tests which simulate these should
-//! simply set the dirty flag again.
+//! simply clear the clean flag again.
 
 use std::collections::{HashMap,HashSet};
 use std::ffi::{CStr,CString};
@@ -48,8 +48,8 @@ pub enum Op {
     /// to the directory, eg, "/foo/bar".
     List(CString),
     /// Matched when `Replica::rename()` is called or when an operation
-    /// performs a rename internally. The fields are: path, old name, new name.
-    Rename(CString,CString,CString),
+    /// performs a rename internally. The fields are: path, old name.
+    Rename(CString,CString),
     /// Matched when `Replica::remove()` is called or when an operation
     /// performs a removal internally. The fields are: path, filename.
     Remove(CString,CString),
@@ -92,8 +92,8 @@ pub struct Directory {
     pub contents: HashMap<CString, Entry>,
     /// The names which have been condemned in this directory.
     pub condemned: HashSet<CString>,
-    /// Whether this directory is marked dirty. Defaults to false.
-    pub dirty: bool,
+    /// Whether this directory is marked clean. Defaults to false.
+    pub clean: bool,
 }
 
 /// A regular file as represented within a `MemoryReplica`.
@@ -218,7 +218,7 @@ pub fn simple_error<T>() -> Result<T> {
     Err(Box::new(VarError::NotPresent))
 }
 
-fn catpath(a: &CStr, b: &CStr) -> CString {
+pub fn catpath(a: &CStr, b: &CStr) -> CString {
     let mut cat: Vec<u8> = a.to_bytes().iter().cloned().collect();
     cat.push('/' as u8);
     cat.extend(b.to_bytes().iter());
@@ -269,13 +269,13 @@ impl Replica for MemoryReplica {
     type TransferOut = Result<HashId>;
 
     fn is_dir_dirty(&self, dir: &DirHandle) -> bool {
-        self.data().dirs.get(&dir.path).map_or(false, |d| d.dirty)
+        self.data().dirs.get(&dir.path).map_or(false, |d| !d.clean)
     }
 
     fn set_dir_clean(&self, dir: &DirHandle) -> Result<bool> {
         let mut d = self.data();
         if let Some(contents) = d.dirs.get_mut(&dir.path) {
-            contents.dirty = false;
+            contents.clean = true;
             Ok(true)
         } else {
             simple_error()
@@ -347,8 +347,7 @@ impl Replica for MemoryReplica {
     fn rename(&self, dir: &mut DirHandle, old: &CStr, new: &CStr)
               -> Result<()> {
         let mut d = self.data();
-        try!(d.test_op(&Op::Rename(dir.path.clone(),
-                                   old.to_owned(), new.to_owned())));
+        try!(d.test_op(&Op::Rename(dir.path.clone(), old.to_owned())));
         let is_dir = if let Some(contents) = d.dirs.get_mut(&dir.path) {
             if contents.contents.contains_key(new) {
                 simple_error()
@@ -540,6 +539,30 @@ impl Replica for MemoryReplica {
         sub
     }
 
+    fn rmdir(&self, dir: &mut DirHandle) -> Result<()> {
+        let mut split = dir.path.to_bytes().rsplitn(2, |u| b'/' == *u);
+        let name = CString::new(split.next().unwrap()).unwrap();
+        let path = CString::new(split.next().unwrap()).unwrap();
+        assert!(split.next().is_none());
+
+        let mut parent = DirHandle {
+            path: path,
+            synthetics: Default::default(),
+        };
+        {
+            let data = self.data();
+            if !data.dirs.contains_key(&dir.path) ||
+               !data.dirs.contains_key(&parent.path) {
+                return Ok(());
+            }
+        }
+
+        let parent_data = try!(self.list(&mut parent))
+            .into_iter().filter(|&(ref n, _)| n == &name)
+            .map(|(_, d)| d).next().unwrap();
+        self.remove(&mut parent, File(&name, &parent_data))
+    }
+
     fn transfer(&self, dir: &DirHandle, file: File) -> Result<HashId> {
         let mut d = self.data();
         try!(d.test_op(&Op::Transfer(dir.path.clone(), file.0.to_owned())));
@@ -623,7 +646,7 @@ mod test {
     #[test]
     fn empty() {
         let (replica, mut root) = init();
-        assert!(!replica.is_dir_dirty(&root));
+        assert!(replica.is_dir_dirty(&root));
         assert!(replica.list(&mut root).unwrap().is_empty());
         assert!(replica.rename(&mut root, &oss("foo"), &oss("bar")).is_err());
         assert!(replica.remove(

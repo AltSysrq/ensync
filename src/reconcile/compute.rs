@@ -64,7 +64,7 @@ pub fn gen_alternate_name<F : Fn (&CStr) -> bool>(
 }
 /// When a reconciliation sources from or affects one side, indicates which
 /// replica is to be used.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub enum ReconciliationSide {
     Client, Server
 }
@@ -130,7 +130,7 @@ pub enum Reconciliation {
 
 /// Indicates what kind of conflict, if any, was encountered during
 /// reconciliation.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub enum Conflict {
     /// No conflict.
     NoConflict,
@@ -142,7 +142,7 @@ pub enum Conflict {
     EditEdit(ConflictingEdit, ConflictingEdit),
 }
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub enum ConflictingEdit {
     /// Only the mode of the file was changed relative to the ancestor, or the
     /// server and client agree on content but not mode.
