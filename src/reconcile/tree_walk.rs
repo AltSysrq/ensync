@@ -623,6 +623,39 @@ mod test {
         verify_replica("ancestor", &fx.ancestor, fs, |t| t.2);
     }
 
+    fn signature(replica: &MemoryReplica) -> String {
+        fn dir_sig(dst: &mut String,
+                   replica: &MemoryReplica, dir: &mut DirHandle) {
+            let mut contents = replica.list(dir).unwrap();
+            contents.sort_by(|&(ref a,_), &(ref b,_)| a.cmp(b));
+
+            for (ix, (name, child)) in contents.into_iter().enumerate() {
+                if ix > 0 {
+                    dst.push_str("; ");
+                }
+                dst.push_str(name.to_str().unwrap());
+                dst.push_str(" = ");
+                match child {
+                    FileData::Regular(mode, _, _, hash) =>
+                        dst.push_str(&format!("reg {}, {}", mode, hash[0])),
+
+                    FileData::Directory(mode) => {
+                        dst.push_str(&format!("dir {} (", mode));
+                        dir_sig(dst, replica,
+                                &mut replica.chdir(dir, &name).unwrap());
+                        dst.push_str(")");
+                    },
+
+                    _ => panic!("Unexpected file type"),
+                }
+            }
+        }
+
+        let mut res = String::new();
+        dir_sig(&mut res, replica, &mut replica.root().unwrap());
+        res
+    }
+
     fn run_once(fx: &Fixture) -> DirState {
         let context = fx.context();
         let dsr = start_root(&context).unwrap();
@@ -647,8 +680,6 @@ mod test {
                     "After clearing faults and rerunning, \
                      errors still occurred");
         }
-
-        // TODO: Test that another pass is idempotent
     }
 
     fn test_single(input: &Vec<En>, mode: &str, output: &Vec<En>) {
@@ -656,6 +687,31 @@ mod test {
         fx.mode = mode.parse().unwrap();
         run_full(&fx);
         verify(&fx, output);
+
+        let cli_sig_a = signature(&fx.client);
+        let anc_sig_a = signature(&fx.ancestor);
+        let srv_sig_a = signature(&fx.server);
+
+        fx.client.mark_all_dirty();
+        fx.server.mark_all_dirty();
+        run_full(&fx);
+
+        let cli_sig_b = signature(&fx.client);
+        let anc_sig_b = signature(&fx.ancestor);
+        let srv_sig_b = signature(&fx.server);
+
+        assert!(cli_sig_a == cli_sig_b,
+                "Client reconciliation not idempotent;\n\
+                 A: {}\n\
+                 B: {}", cli_sig_a, cli_sig_b);
+        assert!(srv_sig_a == srv_sig_b,
+                "Server reconciliation not idempotent;\n\
+                 A: {}\n\
+                 B: {}", srv_sig_a, srv_sig_b);
+        assert!(anc_sig_a == anc_sig_b,
+                "Ancestor reconciliation not idempotent;\n\
+                 A: {}\n\
+                 B: {}", anc_sig_a, anc_sig_b);
     }
 
     #[test]

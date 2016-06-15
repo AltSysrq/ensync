@@ -261,6 +261,13 @@ impl MemoryReplica {
             }
         };
     }
+
+    pub fn mark_all_dirty(&self) {
+        let mut d = self.data();
+        for (_, dir) in &mut d.dirs {
+            dir.clean = false;
+        }
+    }
 }
 
 impl Replica for MemoryReplica {
