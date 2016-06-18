@@ -90,13 +90,45 @@ pub trait Logger {
 
 #[cfg(test)]
 mod println_logger {
+    use std::io::{Result,Write};
+    use std::sync::Mutex;
+
     use super::*;
 
     /// Trivial implementation of `Logger` which simply dumps everything (in
-    /// debug format) to stdout.
-    pub struct PrintlnLogger;
+    /// debug format) to the given writer.
+    pub struct PrintlnLogger<W>(Mutex<W>);
 
-    impl Logger for PrintlnLogger {
+    impl<W> PrintlnLogger<W> {
+        pub fn new(w: W) -> Self {
+            PrintlnLogger(Mutex::new(w))
+        }
+    }
+
+    /// Writer which logs to the same "stdout" `print!` does, since for some
+    /// reason that's not accessible via any sane mechanism.
+    ///
+    /// Panics if a buffer written is not valid UTF-8.
+    pub struct PrintWriter;
+    impl Write for PrintWriter {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+            use std::str;
+            print!("{}", str::from_utf8(buf).unwrap());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl PrintlnLogger<PrintWriter> {
+        pub fn stdout() -> Self {
+            PrintlnLogger::new(PrintWriter)
+        }
+    }
+
+    impl<W : Write> Logger for PrintlnLogger<W> {
         fn log(&self, level: LogLevel, what: &Log) {
             let level_str = match level {
                 FATAL => "FATAL",
@@ -106,10 +138,11 @@ mod println_logger {
                 INFO  => " INFO",
                 _     => "?????",
             };
-            println!("[{}] {:?}", level_str, what);
+            writeln!(self.0.lock().unwrap(), "[{}] {:?}",
+                     level_str, what).unwrap();
         }
     }
 }
 
 #[cfg(test)]
-pub use self::println_logger::PrintlnLogger;
+pub use self::println_logger::{PrintlnLogger,PrintWriter};

@@ -67,6 +67,9 @@ pub trait Replica {
     /// modifications; it is permitted to return `true` even if the directory
     /// is actually still dirty as long as the next run will return true from
     /// `is_dir_dirty()`.
+    ///
+    /// If the directory is synthetic and does not exist in any concrete form,
+    /// this call succeeds and returns true.
     fn set_dir_clean(&self, &Self::Directory) -> Result<bool>;
     /// Returns the root directory for this replica.
     fn root(&self) -> Result<Self::Directory>;

@@ -285,7 +285,11 @@ impl Replica for MemoryReplica {
             contents.clean = true;
             Ok(true)
         } else {
-            simple_error()
+            if !dir.synthetics.is_empty() {
+                Ok(true)
+            } else {
+                simple_error()
+            }
         }
     }
 
@@ -375,6 +379,26 @@ impl Replica for MemoryReplica {
         if try!(is_dir) {
             let contents = d.dirs.remove(&catpath(&dir.path, old)).unwrap();
             d.dirs.insert(catpath(&dir.path, new), contents);
+
+            // We also need to rename all the subdirectories.
+            // In retrospect, it would probably have been better to use numeric
+            // directory nodes or something.
+            let old_prefix = catpath(&catpath(&dir.path, old),
+                                     &CString::new("").unwrap()).into_bytes();
+            let new_prefix = catpath(&catpath(&dir.path, new),
+                                     &CString::new("").unwrap()).into_bytes();
+            let to_rename = d.dirs.keys().filter(
+                |k| k.as_bytes().starts_with(&old_prefix))
+                .map(|k| k.as_bytes().to_vec()).collect::<Vec<_>>();
+            for old_name in to_rename {
+                let new_name = CString::new(
+                    [&new_prefix[..], &old_name[old_prefix.len() ..]]
+                        .concat()).unwrap();
+
+                let contents = d.dirs.remove(
+                    &CString::new(old_name).unwrap()).unwrap();
+                d.dirs.insert(new_name, contents);
+            }
         }
 
         Ok(())
@@ -953,6 +977,27 @@ mod test {
         assert!(replica.list(&mut subdir).is_ok());
         assert!(replica.chdir(&root, &oss("foo")).is_ok());
         assert_eq!(2, replica.list(&mut root).unwrap().len());
+    }
+
+    #[test]
+    fn rename_directory_tree() {
+        let (replica, mut root) = init();
+        mkdir(&replica, &mut root, "foo", 0o777).unwrap();
+        let mut subdir_foo = replica.chdir(&root, &oss("foo")).unwrap();
+        mkdir(&replica, &mut subdir_foo, "bar", 0o777).unwrap();
+        let mut subdir_foobar = replica.chdir(&subdir_foo, &oss("bar"))
+            .unwrap();
+        mkspec(&replica, &mut subdir_foobar, "null").unwrap();
+
+        replica.rename(&mut root, &oss("foo"), &oss("plugh")).unwrap();
+
+        let mut subdir_plugh = replica.chdir(&root, &oss("plugh")).unwrap();
+        assert_eq!(oss("bar"), replica.list(&mut subdir_plugh).unwrap()[0].0);
+
+        let mut subdir_plughbar = replica.chdir(
+            &subdir_plugh, &oss("bar")).unwrap();
+        assert_eq!(oss("null"), replica.list(&mut subdir_plughbar)
+                   .unwrap()[0].0);
     }
 
     #[test]

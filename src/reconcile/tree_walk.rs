@@ -56,6 +56,13 @@ pub struct DirState {
     quiet: bool,
 }
 
+impl DirState {
+    fn fail(&self, _why: &str) {
+        //println!("Dir marked as failed: {}", why);
+        self.success.store(false, SeqCst);
+    }
+}
+
 impl Drop for DirState {
     fn drop(&mut self) {
         debug_assert!(self.quiet || 0 == self.pending.load(SeqCst),
@@ -104,7 +111,7 @@ fn process_file<I : Interface>(
                                      !dir.srv.files.contains_key(name),
                                      SeqCst);
         },
-        ApplyResult::Fail => dirstate.success.store(false, SeqCst),
+        ApplyResult::Fail => dirstate.fail("ApplyResult::Fail"),
         ApplyResult::Clean(true) => {
             dirstate.empty.store(false, SeqCst);
             if i.cli().is_dir_dirty(&dir.cli.dir) ||
@@ -279,7 +286,7 @@ fn recurse_into_dir<I : Interface>(
             recurse_and_then(i, cli_dir, anc_dir, srv_dir, file_rules, state,
                              |i, dir, _| mark_both_clean(i, &dir)),
 
-        _ => state.success.store(false, SeqCst),
+        _ => state.fail("recurse_into_dir chdir failed"),
     }
 }
 
@@ -310,13 +317,15 @@ fn recurse_and_then<I : Interface,
             file_rules.subdir(),
             |dir, subdirstate| task(move |i| {
                 if subdirstate.success.load(SeqCst) {
-                    subdirstate.success.fetch_and(
-                        on_success(i, dir, &subdirstate), SeqCst);
+                    if !on_success(i, dir, &subdirstate) {
+                        subdirstate.fail(
+                            "recurse_and_then on_success failed");
+                    }
                 }
                 finish_task_in_dir(i, &state, &subdirstate);
             }));
         if !success {
-            state2.success.store(false, SeqCst);
+            state2.fail("process_dir failed early");
             // process_dir() didn't create the task to decrement
             // `pending`, so we need to do that now.
             finish_task_in_dir(i, &state2, &state2);
@@ -404,7 +413,7 @@ fn recursive_delete<I : Interface>(
                              |i, mut dir, substate| delete_or_mark_clean(
                                  i, &mut dir, substate)),
 
-        _ => state.success.store(false, SeqCst),
+        _ => state.fail("recursive_delete chdir failed"),
     }
 }
 
@@ -466,14 +475,22 @@ pub fn start_root<I : Interface>(i: &I)
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
+    use std::cell::Cell;
+    use std::collections::{HashMap,HashSet};
     use std::ffi::CString;
+    use std::io::Write;
+    use std::iter::Iterator;
     use std::sync::Arc;
     use std::sync::atomic::Ordering::SeqCst;
+
+    use quickcheck::*;
+    use rand;
 
     use defs::*;
     use replica::*;
     use memory_replica::*;
+    use log::PrintWriter;
+    use rules::{SyncModeSetting,HalfSyncMode,SyncMode};
     use super::super::context::*;
     use super::super::mutate::test::*;
     use super::*;
@@ -490,13 +507,15 @@ mod test {
         Dir(FileMode),
     }
     use self::FsFileE::*;
-    type Faults = u8;
-    const F_CR : Faults = 1;
-    const F_UP : Faults = 2;
-    const F_RM : Faults = 4;
-    const F_MV : Faults = 8;
-    const F_CHDIR : Faults = 16;
-    const F_LS : Faults = 32;
+    #[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+    struct Faults(u8);
+    const Z : Faults = Faults(0);
+    const F_CR : u8 = 1;
+    const F_UP : u8 = 2;
+    const F_RM : u8 = 4;
+    const F_MV : u8 = 8;
+    const F_CHDIR : u8 = 16;
+    const F_LS : u8 = 32;
 
     fn init_replica<F : Fn (&En) -> FsFile>(replica: &MemoryReplica,
                                             fs: &Vec<En>, slot: F) {
@@ -528,26 +547,26 @@ mod test {
                 }
 
                 let mut to_fault = vec![];
-                if 0 != faults & F_CR {
+                if 0 != faults.0 & F_CR {
                     to_fault.push(Op::Create(
                         dirname.clone(), name.clone()));
                 }
-                if 0 != faults & F_UP {
+                if 0 != faults.0 & F_UP {
                     to_fault.push(Op::Update(
                         dirname.clone(), name.clone()));
                 }
-                if 0 != faults & F_RM {
+                if 0 != faults.0 & F_RM {
                     to_fault.push(Op::Remove(
                         dirname.clone(), name.clone()));
                 }
-                if 0 != faults & F_MV {
+                if 0 != faults.0 & F_MV {
                     to_fault.push(Op::Rename(
                         dirname.clone(), name.clone()));
                 }
-                if 0 != faults & F_LS {
+                if 0 != faults.0 & F_LS {
                     to_fault.push(Op::List(catpath(&dirname, &name)));
                 }
-                if 0 != faults & F_CHDIR {
+                if 0 != faults.0 & F_CHDIR {
                     to_fault.push(Op::Chdir(catpath(&dirname, &name)));
                 }
 
@@ -561,8 +580,8 @@ mod test {
         populate_dir(&replica, &mut replica.root().unwrap(), fs, &slot);
     }
 
-    fn init(fs: &Vec<En>) -> Fixture {
-        let fx = Fixture::new();
+    fn init<W : Write>(fs: &Vec<En>, out: W) -> Fixture<W> {
+        let fx = Fixture::new(out);
         init_replica(&fx.client, fs, |t| t.1);
         init_replica(&fx.ancestor, fs, |t| t.2);
         init_replica(&fx.server, fs, |t| t.3);
@@ -613,11 +632,14 @@ mod test {
             }
         }
 
+        // Clear all faults so we can walk the replica
+        replica.data().faults.clear();
+
         verify_dir(name, replica, &mut replica.root().unwrap(),
                    fs, &slot);
     }
 
-    fn verify(fx: &Fixture, fs: &Vec<En>) {
+    fn verify<W>(fx: &Fixture<W>, fs: &Vec<En>) {
         verify_replica("client", &fx.client, fs, |t| t.1);
         verify_replica("server", &fx.server, fs, |t| t.3);
         verify_replica("ancestor", &fx.ancestor, fs, |t| t.2);
@@ -651,19 +673,22 @@ mod test {
             }
         }
 
+        // Clear all faults so we can walk the replica
+        replica.data().faults.clear();
+
         let mut res = String::new();
         dir_sig(&mut res, replica, &mut replica.root().unwrap());
         res
     }
 
-    fn run_once(fx: &Fixture) -> DirState {
+    fn run_once<W : Write>(fx: &Fixture<W>) -> DirState {
         let context = fx.context();
         let dsr = start_root(&context).unwrap();
         context.run_work();
         Arc::try_unwrap(dsr).ok().unwrap()
     }
 
-    fn run_full(fx: &Fixture) {
+    fn run_full<W : Write>(fx: &Fixture<W>) {
         let res = run_once(fx);
         if !res.success.load(SeqCst) {
             assert!(!fx.client.data().faults.is_empty() ||
@@ -683,7 +708,7 @@ mod test {
     }
 
     fn test_single(input: &Vec<En>, mode: &str, output: &Vec<En>) {
-        let mut fx = init(input);
+        let mut fx = init(input, PrintWriter);
         fx.mode = mode.parse().unwrap();
         run_full(&fx);
         verify(&fx, output);
@@ -722,33 +747,33 @@ mod test {
     #[test]
     fn sync_flat() {
         test_single(&vec![
-            En("foo", (Reg(7,1),0), (Nil,0),      (Nil,0),      vec![]),
-            En("bar", (Nil,0),      (Nil,0),      (Reg(6,2),0), vec![]),
-            En("baz", (Nil,0),      (Reg(7,2),0), (Reg(7,2),0), vec![]),
+            En("foo", (Reg(7,1),Z), (Nil,Z),      (Nil,Z),      vec![]),
+            En("bar", (Nil,Z),      (Nil,Z),      (Reg(6,2),Z), vec![]),
+            En("baz", (Nil,Z),      (Reg(7,2),Z), (Reg(7,2),Z), vec![]),
         ], "cud/cud", &vec![
-            En("foo", (Reg(7,1),0), (Reg(7,1),0), (Reg(7,1),0), vec![]),
-            En("bar", (Reg(6,2),0), (Reg(6,2),0), (Reg(6,2),0), vec![]),
+            En("foo", (Reg(7,1),Z), (Reg(7,1),Z), (Reg(7,1),Z), vec![]),
+            En("bar", (Reg(6,2),Z), (Reg(6,2),Z), (Reg(6,2),Z), vec![]),
         ]);
     }
 
     #[test]
     fn sync_recursive() {
         test_single(&vec![
-            En("d1" , (Dir(7),0),   (Nil,0),      (Nil,0),      vec![
-                En("f1a", (Reg(7,1),0), (Nil,0),      (Nil,0),      vec![]),
+            En("d1" , (Dir(7),Z),   (Nil,Z),      (Nil,Z),      vec![
+                En("f1a", (Reg(7,1),Z), (Nil,Z),      (Nil,Z),      vec![]),
             ]),
-            En("orp", (Nil,0),      (Dir(7),0),   (Nil,0),      vec![
-                En("o1" , (Nil,0),      (Reg(7,2),0), (Nil,0),      vec![]),
+            En("orp", (Nil,Z),      (Dir(7),Z),   (Nil,Z),      vec![
+                En("o1" , (Nil,Z),      (Reg(7,2),Z), (Nil,Z),      vec![]),
             ]),
-            En("d2" , (Nil,0),      (Nil,0),      (Dir(6),0),   vec![
-                En("f2a", (Nil,0),      (Nil,0),      (Reg(6,3),0), vec![]),
+            En("d2" , (Nil,Z),      (Nil,Z),      (Dir(6),Z),   vec![
+                En("f2a", (Nil,Z),      (Nil,Z),      (Reg(6,3),Z), vec![]),
             ]),
         ], "cud/cud", &vec![
-            En("d1" , (Dir(7),0),   (Dir(7),0),   (Dir(7),0),   vec![
-                En("f1a", (Reg(7,1),0), (Reg(7,1),0), (Reg(7,1),0), vec![]),
+            En("d1" , (Dir(7),Z),   (Dir(7),Z),   (Dir(7),Z),   vec![
+                En("f1a", (Reg(7,1),Z), (Reg(7,1),Z), (Reg(7,1),Z), vec![]),
             ]),
-            En("d2" , (Dir(6),0),   (Dir(6),0),   (Dir(6),0),   vec![
-                En("f2a", (Reg(6,3),0), (Reg(6,3),0), (Reg(6,3),0), vec![]),
+            En("d2" , (Dir(6),Z),   (Dir(6),Z),   (Dir(6),Z),   vec![
+                En("f2a", (Reg(6,3),Z), (Reg(6,3),Z), (Reg(6,3),Z), vec![]),
             ]),
         ]);
     }
@@ -756,10 +781,10 @@ mod test {
     #[test]
     fn sync_recursive_delete_complete() {
         test_single(&vec![
-            En("a", (Dir(7),0), (Dir(7),0), (Nil,0), vec![
-                En("af", (Reg(7,1),0), (Reg(7,1), 0), (Nil,0), vec![]),
-                En("b", (Dir(7),0), (Dir(7),0), (Nil,0), vec![
-                    En("bf", (Reg(7,2),0), (Reg(7,2), 0), (Nil,0), vec![]),
+            En("a", (Dir(7),Z), (Dir(7),Z), (Nil,Z), vec![
+                En("af", (Reg(7,1),Z), (Reg(7,1),Z), (Nil,Z), vec![]),
+                En("b", (Dir(7),Z), (Dir(7),Z), (Nil,Z), vec![
+                    En("bf", (Reg(7,2),Z), (Reg(7,2),Z), (Nil,Z), vec![]),
                 ]),
             ]),
         ], "cud/cud", &vec![
@@ -769,16 +794,16 @@ mod test {
     #[test]
     fn sync_recursive_delete_interrupted() {
         test_single(&vec![
-            En("a", (Dir(7),0), (Dir(7),0), (Nil,0), vec![
-                En("af", (Reg(7,1),0), (Reg(7,1), 0), (Nil,0), vec![]),
-                En("b", (Dir(7),0), (Dir(7),0), (Nil,0), vec![
-                    En("bf", (Reg(7,2),0), (Reg(7,2), 0), (Nil,0), vec![]),
+            En("a", (Dir(7),Z), (Dir(7),Z), (Nil,Z), vec![
+                En("af", (Reg(7,1),Z), (Reg(7,1),Z), (Nil,Z), vec![]),
+                En("b", (Dir(7),Z), (Dir(7),Z), (Nil,Z), vec![
+                    En("bf", (Reg(7,2),Z), (Reg(7,2),Z), (Nil,Z), vec![]),
                 ]),
-                En("af2", (Reg(7,2),0), (Nil,0), (Nil,0), vec![]),
+                En("af2", (Reg(7,2),Z), (Nil,Z), (Nil,Z), vec![]),
             ]),
         ], "cud/cud", &vec![
-            En("a", (Dir(7),0), (Dir(7),0), (Dir(7),0), vec![
-                En("af2", (Reg(7,2),0), (Reg(7,2),0), (Reg(7,2),0), vec![]),
+            En("a", (Dir(7),Z), (Dir(7),Z), (Dir(7),Z), vec![
+                En("af2", (Reg(7,2),Z), (Reg(7,2),Z), (Reg(7,2),Z), vec![]),
             ]),
         ]);
     }
@@ -786,21 +811,460 @@ mod test {
     #[test]
     fn sync_edit_conflict() {
         test_single(&vec![
-            En("foo", (Reg(7,1),0), (Reg(7,2),0), (Reg(7,3),0), vec![]),
+            En("foo", (Reg(7,1),Z), (Reg(7,2),Z), (Reg(7,3),Z), vec![]),
         ], "cud/cud", &vec![
-            En("foo",   (Reg(7,1),0), (Reg(7,1),0), (Reg(7,1),0), vec![]),
-            En("foo~1", (Reg(7,3),0), (Reg(7,3),0), (Reg(7,3),0), vec![]),
+            En("foo",   (Reg(7,1),Z), (Reg(7,1),Z), (Reg(7,1),Z), vec![]),
+            En("foo~1", (Reg(7,3),Z), (Reg(7,3),Z), (Reg(7,3),Z), vec![]),
         ]);
     }
 
     #[test]
     fn sync_replace_dir_with_reg() {
         test_single(&vec![
-            En("foo", (Dir(7),0), (Dir(7),0), (Reg(6,1),0), vec![
-                En("a", (Reg(6,2),0), (Reg(6,2),0), (Nil,0), vec![]),
+            En("foo", (Dir(7),Z), (Dir(7),Z), (Reg(6,1),Z), vec![
+                En("a", (Reg(6,2),Z), (Reg(6,2),Z), (Nil,Z), vec![]),
             ]),
         ], "cud/cud", &vec![
-            En("foo", (Reg(6,1),0), (Reg(6,1),0), (Reg(6,1),0), vec![]),
+            En("foo", (Reg(6,1),Z), (Reg(6,1),Z), (Reg(6,1),Z), vec![]),
         ]);
+    }
+
+    #[test]
+    fn sync_no_panic_on_failed_chdir() {
+        test_single(&vec![
+            En("C8~1", (Nil,Z), (Nil,Z), (Dir(0),Faults(F_CHDIR)), vec![]),
+        ], "---/---", &vec![
+            En("C8~1", (Nil,Z), (Nil,Z), (Dir(0),Z), vec![]),
+        ]);
+    }
+
+    #[test]
+    fn sync_no_panic_on_dir_that_fails_to_chdir_after_creation() {
+        test_single(&vec![
+            En("D3", (Nil,Faults(16)), (Dir(0),Z), (Dir(0),Z), vec![
+                En("D4", (Nil,Z), (Nil,Z), (Dir(0),Z), vec![]),
+            ]),
+        ], "cud/cud", &vec![
+            En("D3", (Dir(0),Z), (Dir(0),Z), (Dir(0),Z), vec![
+                En("D4", (Dir(0),Z), (Dir(0),Z), (Dir(0),Z), vec![]),
+            ]),
+        ]);
+    }
+
+    impl Arbitrary for FsFileE {
+        fn arbitrary<G : Gen>(g: &mut G) -> Self {
+            let (exists, regular, mode_and_content) =
+                <(bool,bool,u8) as Arbitrary>::arbitrary(g);
+            let mode = (mode_and_content & 0xF0) as FileMode;
+            let content = (mode_and_content & 0x0F) as u8;
+
+            if !exists {
+                Nil
+            } else if !regular {
+                Dir(mode)
+            } else {
+                Reg(mode, content)
+            }
+        }
+
+        fn shrink(&self) -> Box<Iterator<Item=Self>> {
+            match self {
+                &Nil => empty_shrinker(),
+                &Dir(0) => single_shrinker(Nil),
+                &Dir(_) => single_shrinker(Dir(0)),
+                &Reg(0,0) => single_shrinker(Dir(0)),
+                &Reg(_,0) => single_shrinker(Reg(0,0)),
+                &Reg(mode,_) => single_shrinker(Reg(mode,0)),
+            }
+        }
+    }
+
+    static NAMES: [&'static str;200] = [
+        "A0", "A0", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
+        "B0", "B0", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9",
+        "C0", "C0", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9",
+        "D0", "D0", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9",
+        "E0", "E0", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9",
+        "F0", "F0", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9",
+        "G0", "G0", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9",
+        "H0", "H0", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9",
+        "I0", "I0", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9",
+        "J0", "J0", "J2", "J3", "J4", "J5", "J6", "J7", "J8", "J9",
+        "A0~1", "A0~1", "A2~1", "A3~1", "A4~1", "A5~1", "A6~1", "A7~1", "A8~1", "A9~1",
+        "B0~1", "B0~1", "B2~1", "B3~1", "B4~1", "B5~1", "B6~1", "B7~1", "B8~1", "B9~1",
+        "C0~1", "C0~1", "C2~1", "C3~1", "C4~1", "C5~1", "C6~1", "C7~1", "C8~1", "C9~1",
+        "D0~1", "D0~1", "D2~1", "D3~1", "D4~1", "D5~1", "D6~1", "D7~1", "D8~1", "D9~1",
+        "E0~1", "E0~1", "E2~1", "E3~1", "E4~1", "E5~1", "E6~1", "E7~1", "E8~1", "E9~1",
+        "F0~1", "F0~1", "F2~1", "F3~1", "F4~1", "F5~1", "F6~1", "F7~1", "F8~1", "F9~1",
+        "G0~1", "G0~1", "G2~1", "G3~1", "G4~1", "G5~1", "G6~1", "G7~1", "G8~1", "G9~1",
+        "H0~1", "H0~1", "H2~1", "H3~1", "H4~1", "H5~1", "H6~1", "H7~1", "H8~1", "H9~1",
+        "I0~1", "I0~1", "I2~1", "I3~1", "I4~1", "I5~1", "I6~1", "I7~1", "I8~1", "I9~1",
+        "J0~1", "J0~1", "J2~1", "J3~1", "J4~1", "J5~1", "J6~1", "J7~1", "J8~1", "J9~1",
+    ];
+
+    // Hack so we can guarantee that the directory trees we generate have
+    // finite depth. Ideally we'd just pass this along the call chain, but then
+    // we wouldn't be able to reuse the builtins to arbitrary/shrink the rather
+    // large tuples.
+    thread_local!(static ARB_DIR_DEPTH: Cell<u32> = Cell::new(0));
+
+    impl Arbitrary for En {
+        fn arbitrary<G : Gen>(g: &mut G) -> Self {
+            let name = *g.choose(&NAMES).unwrap();
+
+            let permit_children = ARB_DIR_DEPTH.with(|c| {
+                c.set(c.get() + 1);
+                c.get() <= 4
+            });
+            let data : (FsFile, FsFile, FsFile, Vec<En>) =
+                if permit_children {
+                    Arbitrary::arbitrary(g)
+                } else {
+                    // No directory contents
+                    let (a, b, c) = Arbitrary::arbitrary(g);
+                    (a, b, c, vec![])
+                };
+            ARB_DIR_DEPTH.with(|c| c.set(c.get() - 1));
+
+            En(name, data.0, data.1, data.2, data.3)
+        }
+
+        fn shrink(&self) -> Box<Iterator<Item=Self>> {
+            let name = self.0;
+            let data_in = (self.1, self.2, self.3, self.4.clone());
+
+            Box::new(data_in.shrink().map(
+                move |data_out| En(name, data_out.0, data_out.1,
+                                   data_out.2, data_out.3)))
+        }
+    }
+
+    static SYNC_MODE_SETTINGS: [SyncModeSetting;3] = [
+        SyncModeSetting::Off, SyncModeSetting::On, SyncModeSetting::Force,
+    ];
+
+    impl Arbitrary for SyncModeSetting {
+        fn arbitrary<G : Gen>(g: &mut G) -> Self {
+            *g.choose(&SYNC_MODE_SETTINGS).unwrap()
+        }
+
+        fn shrink(&self) -> Box<Iterator<Item=Self>> {
+            match *self {
+                SyncModeSetting::Off => empty_shrinker(),
+                SyncModeSetting::On => single_shrinker(SyncModeSetting::Off),
+                SyncModeSetting::Force =>
+                    Box::new(vec![SyncModeSetting::Off, SyncModeSetting::On]
+                             .into_iter()),
+            }
+        }
+    }
+
+    impl Arbitrary for HalfSyncMode {
+        fn arbitrary<G : Gen>(g: &mut G) -> Self {
+            HalfSyncMode {
+                create: Arbitrary::arbitrary(g),
+                update: Arbitrary::arbitrary(g),
+                delete: Arbitrary::arbitrary(g),
+            }
+        }
+
+        fn shrink(&self) -> Box<Iterator<Item=Self>> {
+            Box::new((self.create, self.update,self.delete)
+                     .shrink().map(|(c,u,d)| {
+                         HalfSyncMode {
+                             create: c,
+                             update: u,
+                             delete: d,
+                         }
+                     }))
+        }
+    }
+
+    impl Arbitrary for SyncMode {
+        fn arbitrary<G : Gen>(g: &mut G) -> Self {
+            SyncMode {
+                inbound: Arbitrary::arbitrary(g),
+                outbound: Arbitrary::arbitrary(g),
+            }
+        }
+
+        fn shrink(&self) -> Box<Iterator<Item=Self>> {
+            Box::new((self.inbound, self.outbound).shrink().map(|(i,o)| {
+                SyncMode {
+                    inbound: i,
+                    outbound: o,
+                }
+            }))
+        }
+    }
+
+    impl Arbitrary for Faults {
+        fn arbitrary<G : Gen>(g: &mut G) -> Self {
+            fn bit(val: bool, ix: u8) -> u8 {
+                // The rustc parser seems to have issues if we try to use
+                // implicit return.
+                return if val { 1 } else { 0 } << ix;
+            }
+
+            let ((a, b, c), (d, e, f)) = Arbitrary::arbitrary(g);
+            Faults(bit(a, 0) | bit(b, 1) | bit(c, 2) |
+                   bit(d, 3) | bit(e, 4) | bit(f, 6))
+        }
+
+        fn shrink(&self) -> Box<Iterator<Item=Self>> {
+            fn bit(val: bool, ix: u8) -> u8 {
+                return if val { 1 } else { 0 } << ix;
+            }
+            fn tib(f: &Faults, ix: u8) -> bool {
+                0 != (f.0 & (1 << ix))
+            }
+
+            Box::new(
+                ((tib(self, 0), tib(self, 1), tib(self, 2)),
+                 (tib(self, 3), tib(self, 4), tib(self, 5))).shrink()
+                    .map(|((a,b,c),(d,e,f))|
+                         Faults(bit(a, 0) | bit(b, 1) | bit(c, 2) |
+                                bit(d, 3) | bit(e, 4) | bit(f, 6))))
+        }
+    }
+
+    fn names_unique(fs: &Vec<En>) -> bool {
+        let mut names = HashSet::new();
+        for en in fs {
+            if !names.insert(en.0) {
+                return false;
+            }
+            if !names_unique(&en.4) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn run_test<F : 'static + Send + FnOnce (Vec<En>, SyncMode,
+                                             &mut Write) -> bool>(
+        fs: Vec<En>, mode: SyncMode, f: F) -> TestResult
+    {
+        use std::io;
+        use std::sync::{Arc,Mutex};
+        use std::thread::spawn;
+
+        if !names_unique(&fs) {
+            return TestResult::discard();
+        }
+        // Empty filesystems are never interesting
+        if fs.is_empty() {
+            return TestResult::discard();
+        }
+
+        let stdout = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let stdout2 = stdout.clone();
+
+        // Run the task on its own thread to isolate panics
+        let res = spawn(move || {
+            let  writer : &mut Write = &mut &mut *stdout2.lock().unwrap();
+            writeln!(writer, "\n\n---\nTesting: {} {:?}", mode, fs).unwrap();
+            f(fs, mode, writer)
+        }).join();
+
+        // Extricate the output, even if the task died
+        let output = match stdout.lock() {
+            Ok(g) => (&*g).clone(),
+            Err(e) => (&*e.into_inner()).clone(),
+        };
+
+        // Propagate the original result. If it failed, spit its output to our
+        // stdout.
+        match &res {
+            &Ok(success) => {
+                if !success {
+                    io::stdout().write_all(&output).unwrap();
+                    writeln!(io::stdout(), "Returning failure").unwrap();
+                }
+                // If successful, drop the output, since it's completely
+                // uninteresting.
+                TestResult::from_bool(success)
+            },
+            &Err(_) => {
+                io::stdout().write_all(&output).unwrap();
+                res.unwrap(); // propagate panic
+                unreachable!()
+            }
+        }
+    }
+
+    type FsAndMode = (Vec<En>,SyncMode);
+
+    #[test]
+    fn sync_converges_after_success() {
+        fn converges_impl(fs: Vec<En>, mode: SyncMode,
+                          out: &mut Write) -> bool {
+            let mut fx = init(&fs, out);
+            fx.mode = mode;
+
+            run_full(&fx);
+
+            let cli_sig_a = signature(&fx.client);
+            let anc_sig_a = signature(&fx.ancestor);
+            let srv_sig_a = signature(&fx.server);
+
+            fx.client.mark_all_dirty();
+            fx.server.mark_all_dirty();
+            run_full(&fx);
+
+            let cli_sig_b = signature(&fx.client);
+            let anc_sig_b = signature(&fx.ancestor);
+            let srv_sig_b = signature(&fx.server);
+
+            cli_sig_a == cli_sig_b &&
+                srv_sig_a == srv_sig_b &&
+                anc_sig_a == anc_sig_b
+        }
+
+        fn converges(fs: FsAndMode) -> TestResult {
+            run_test(fs.0, fs.1, converges_impl)
+        }
+
+        QuickCheck::new().gen(StdGen::new(rand::thread_rng(), 10))
+            .quickcheck(converges as fn (FsAndMode) -> TestResult);
+    }
+
+    #[test]
+    fn unforced_symmetric_sync_never_loses_data_and_makes_both_sides_identical() {
+        fn files_in_dir(dst: &mut HashSet<u8>, replica: &MemoryReplica,
+                        dir: &mut DirHandle) {
+            for (name, data) in replica.list(dir).unwrap() {
+                match data {
+                    FileData::Regular(_,_,_,hash) => {
+                        dst.insert(hash[0]);
+                    },
+                    FileData::Directory(_) =>
+                        files_in_dir(dst, replica,
+                                     &mut replica.chdir(dir, &name).unwrap()),
+                    _ => panic!("Unexpected file data: {:?}", data),
+                }
+            }
+        }
+
+        fn files_in_replica(dst: &mut HashSet<u8>, replica: &MemoryReplica) {
+            replica.data().faults.clear();
+            files_in_dir(dst, replica, &mut replica.root().unwrap());
+        }
+
+        fn files_in_fx<W>(fx: &Fixture<W>) -> (HashSet<u8>,HashSet<u8>) {
+            let mut max = HashSet::new();
+            files_in_replica(&mut max, &fx.client);
+            files_in_replica(&mut max, &fx.server);
+            let mut anc = HashSet::new();
+            files_in_replica(&mut anc, &fx.ancestor);
+            let mut min = max.clone();
+            for a in anc { min.remove(&a); }
+            (min, max)
+        }
+
+        fn files_in_slot<F : Fn (&En) -> FsFile>(
+            dst: &mut HashSet<u8>, fs: &Vec<En>,
+            slot: &F)
+        {
+            for en in fs {
+                match slot(en).0 {
+                    Nil => (),
+                    Reg(_, hash) => {
+                        dst.insert(hash);
+                    },
+                    Dir(_) => files_in_slot(dst, &en.4, slot),
+                }
+            }
+        }
+
+        fn files_in_fs(fs: &Vec<En>) -> (HashSet<u8>, HashSet<u8>) {
+            let mut max = HashSet::new();
+            let mut anc_hs = HashSet::new();
+            files_in_slot(&mut max, fs, &|en| en.1);
+            files_in_slot(&mut max, fs, &|en| en.3);
+            // Files in the ancestor could be deleted by normal syncing, so
+            // exclude them.
+            files_in_slot(&mut anc_hs, fs, &|en| en.2);
+            let mut min = max.clone();
+            for ah in anc_hs { min.remove(&ah); }
+            (max, min)
+        }
+
+        fn do_test_impl(fs: Vec<En>, mode: SyncMode,
+                        out: &mut Write) -> bool {
+            let mut fx = init(&fs, out);
+            fx.mode = mode;
+
+            let (orig_files_max, orig_files_min) = files_in_fs(&fs);
+            run_full(&fx);
+
+            let (_, result_files) = files_in_fx(&fx);
+
+            if !result_files.is_superset(&orig_files_min) ||
+               !result_files.is_subset(&orig_files_max)
+            {
+                panic!("Data lost or created during syncing\n\
+                        Max: {:?}\n\
+                        Min: {:?}\n\
+                        Res: {:?}", orig_files_max, orig_files_min,
+                       result_files);
+            }
+
+            let cli_sig = signature(&fx.client);
+            let srv_sig = signature(&fx.server);
+            if cli_sig != srv_sig {
+                panic!("Client and server do not match.\n\
+                        Cli: {}\n\
+                        Srv: {}", cli_sig, srv_sig);
+            }
+
+            true
+        }
+
+        fn do_test(fs: Vec<En>) -> TestResult {
+            run_test(fs, "cud/cud".parse().unwrap(), do_test_impl)
+        }
+
+        QuickCheck::new().gen(StdGen::new(rand::thread_rng(), 10))
+            .quickcheck(do_test as fn (Vec<En>) -> TestResult);
+    }
+
+    #[test]
+    fn mirror_to_server_never_changes_client_and_makes_server_like_client() {
+        fn test_impl(fs: Vec<En>, mode: SyncMode,
+                     out: &mut Write) -> bool {
+            // Need to construct a separate fixture since taking the signature
+            // clears the faults.
+            // We don't need to use `out` because we won't be printing
+            // anything.
+            let orig_cli_sig = signature(&init(&fs, PrintWriter).client);
+
+            let mut fx = init(&fs, out);
+            fx.mode = mode;
+
+            run_full(&fx);
+
+            let new_cli_sig = signature(&fx.client);
+            let srv_sig = signature(&fx.server);
+
+            if orig_cli_sig != new_cli_sig {
+                panic!("Client modified!\n\
+                        Orig: {}\n\
+                        New : {}", orig_cli_sig, new_cli_sig);
+            }
+            if orig_cli_sig != srv_sig {
+                panic!("Server doesn't match the client\n\
+                        Cli: {}\n\
+                        Srv: {}", orig_cli_sig, srv_sig);
+            }
+            true
+        }
+
+        fn do_test(fs: Vec<En>) -> TestResult {
+            run_test(fs, "---/CUD".parse().unwrap(), test_impl)
+        }
+
+        QuickCheck::new().gen(StdGen::new(rand::thread_rng(), 10))
+            .quickcheck(do_test as fn (Vec<En>) -> TestResult);
     }
 }

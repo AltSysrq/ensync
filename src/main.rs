@@ -16,6 +16,10 @@
 extern crate tiny_keccak as keccak;
 extern crate gpgme;
 extern crate libc;
+#[cfg(test)]
+extern crate quickcheck;
+#[cfg(test)]
+extern crate rand;
 
 mod defs;
 mod work_stack;

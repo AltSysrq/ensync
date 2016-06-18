@@ -438,9 +438,11 @@ pub fn apply_reconciliation<I : Interface>(
                 SplitAncestorState::Delete => true,
 
                 SplitAncestorState::Move => {
-                    try_rename_replica(
-                        i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-                        dir_name, name, &new_name, i.log(), ReplicaSide::Ancestor)
+                    (!dir.anc.files.contains_key(name) ||
+                     try_rename_replica(
+                         i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
+                         dir_name, name, &new_name, i.log(),
+                         ReplicaSide::Ancestor))
 
                     && i.anc().uncondemn(&mut dir.anc.dir, name).to_bool(
                         |error| i.log().log(log::ERROR, &Log::Error(
@@ -488,10 +490,11 @@ pub fn apply_reconciliation<I : Interface>(
 pub mod test {
     use std::collections::{BTreeMap,BinaryHeap};
     use std::ffi::{CString,CStr};
+    use std::io::Write;
 
     use defs::*;
     use work_stack::WorkStack;
-    use log::{PrintlnLogger,ReplicaSide};
+    use log::{PrintlnLogger,ReplicaSide,PrintWriter};
     use replica::{Replica,NullTransfer};
     use memory_replica::{self,MemoryReplica,DirHandle,simple_error};
     use rules::*;
@@ -526,29 +529,30 @@ pub mod test {
         fn build(self) -> Self { self }
     }
 
-    pub type TContext<'a> = Context<'a, MemoryReplica, MemoryReplica, MemoryReplica,
-                                    PrintlnLogger, ConstantRules>;
+    pub type TContext<'a, W> =
+        Context<'a, MemoryReplica, MemoryReplica, MemoryReplica,
+                PrintlnLogger<W>, ConstantRules>;
 
-    pub struct Fixture {
+    pub struct Fixture<W> {
         pub client: MemoryReplica,
         pub ancestor: MemoryReplica,
         pub server: MemoryReplica,
-        pub logger: PrintlnLogger,
+        pub logger: PrintlnLogger<W>,
         pub mode: SyncMode,
     }
 
-    impl Fixture {
-        pub fn new() -> Self {
+    impl<W : Write> Fixture<W> {
+        pub fn new(out: W) -> Self {
             Fixture {
                 client: MemoryReplica::empty(),
                 ancestor: MemoryReplica::empty(),
                 server: MemoryReplica::empty(),
-                logger: PrintlnLogger,
+                logger: PrintlnLogger::new(out),
                 mode: Default::default(),
             }
         }
 
-        pub fn context(&self) -> TContext {
+        pub fn context(&self) -> TContext<W> {
             Context {
                 cli: &self.client,
                 anc: &self.ancestor,
@@ -571,7 +575,8 @@ pub mod test {
         (mr, root)
     }
 
-    pub fn root_dir_context(fx: &Fixture) -> DirContext<TContext> {
+    pub fn root_dir_context<W : Write>(fx: &Fixture<W>)
+                                       -> DirContext<TContext<W>> {
         DirContextRaw {
             cli: SingleDirContext {
                 dir: fx.client.root().unwrap(),
@@ -782,7 +787,7 @@ pub mod test {
         assert_eq!(Some(fd.clone()), replace_replica(
             &dst, &mut dst_root, &mut files, &src, &mut src_root,
             &oss(""), &foo, Some(&fd), Some(&fd2),
-            &PrintlnLogger, ReplicaSide::Server).unwrap());
+            &PrintlnLogger::stdout(), ReplicaSide::Server).unwrap());
     }
 
     #[test]
@@ -800,7 +805,8 @@ pub mod test {
         let result = replace_replica(
             &dst, &mut dst_root, &mut files,
             &src, &src_root, &oss(""), &foo,
-            None, Some(&actual_fd), &PrintlnLogger, ReplicaSide::Client)
+            None, Some(&actual_fd), &PrintlnLogger::stdout(),
+            ReplicaSide::Client)
             .unwrap();
         assert_eq!(Some(&fd), result.as_ref());
         assert_eq!(Some(&fd), files.get(&foo));
@@ -825,7 +831,7 @@ pub mod test {
             &dst, &mut dst_root, &mut files,
             &src, &src_root, &oss(""), &foo,
             Some(&to_replace), Some(&actual_fd),
-            &PrintlnLogger, ReplicaSide::Client)
+            &PrintlnLogger::stdout(), ReplicaSide::Client)
             .unwrap();
         assert_eq!(Some(&fd), result.as_ref());
         assert_eq!(Some(&fd), files.get(&foo));
@@ -843,7 +849,7 @@ pub mod test {
         let result = replace_replica(
             &dst, &mut dst_root, &mut files,
             &src, &src_root, &oss(""), &foo,
-            Some(&fd), None, &PrintlnLogger, ReplicaSide::Client)
+            Some(&fd), None, &PrintlnLogger::stdout(), ReplicaSide::Client)
             .unwrap();
         assert_eq!(None, result);
         assert!(files.is_empty());
@@ -859,7 +865,8 @@ pub mod test {
         mkreg(&mut replica, &mut root, &mut files, &foo);
         assert!(try_rename_replica(&replica, &mut root, &mut files,
                                    &oss(""), &foo, &bar,
-                                   &PrintlnLogger, ReplicaSide::Client));
+                                   &PrintlnLogger::stdout(),
+                                   ReplicaSide::Client));
         assert_eq!(1, files.len());
         assert!(files.contains_key(&bar));
         assert_eq!(&bar, &replica.list(&mut root).unwrap()[0].0);
@@ -879,7 +886,8 @@ pub mod test {
             Box::new(|_| simple_error()));
         assert!(!try_rename_replica(&replica, &mut root, &mut files,
                                     &oss(""), &foo, &bar,
-                                    &PrintlnLogger, ReplicaSide::Server));
+                                    &PrintlnLogger::stdout(),
+                                    ReplicaSide::Server));
         assert_eq!(1, files.len());
         assert!(files.contains_key(&foo));
         assert_eq!(&foo, &replica.list(&mut root).unwrap()[0].0);
@@ -887,7 +895,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_unsync() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -908,7 +916,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_insync_creates_ancestor() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -929,7 +937,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_insync_ancestor_create_fail() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -954,7 +962,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_insync_recurses_into_directories() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -973,7 +981,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_use_client_normal_success() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -996,7 +1004,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_use_client_create_dir() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1019,7 +1027,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_use_client_mutate_server_error() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1044,7 +1052,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_use_client_mutate_ancestor_error() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1069,7 +1077,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_use_client_recursive_delete_success() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1091,7 +1099,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_use_client_recursive_delete_ancestor_error() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1116,7 +1124,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_use_server() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1135,7 +1143,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_split_client_delete_success() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
         let foo1 = oss("foo~1");
@@ -1165,7 +1173,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_split_server_delete_success() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
         let foo1 = oss("foo~1");
@@ -1195,7 +1203,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_split_client_delete_client_error() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1228,7 +1236,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_split_client_delete_ancestor_error() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1259,7 +1267,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_split_client_move_ancestor_success() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
         let foo1 = oss("foo~1");
@@ -1292,7 +1300,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_split_client_move_ancestor_client_error() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
 
@@ -1328,7 +1336,7 @@ pub mod test {
 
     #[test]
     fn apply_recon_split_client_move_ancestor_ancestor_error() {
-        let fx = Fixture::new();
+        let fx = Fixture::new(PrintWriter);
         let mut root = root_dir_context(&fx);
         let foo = oss("foo");
         let foo1 = oss("foo~1");
