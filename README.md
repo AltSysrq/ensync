@@ -50,6 +50,173 @@ which serve as the roots of the file trees and the targets of directory
 entries. (Note however that it is not possible to use these pointers alone to
 reconstruct the directory structure.)
 
+Sync Rules
+----------
+
+The sync rules are defined in the configuration within the `rules` table. The
+rules are divided into one or more _states_; the initial state is called
+`root`. The initial current sync mode is "---/---", i.e., "do nothing".
+
+Each state has two edge-lists at which rules are matched, termed `files` and
+`siblings`. These are sub-tables under the state; so, for example, the minimal
+rules consist of `rules.root.files` and `rules.root.siblings` table arrays.
+
+The tables within each edge-list share a similar structure. Each edge consists
+of any number of distinct conditions, and has one or more actions. (Zero
+actions is permitted for consistency, but is not useful on its own.) Each edge
+is evaluated in the order defined and any actions processed.
+
+### The `files` edge-list
+
+The _files_ edge-list is used to match individual files (as in directory
+entries). Generally, most configuration is done here, though it is not possible
+to, e.g., match git repositories with it.
+
+Each file in a directory is evaluated against the conditions in isolation. Any
+matching actions are applied to that file and that file alone. For files which
+are directories, general state (e.g., the current rules state, and the current
+sync mode) are kept for the directory's contents.
+
+### The `siblings` edge-list
+
+The _siblings_ edge-list is used to affect the full contents of a directory
+based on other parts of its contents. It is specifically designed to be able to
+exclude git repositories, but may have other uses.
+
+When a directory is entered, every file in the directory is examined and tested
+against all conditions of every rule, keeping a set of which rules have
+matched. Once all files have been examined, each matched rule is applied in
+sequence.
+
+Note that in order for a directory to be considered for processing _at all_,
+the sync mode on the containing directory has to permit that directory to come
+into existence in the first place; `siblings` is only evaluated once the
+containing directory has been entered normally.
+
+### Conditions
+
+Each condition is a string-value TOML pair. Note that this means you cannot use
+two conditions in the same rule that happen to share the same name; this
+shouldn't be an issue since most conditions take regexes.
+
+All conditions which match a string interpret the configuration as a regular
+expression. The target string is coerced to UTF-8, with invalid sequences
+replaced with substitution characters. Regular expressions are not anchored; if
+this is desired, `^` and `$` must be used explicitly.
+
+Should Ensync be ported to a platform that does not conventionally use `/` as
+the path delimiter, the rules engine will still use `/`, both for simplicity
+and to keep the expressions readable.
+
+#### `name`
+
+Matches files whose base name matches the given expression. E.g., in the path
+`/foo/bar/baz.txt`, `baz.txt` is the basename.
+
+#### `path`
+
+Matches files whose path _relative to the sync root_ matches the given
+expression. E.g., if syncing `/foo/bar`, the file `/foo/bar/plugh/xyzzy` is
+tested with `plugh/xyzzy`.
+
+#### `mode`
+
+Matches files whose mode matches the given expression. Before matching, the
+mode is converted to a 4-digit octal string left-padded with zeroes.
+
+#### `type`
+
+Matches files of the given physical type. The target string will be one of `f`
+for regular files, `d` for directories, or `s` for symlinks. There is no way to
+match against other types of files, as they are hardwired to have `---/---`
+mode.
+
+#### `target`
+
+Matches symlinks whose target matches the given expression. Files which are not
+symlinks do not match.
+
+#### `bigger`
+
+Matches regular files whose size is greater than the given number of bytes.
+Non-regular files do not match.
+
+#### `smaller`
+
+Matches regular files whose size is smaller than the given number of bytes.
+Non-regular files do not match.
+
+### Actions
+
+Each action is a string-value TOML pair. Actions within a rule are evaluated in
+the order listed below.
+
+#### `mode`
+
+Sets the current sync mode to the given value. This completely replaces the
+current sync mode.
+
+#### `include`
+
+The value is either a string or an array of strings. Each string identifies a
+different rules state. Rule processing recurses into each listed rule state and
+processes all rules from the current edge-list for the current file. If
+processing was not stopped, it resumes on this state as normal. If a listed
+state is already being evaluated when the `include` is evaluated, it is
+ignored.
+
+#### `switch`
+
+The value is a string identifying a rules state. Sets the current "switch
+state". When the current processing is complete, the rules state switches to
+that state and the switch state is cleared. Essentially, this controls the
+state used for files within a directory without affecting the directory itself.
+
+#### `stop`
+
+The value must be either `return` or `all`. If `return`, processing of the
+current rules state stops; if this was reached via `include`, processing
+continues in the superordinate state. If `all`, all processing stops, including
+superordinate states that got here via `include`.
+
+### Examples
+
+The following is a simple example which bidirectionally syncs most things, but
+excludes git and hg repositories and all backup files.
+
+```
+[[rules.root.files]]
+mode = "cud/cud"
+
+[[rules.root.files]]
+name = ".*~"
+mode = "---/---"
+
+[[rules.root.siblings]]
+name = ".git"
+switch = "git"
+
+[[rules.git.files]]
+mode = "---/---"
+```
+
+Below is a possible convention for making certain files specific to each
+machine:
+
+```
+[[rules.root.files]]
+target = '/^\.![^/]*$'
+mode = "---/---"
+
+[[rules.root.files]]
+name = '^\.!'
+mode = "cud/cud"
+switch = "private"
+
+[[rules.private.files]]
+mode = "cud/cud"
+```
+
 Concurrency and Failure
 -----------------------
 

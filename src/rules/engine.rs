@@ -13,26 +13,8 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-extern crate tiny_keccak as keccak;
-extern crate gpgme;
-extern crate libc;
-extern crate toml;
-extern crate regex;
-
-#[cfg(test)]
-extern crate quickcheck;
-#[cfg(test)]
-extern crate rand;
-
-mod defs;
-mod work_stack;
-mod rules;
-mod log;
-mod replica;
-#[cfg(test)]
-mod memory_replica;
-mod reconcile;
-
-fn main() {
-    println!("hello world");
-}
+//! Implements the actual rules engine defined in `defs.rs`.
+//!
+//! Configuration is taken from the `rules` table in the configuration. The
+//! semantics of the rules engine is described in the README and not repeated
+//! here.
