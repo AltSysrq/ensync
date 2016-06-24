@@ -57,18 +57,18 @@ The sync rules are defined in the configuration within the `rules` table. The
 rules are divided into one or more _states_; the initial state is called
 `root`. The initial current sync mode is "---/---", i.e., "do nothing".
 
-Each state has two edge-lists at which rules are matched, termed `files` and
+Each state has two rule-groups at which rules are matched, termed `files` and
 `siblings`. These are sub-tables under the state; so, for example, the minimal
 rules consist of `rules.root.files` and `rules.root.siblings` table arrays.
 
-The tables within each edge-list share a similar structure. Each edge consists
+The tables within each rule-group share a similar structure. Each rule consists
 of any number of distinct conditions, and has one or more actions. (Zero
-actions is permitted for consistency, but is not useful on its own.) Each edge
+actions is permitted for consistency, but is not useful on its own.) Each rule
 is evaluated in the order defined and any actions processed.
 
-### The `files` edge-list
+### The `files` rule-group
 
-The _files_ edge-list is used to match individual files (as in directory
+The _files_ rule-group is used to match individual files (as in directory
 entries). Generally, most configuration is done here, though it is not possible
 to, e.g., match git repositories with it.
 
@@ -77,9 +77,9 @@ matching actions are applied to that file and that file alone. For files which
 are directories, general state (e.g., the current rules state, and the current
 sync mode) are kept for the directory's contents.
 
-### The `siblings` edge-list
+### The `siblings` rule-group
 
-The _siblings_ edge-list is used to affect the full contents of a directory
+The _siblings_ rule-group is used to affect the full contents of a directory
 based on other parts of its contents. It is specifically designed to be able to
 exclude git repositories, but may have other uses.
 
@@ -119,7 +119,7 @@ Matches files whose path _relative to the sync root_ matches the given
 expression. E.g., if syncing `/foo/bar`, the file `/foo/bar/plugh/xyzzy` is
 tested with `plugh/xyzzy`.
 
-#### `mode`
+#### `permissions`
 
 Matches files whose mode matches the given expression. Before matching, the
 mode is converted to a 4-digit octal string left-padded with zeroes.
@@ -160,7 +160,7 @@ current sync mode.
 
 The value is either a string or an array of strings. Each string identifies a
 different rules state. Rule processing recurses into each listed rule state and
-processes all rules from the current edge-list for the current file. If
+processes all rules from the current rule-group for the current file. If
 processing was not stopped, it resumes on this state as normal. If a listed
 state is already being evaluated when the `include` is evaluated, it is
 ignored.

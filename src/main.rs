@@ -18,11 +18,10 @@ extern crate gpgme;
 extern crate libc;
 extern crate toml;
 extern crate regex;
+#[macro_use] extern crate quick_error;
 
-#[cfg(test)]
-extern crate quickcheck;
-#[cfg(test)]
-extern crate rand;
+#[cfg(test)] extern crate quickcheck;
+#[cfg(test)] extern crate rand;
 
 mod defs;
 mod work_stack;
