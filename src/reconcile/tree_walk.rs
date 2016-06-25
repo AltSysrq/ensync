@@ -91,8 +91,9 @@ fn process_file<I : Interface>(
     let cli = dir.cli.files.get(name).cloned();
     let anc = dir.anc.files.get(name).cloned();
     let srv = dir.srv.files.get(name).cloned();
-    let rules = dir.rules.file(name, cli.as_ref().or(
-            anc.as_ref()).or(srv.as_ref()));
+    let rules = dir.rules.file(File(name, cli.as_ref().or(
+        anc.as_ref()).or(srv.as_ref()).expect(
+        "Attempted to reconcile a file that doesn't exist in any replica.")));
     let (recon, conflict) = choose_reconciliation(
         cli.as_ref(), anc.as_ref(), srv.as_ref(),
         rules.sync_mode());

@@ -77,6 +77,10 @@ matching actions are applied to that file and that file alone. For files which
 are directories, general state (e.g., the current rules state, and the current
 sync mode) are kept for the directory's contents.
 
+Each file name in a directory is evaluated against the root set exactly once.
+If the file exists client-side, the data there is used for matching purposes;
+otherwise, the server-side file version is used instead.
+
 ### The `siblings` rule-group
 
 The _siblings_ rule-group is used to affect the full contents of a directory
@@ -88,10 +92,51 @@ against all conditions of every rule, keeping a set of which rules have
 matched. Once all files have been examined, each matched rule is applied in
 sequence.
 
+It is important to keep in mind that this applies to the contents of the
+directory as a whole; certain rule combinations can be matched in ways that are
+impossible for a single file. For example, in the following configuration,
+
+```
+[[rules.root.siblings]]
+name = '^a$'
+mode = "cud/cud"
+
+[[rules.root.siblings]]
+name = '^b$'
+stop = "all"
+
+[[rules.root.siblings]]
+name = '^a$'
+mode = "---/---
+```
+
+the contents of a directory containing both files named `a` and `b` will apply
+sync mode `cud/cud` to its contents, since all three rules match, but the
+second blocks processing of the third.
+
 Note that in order for a directory to be considered for processing _at all_,
 the sync mode on the containing directory has to permit that directory to come
 into existence in the first place; `siblings` is only evaluated once the
 containing directory has been entered normally.
+
+Unlike the `files` rule-group, every version of every file on the client and
+server is tested for rules matching. This can result in surprising effects if
+the two disagree. For example, in the following configuration, *both* rules
+will apply if the file mode on the client was changed from 0666 to 0777 since
+the last sync.
+
+```
+[[rules.root.siblings]]
+permissions = "0666"
+include = "other-state-A"
+
+[[rules.root.siblings]]
+permissions = "0777"
+include = "other-state-B"
+```
+
+Because of this, care must be used when constructing sync rules which depend on
+the contents of files.
 
 ### Conditions
 
@@ -189,11 +234,11 @@ excludes git and hg repositories and all backup files.
 mode = "cud/cud"
 
 [[rules.root.files]]
-name = ".*~"
+name = "~$"
 mode = "---/---"
 
 [[rules.root.siblings]]
-name = ".git"
+name = '^\.git$'
 switch = "git"
 
 [[rules.git.files]]

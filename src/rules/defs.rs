@@ -13,12 +13,11 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::CStr;
 use std::fmt;
 use std::error::Error;
 use std::str::FromStr;
 
-use defs::{File,FileData};
+use defs::File;
 
 /// A single field of a sync mode.
 #[derive(Clone,Copy,PartialEq,Eq,Debug,PartialOrd,Ord)]
@@ -35,7 +34,7 @@ pub enum SyncModeSetting {
 
 impl Default for SyncModeSetting {
     fn default() -> Self {
-        SyncModeSetting::On
+        SyncModeSetting::Off
     }
 }
 
@@ -177,7 +176,7 @@ pub trait DirRules : Sized + Clone {
 
     /// Obtains the rules matching context for the given file within this
     /// directory.
-    fn file(&self, name: &CStr, val: Option<&FileData>) -> Self::FileRules;
+    fn file(&self, file: File) -> Self::FileRules;
 }
 
 /// Rules matching context corresponding to a single file.

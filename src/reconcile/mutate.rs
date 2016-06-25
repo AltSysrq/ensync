@@ -512,7 +512,7 @@ pub mod test {
         type Builder = Self;
         type FileRules = Self;
 
-        fn file(&self, _: &CStr, _: Option<&FileData>) -> Self { self.clone() }
+        fn file(&self, _: File) -> Self { self.clone() }
     }
 
     impl FileRules for ConstantRules {

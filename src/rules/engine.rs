@@ -21,9 +21,10 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::iter;
+use std::mem;
 use std::ops::Deref;
 use std::result;
+use std::sync::Arc;
 
 use quick_error::ResultExt;
 use regex::{self,Regex};
@@ -43,6 +44,40 @@ enum Condition {
     Target(Regex),
     Bigger(FileSize),
     Smaller(FileSize),
+}
+
+impl Condition {
+    fn matches(&self, path: &str, name: &str, data: &FileData)
+               -> bool {
+        match *self {
+            Condition::Name(ref rx) => rx.is_match(name),
+            Condition::Path(ref rx) => rx.is_match(path),
+            Condition::Permissions(ref rx) => match *data {
+                FileData::Regular(mode, _, _, _) | FileData::Directory(mode) =>
+                    rx.is_match(&format!("{:04o}", mode)),
+                FileData::Symlink(..) | FileData::Special => false,
+            },
+            Condition::Type(ref rx) => match *data {
+                FileData::Regular(..) => Some("f"),
+                FileData::Directory(..) => Some("d"),
+                FileData::Symlink(..) => Some("s"),
+                FileData::Special => None
+            }.map(|s| rx.is_match(s)).unwrap_or(false),
+            Condition::Target(ref rx) => match *data {
+                FileData::Symlink(ref target) =>
+                    rx.is_match(&*target.to_string_lossy()),
+                _ => false,
+            },
+            Condition::Bigger(min) => match *data {
+                FileData::Regular(_, size, _, _) => size > min,
+                _ => false,
+            },
+            Condition::Smaller(max) => match *data {
+                FileData::Regular(_, size, _, _) => size < max,
+                _ => false,
+            },
+        }
+    }
 }
 
 /// A single rule action. These are listed in the order they should be
@@ -67,6 +102,12 @@ enum StopType {
 struct Rule {
     conditions: Vec<Condition>,
     actions: Vec<Action>,
+}
+
+impl Rule {
+    fn matches(&self, path: &str, name: &str, data: &FileData) -> bool {
+        self.conditions.iter().all(|r| r.matches(path, name, data))
+    }
 }
 
 /// A full state in the rules engine.
@@ -95,7 +136,7 @@ pub struct SyncRules {
 
 /// The current persistent state of the rules engine, inherited by files within
 /// directories, etc.
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone,Debug,Default)]
 struct EngineState {
     /// The sync mode in effect.
     mode: SyncMode,
@@ -104,6 +145,29 @@ struct EngineState {
     /// If present, the new value of `state` the next time the engine descends
     /// (into siblings or files).
     switch: Option<usize>,
+    /// The current path, relative to the sync root, with leading slash (and
+    /// translated lossily into UTF-8).
+    path: String,
+}
+
+impl EngineState {
+    fn new(init_state: usize) -> Self {
+        EngineState {
+            state: init_state,
+            .. Default::default()
+        }
+    }
+
+    fn apply_switch(&mut self) {
+        if let Some(new) = self.switch.take() {
+            self.state = new;
+        }
+    }
+
+    fn push_dir(&mut self, sub: &str) {
+        self.path.push('/');
+        self.path.push_str(sub);
+    }
 }
 
 #[derive(Clone,Debug)]
@@ -129,7 +193,6 @@ impl fmt::Display for ErrorLocation {
                self.section, self.ix + 1, self.field)
     }
 }
-
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -225,8 +288,8 @@ impl SyncRules {
 
         // Check that all states are reachable
         let mut keep_going = true;
-        let mut reachable: Vec<_> = iter::repeat(false).take(
-            this.states.len()).collect();
+        let mut reachable = Vec::new();
+        reachable.resize(this.states.len(), false);
         reachable[this.root_ix] = true;
         while keep_going {
             keep_going = false;
@@ -450,14 +513,176 @@ fn parse_stop_type(val: &toml::Value, loc: ErrorLocation)
     }
 }
 
+#[derive(Clone,Debug)]
+pub struct DirEngine {
+    rules: Arc<SyncRules>,
+    state: EngineState,
+}
+
+#[derive(Clone,Debug)]
+pub struct FileEngine {
+    rules: Arc<SyncRules>,
+    state: EngineState,
+}
+
+#[derive(Clone,Debug)]
+pub struct DirEngineBuilder {
+    rules: Arc<SyncRules>,
+    state: EngineState,
+    rules_matched: Vec<bool>,
+}
+
+
+impl SyncRules {
+    fn apply_rules<F : Fn (&RuleState) -> &[usize],
+                   M : Fn (usize) -> bool>(
+        &self, engstate: &mut EngineState, group: F, matches: M)
+    {
+        let mut occurs = Vec::new();
+        occurs.resize(self.states.len(), false);
+        self.apply_rules_impl(&mut occurs, engstate.state,
+                              engstate, &group, &matches);
+    }
+
+    // Applies the matched rules from a single state. If the `occurs` value for
+    // `state_ix` is set, this does nothing. Otherwise it applies each action
+    // in each matching rule until all rules have been examined or a `stop`
+    // action is encountered.
+    //
+    // Returns whether the caller should return. A `false` value indicates a
+    // `stop = "all"` directive, and thus that the caller itself should
+    // immediately return false.
+    fn apply_rules_impl<F : Fn (&RuleState) -> &[usize],
+                        M : Fn (usize) -> bool>(
+        &self, occurs: &mut [bool], state_ix: usize,
+        engstate: &mut EngineState, group: &F, matches: &M)
+        -> bool
+    {
+        let mut keep_going = true;
+
+        if occurs[state_ix] { return true; }
+        occurs[state_ix] = true;
+
+        'rules_loop:
+        for &rule in group(&self.states[state_ix]) {
+            if !matches(rule) { continue; }
+
+            for action in &self.rules[rule].actions {
+                match *action {
+                    Action::Mode(mode) => engstate.mode = mode,
+                    Action::Include(ref subs) => for &sub in subs {
+                        if !self.apply_rules_impl(occurs, sub, engstate,
+                                                  group, matches) {
+                            keep_going = false;
+                            break 'rules_loop;
+                        }
+                    },
+                    Action::Switch(new) => engstate.switch = Some(new),
+                    Action::Stop(StopType::Return) => break 'rules_loop,
+                    Action::Stop(StopType::All) => {
+                        keep_going = false;
+                        break 'rules_loop;
+                    },
+                }
+            }
+        }
+
+        occurs[state_ix] = false;
+        keep_going
+    }
+}
+
+impl DirRules for DirEngine {
+    type Builder = DirEngineBuilder;
+    type FileRules = FileEngine;
+
+    fn file(&self, file: File) -> FileEngine {
+        let name = file.0.to_string_lossy();
+
+        let mut new_state = self.state.clone();
+        new_state.push_dir(&*name);
+        new_state.apply_switch();
+
+        let mut path = String::new();
+        mem::swap(&mut path, &mut new_state.path);
+        self.rules.apply_rules(&mut new_state, |g| &g.files,
+                               |r| self.rules.rules[r].matches(
+                                   &path, &*name, file.1));
+        mem::swap(&mut new_state.path, &mut path);
+
+        FileEngine {
+            rules: self.rules.clone(),
+            state: new_state,
+        }
+    }
+}
+
+impl FileEngine {
+    pub fn new(rules: SyncRules) -> Self {
+        let init_state = rules.root_ix;
+        FileEngine {
+            rules: Arc::new(rules),
+            state: EngineState::new(init_state),
+        }
+    }
+}
+
+impl FileRules for FileEngine {
+    type DirRules = DirEngine;
+
+    fn sync_mode(&self) -> SyncMode {
+        self.state.mode
+    }
+
+    fn subdir(self) -> DirEngineBuilder {
+        let mut matched = Vec::new();
+        matched.resize(self.rules.rules.len(), false);
+
+        DirEngineBuilder {
+            rules: self.rules,
+            state: self.state,
+            rules_matched: matched,
+        }
+    }
+}
+
+impl DirRulesBuilder for DirEngineBuilder {
+    type DirRules = DirEngine;
+
+    fn contains(&mut self, file: File) {
+        let name = file.0.to_string_lossy();
+        let path = format!("{}/{}", self.state.path, name);
+
+        for (ix, rule) in self.rules.rules.iter().enumerate() {
+            self.rules_matched[ix] |= rule.matches(&path, &name, file.1);
+        }
+    }
+
+    fn build(self) -> DirEngine {
+        let mut state = self.state;
+        let rules = self.rules;
+        let rules_matched = self.rules_matched;
+
+        rules.apply_rules(&mut state, |g| &g.siblings,
+                          |r| rules_matched[r]);
+        state.apply_switch();
+        DirEngine {
+            rules: rules,
+            state: state,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use std::ffi::CString;
+
     use toml;
 
     use defs::*;
     use rules::defs::*;
     use super::*;
-    use super::{Condition,Action,StopType,Rule,RuleState};
+    use super::{Condition,Action,StopType};
 
     fn parse_rules(s: &str) -> Result<SyncRules> {
         let mut parser = toml::Parser::new(s);
@@ -721,5 +946,335 @@ switch = "a"
             Err(Error::UnreachableState(..)) => (),
             unexpected => panic!("Unexpected parse result: {:?}", unexpected),
         }
+    }
+
+    fn engine(text: &str) -> DirEngine {
+        FileEngine::new(parse_rules(text).unwrap()).subdir().build()
+    }
+
+    fn oss(s: &str) -> CString {
+        CString::new(s).unwrap()
+    }
+
+    fn regular(de: &DirEngine, name: &str, mode: FileMode,
+               size: FileSize) -> FileEngine {
+        de.file(File(&oss(name), &FileData::Regular(mode, size, 0, [0;32])))
+    }
+
+    fn dir(de: &DirEngine, name: &str, mode: FileMode) -> FileEngine {
+        de.file(File(&oss(name), &FileData::Directory(mode)))
+    }
+
+    fn symlink(de: &DirEngine, name: &str, target: &str) -> FileEngine {
+        de.file(File(&oss(name), &FileData::Symlink(oss(target))))
+    }
+
+    #[test]
+    fn simple_file_matching() {
+        let de = engine(r#"
+[[rules.root.files]]
+name = "^fo*$"
+mode = "cud/cud"
+
+[[rules.root.files]]
+name = "^ba+r$"
+mode = "cud/---"
+"#);
+
+        assert_eq!("---/---", regular(&de, "plugh", 0, 0)
+                   .sync_mode().to_string());
+        assert_eq!("cud/cud", regular(&de, "foo", 0, 0)
+                   .sync_mode().to_string());
+        assert_eq!("cud/---", regular(&de, "bar", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn all_conditions_must_match_for_rule_to_apply() {
+        let de = engine(r#"
+[[rules.root.files]]
+bigger = 100
+smaller = 200
+mode = "cud/cud"
+"#);
+
+        assert_eq!("---/---", regular(&de, "a", 0, 50)
+                   .sync_mode().to_string());
+        assert_eq!("---/---", regular(&de, "b", 0, 250)
+                   .sync_mode().to_string());
+        assert_eq!("cud/cud", regular(&de, "c", 0, 150)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn rule_with_no_conditions_always_applies() {
+        let de = engine(r#"
+[[rules.root.files]]
+mode = "cud/cud"
+"#);
+
+        assert_eq!("cud/cud", regular(&de, "a", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn sync_mode_inherited_from_parent_dir() {
+        let de = engine(r#"
+[[rules.root.files]]
+name = "^dir$"
+mode = "cud/cud"
+"#);
+
+        let sde = dir(&de, "dir", 0).subdir().build();
+        assert_eq!("cud/cud", regular(&sde, "foo", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn match_condition_path() {
+        let de = engine(r#"
+[[rules.root.files]]
+path = "^/foo/bar$"
+mode = "cud/cud"
+"#);
+
+        let sde = dir(&de, "foo", 0).subdir().build();
+        assert_eq!("cud/cud", regular(&sde, "bar", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn match_condition_permissions() {
+        let de = engine(r#"
+[[rules.root.files]]
+permissions = "^07{3}$"
+mode = "cud/cud"
+"#);
+
+        assert_eq!("---/---", regular(&de, "foo", 0o666, 0)
+                   .sync_mode().to_string());
+        assert_eq!("cud/cud", regular(&de, "bar", 0o777, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn match_condition_type() {
+        let de = engine(r#"
+[[rules.root.files]]
+type = "f"
+mode = "c--/---"
+
+[[rules.root.files]]
+type = "d"
+mode = "-u-/---"
+
+[[rules.root.files]]
+type = "s"
+mode = "--d/---"
+"#);
+        assert_eq!("c--/---", regular(&de, "foo", 0, 0)
+                   .sync_mode().to_string());
+        assert_eq!("-u-/---", dir(&de, "bar", 0)
+                   .sync_mode().to_string());
+        assert_eq!("--d/---", symlink(&de, "baz", "plugh")
+                   .sync_mode().to_string());
+        assert_eq!("---/---", de.file(File(&oss("dev"), &FileData::Special))
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn match_condition_target() {
+        let de = engine(r#"
+[[rules.root.files]]
+target = 'x$'
+mode = "cud/cud"
+"#);
+        assert_eq!("---/---", regular(&de, "foo", 0, 0)
+                   .sync_mode().to_string());
+        assert_eq!("---/---", symlink(&de, "quux", "xyzzy")
+                   .sync_mode().to_string());
+        assert_eq!("cud/cud", symlink(&de, "foo", "quux")
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn files_rules_inclusion() {
+        let de = engine(r#"
+[[rules.root.files]]
+name = '^foo$'
+include = "foo"
+
+[[rules.foo.files]]
+mode = "cud/cud"
+"#);
+
+        assert_eq!("---/---", regular(&de, "bar", 0, 0)
+                   .sync_mode().to_string());
+        assert_eq!("cud/cud", regular(&de, "foo", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn include_recursion_is_noop() {
+        let de = engine(r#"
+[[rules.root.files]]
+include = "root"
+
+# Use two includes so that a possible bug where the occurs value is cleared
+# above would result in infinite recursion.
+[[rules.root.files]]
+include = "root"
+"#);
+
+        assert_eq!("---/---", regular(&de, "foo", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn files_switch_state_on_subdir() {
+        let de = engine(r#"
+[[rules.root.files]]
+name = '^foo$'
+switch = "foo"
+
+[[rules.foo.files]]
+name = '^bar$'
+mode = "cud/cud"
+"#);
+
+        assert_eq!("---/---", regular(&de, "bar", 0, 0)
+                   .sync_mode().to_string());
+        let sdf = dir(&de, "foo", 0);
+        assert_eq!("---/---", sdf.sync_mode().to_string());
+        let sde = sdf.subdir().build();
+        assert_eq!("cud/cud", regular(&sde, "bar", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn stop_all_action() {
+        let de = engine(r#"
+[[rules.root.files]]
+include = "a"
+
+[[rules.root.files]]
+mode = "cud/cud"
+
+[[rules.a.files]]
+mode = "cud/---"
+include = "b"
+
+[[rules.b.files]]
+stop = "all"
+
+[[rules.b.files]]
+mode = "---/cud"
+"#);
+
+        assert_eq!("cud/---", regular(&de, "foo", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn stop_return_action() {
+        let de = engine(r#"
+[[rules.root.files]]
+mode = "cud/cud"
+
+[[rules.root.files]]
+include = "a"
+
+[[rules.a.files]]
+include = "b"
+
+[[rules.a.files]]
+mode = "cud/---"
+
+[[rules.b.files]]
+stop = "return"
+
+[[rules.b.files]]
+# If `stop = "return"` is a noop, this breaks the test by preventing the mode
+# from being set by rules.a.files.
+stop = "all"
+"#);
+
+        assert_eq!("cud/---", regular(&de, "foo", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn sibling_multi_file_match() {
+        let de = engine(r#"
+# Initial non-matched rule in case rules are matched spuriously.
+[[rules.root.siblings]]
+name = "^c$"
+stop = "all"
+
+[[rules.root.siblings]]
+name = "^a$"
+mode = "cud/---"
+
+[[rules.root.siblings]]
+name = "^b$"
+stop = "all"
+
+[[rules.root.siblings]]
+# No single file could match all three rules; yet because there is a file
+# matching each rule, all (but the first 'c' rule) will apply.
+name = "^a$"
+mode = "---/cud"
+"#);
+
+        let mut sdb = dir(&de, "foo", 0).subdir();
+        sdb.contains(File(&oss("b"), &FileData::Directory(0)));
+        sdb.contains(File(&oss("a"), &FileData::Directory(0)));
+
+        let sde = sdb.build();
+        assert_eq!("cud/---", regular(&sde, "bar", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn ignore_git_repo_via_siblings() {
+        let de = engine(r#"
+[[rules.root.files]]
+mode = "cud/cud"
+
+[[rules.root.siblings]]
+name = '^\.git$'
+switch = "git"
+
+[[rules.git.files]]
+mode = "---/---"
+"#);
+
+        let sd = dir(&de, "ensync", 0);
+        assert_eq!("cud/cud", sd.sync_mode().to_string());
+
+        let mut sdb = sd.subdir();
+        sdb.contains(File(&oss(".git"), &FileData::Directory(0)));
+        sdb.contains(File(&oss("README"), &FileData::Regular(
+            0, 0, 0, [0;32])));
+        let sde = sdb.build();
+
+        assert_eq!("---/---", regular(&sde, "README", 0, 0)
+                   .sync_mode().to_string());
+    }
+
+    #[test]
+    fn match_path_from_siblings() {
+        let de = engine(r#"
+[[rules.root.siblings]]
+path = "^/foo/bar$"
+mode = "cud/cud"
+"#);
+
+        let mut sdb = dir(&de, "foo", 0).subdir();
+        sdb.contains(File(&oss("bar"), &FileData::Directory(0)));
+        let sde = sdb.build();
+
+        assert_eq!("cud/cud", regular(&sde, "quux", 0, 0)
+                   .sync_mode().to_string());
     }
 }
