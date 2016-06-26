@@ -118,9 +118,8 @@ pub struct BlockList {
 /// transitively provide a coherence guarantee as well.
 pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> io::Result<()>,
                         R : io::Read>
-    (mut input: R, mut block_out: F, block_size: usize,
-     secret: &[u8])
-     -> io::Result<BlockList>
+    (mut input: R, block_size: usize, secret: &[u8],
+     mut block_out: F) -> io::Result<BlockList>
 {
     let mut blocks = Vec::new();
     let mut hash = [0u8;32];
@@ -154,7 +153,7 @@ pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> io::Result<()>,
         kc.update(&block_data[0..off]);
         kc.finalize(&mut hash);
 
-        try!(block_out(&hash, &block_data));
+        try!(block_out(&hash, &block_data[0..off]));
         total_kc.update(&hash);
         blocks.push(hash);
         size += off as FileSize;
@@ -185,9 +184,8 @@ pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> io::Result<()>,
 pub fn blocks_to_stream<R : io::Read,
                         F : FnMut (&HashId) -> io::Result<R>,
                         W : io::Write>
-    (input: &BlockList, mut output: W, mut block_fetch: F,
-     secret: &[u8])
-     -> Result<(),Error>
+    (input: &BlockList, mut output: W, secret: &[u8],
+     mut block_fetch: F) -> Result<(),Error>
 {
     let mut hash = [0u8;32];
     let mut buf = [0u8;4096];
@@ -231,4 +229,91 @@ pub fn blocks_to_stream<R : io::Read,
     }
 
     return Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use defs::*;
+    use super::*;
+
+    fn to_blocklist(text: &[u8], secret: &[u8])
+                    -> (BlockList,HashMap<HashId,Vec<u8>>) {
+        let mut blocks = HashMap::new();
+
+        let blocklist = stream_to_blocks(
+            text, 4, secret, |&id, data| {
+                blocks.insert(id, data.to_vec());
+                Ok(())
+            }).unwrap();
+
+        (blocklist, blocks)
+    }
+
+    fn to_stream(blocklist: &BlockList, blocks: &HashMap<HashId,Vec<u8>>,
+                 secret: &[u8]) -> Result<Vec<u8>,Error> {
+        let mut output = Vec::new();
+        try!(blocks_to_stream(&blocklist, &mut output, secret,
+                              |h| Ok(&blocks[h][..])));
+        Ok(output)
+    }
+
+    #[test]
+    fn text_blocked_and_deblocked_correctly() {
+        let text = &b"hello world"[..];
+
+        let (blocklist, blocks) = to_blocklist(text, &b"secret"[..]);
+        assert_eq!(3, blocks.len());
+        assert_eq!(3, blocklist.blocks.len());
+        assert_eq!(11, blocklist.size);
+
+        assert_eq!(b"hell", &blocks[&blocklist.blocks[0]][..]);
+        assert_eq!(b"o wo", &blocks[&blocklist.blocks[1]][..]);
+        assert_eq!(b"rld",  &blocks[&blocklist.blocks[2]][..]);
+
+        let output = to_stream(&blocklist, &blocks, &b"secret"[..])
+            .unwrap();
+        assert_eq!(text, &output[..]);
+    }
+
+    #[test]
+    fn hmac_fails_if_secret_wrong() {
+        let text = &b"hello world"[..];
+        let (blocklist, blocks) = to_blocklist(text, &b"secret"[..]);
+
+        match to_stream(&blocklist, &blocks, &b"geheimniss"[..]) {
+            Err(Error::InvalidHmac) => (),
+            Err(e) => panic!("Unexpected error: {}", e),
+            Ok(_) => panic!("Incorrect secret didn't fail the HMAC!"),
+        }
+    }
+
+    #[test]
+    fn hmac_fails_if_blocklist_corrupted() {
+        let text = &b"hello world"[..];
+        let (mut blocklist, blocks) = to_blocklist(text, &b"secret"[..]);
+
+        blocklist.blocks.swap(0, 1);
+
+        match to_stream(&blocklist, &blocks, &b"secret"[..]) {
+            Err(Error::InvalidHmac) => (),
+            Err(e) => panic!("Unexpected error: {}", e),
+            Ok(_) => panic!("Incorrect secret didn't fail the HMAC!"),
+        }
+    }
+
+    #[test]
+    fn hmac_fails_if_data_corrupted() {
+        let text = &b"hello world"[..];
+        let (blocklist, mut blocks) = to_blocklist(text, &b"secret"[..]);
+
+        blocks.get_mut(&blocklist.blocks[2]).unwrap()[0] ^= 1;
+
+        match to_stream(&blocklist, &blocks, &b"secret"[..]) {
+            Err(Error::InvalidHmac) => (),
+            Err(e) => panic!("Unexpected error: {}", e),
+            Ok(_) => panic!("Incorrect secret didn't fail the HMAC!"),
+        }
+    }
 }
