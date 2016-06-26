@@ -324,4 +324,4 @@ Building from Source
 
 Install Rust 1.7.0 and Cargo 0.9.0 or later (https://www.rust-lang.org/).
 
-Install `gpgme`, eg, `pkg install gpgme` as root.
+Install `gpgme` and sqlite, eg, `pkg install gpgme sqlite3` as root.
