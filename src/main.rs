@@ -31,6 +31,7 @@ mod replica;
 #[cfg(test)]
 mod memory_replica;
 mod reconcile;
+mod block_xfer;
 
 fn main() {
     println!("hello world");
