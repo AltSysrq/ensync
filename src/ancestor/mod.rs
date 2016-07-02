@@ -13,30 +13,17 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-extern crate tiny_keccak as keccak;
-extern crate gpgme;
-extern crate libc;
-extern crate toml;
-extern crate regex;
-extern crate sqlite;
-#[macro_use] extern crate quick_error;
+//! This module contains the implementation of the ancestor replica.
+//!
+//! The ancestor replica is stored entirely in a single SQLite database. The
+//! implementation is split into two pieces:
+//!
+//! - The `dao` submodule handles setting the database up and exposes primitive
+//! operations on the store.
+//!
+//! - The `replica` submodule implements the `Replica` trait atop `dao`.
+//!
+//! The data structures of the ancestor replica are documented in the
+//! definitions in `schema.sql`.
 
-#[cfg(test)] extern crate quickcheck;
-#[cfg(test)] extern crate rand;
-
-mod defs;
-mod work_stack;
-mod sql;
-
-mod rules;
-mod log;
-mod replica;
-#[cfg(test)]
-mod memory_replica;
-mod reconcile;
-mod block_xfer;
-mod ancestor;
-
-fn main() {
-    println!("hello world");
-}
+mod dao;
