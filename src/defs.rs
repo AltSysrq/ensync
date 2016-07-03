@@ -110,6 +110,15 @@ pub fn is_dir(fd: Option<&FileData>) -> bool {
 }
 
 #[cfg(test)]
+pub mod test_helpers {
+    use std::ffi::CString;
+
+    pub fn oss(s: &str) -> CString {
+        CString::new(s).unwrap()
+    }
+}
+
+#[cfg(test)]
 mod test {
     use std::ffi::CString;
 

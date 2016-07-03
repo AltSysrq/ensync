@@ -268,6 +268,17 @@ impl MemoryReplica {
             dir.clean = false;
         }
     }
+
+    pub fn is_condemned(&self, dir: &DirHandle, file: &CStr)
+                        -> Result<bool> {
+        let d = self.data();
+
+        if let Some(contents) = d.dirs.get(&dir.path) {
+            Ok(contents.condemned.contains(file))
+        } else {
+            simple_error()
+        }
+    }
 }
 
 impl Replica for MemoryReplica {
@@ -643,30 +654,14 @@ impl Condemn for MemoryReplica {
             simple_error()
         }
     }
-
-    fn is_condemned(&self, dir: &Self::Directory, file: &CStr)
-                    -> Result<bool> {
-        let d = self.data();
-
-        if let Some(contents) = d.dirs.get(&dir.path) {
-            Ok(contents.condemned.contains(file))
-        } else {
-            simple_error()
-        }
-    }
 }
 
 #[cfg(test)]
 mod test {
-    use std::ffi::CString;
-
     use defs::*;
+    use defs::test_helpers::*;
     use replica::*;
     use super::*;
-
-    fn oss(s: &str) -> CString {
-        CString::new(s).unwrap()
-    }
 
     fn init() -> (MemoryReplica, DirHandle) {
         let replica = MemoryReplica::empty();

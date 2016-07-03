@@ -27,3 +27,6 @@
 //! definitions in `schema.sql`.
 
 mod dao;
+mod replica;
+
+pub use self::replica::AncestorReplica;

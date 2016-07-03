@@ -201,7 +201,4 @@ pub trait Condemn : Replica {
     ///
     /// Uncondemning a name which is not condemned has no effect.
     fn uncondemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()>;
-    /// Queries whether the given name within the given directory has been
-    /// condemned.
-    fn is_condemned(&self, dir: &Self::Directory, file: &CStr) -> Result<bool>;
 }

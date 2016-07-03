@@ -188,6 +188,26 @@ impl Dao {
             .binding(1, parent).binding(2, name).exists()
     }
 
+    /// Returns the id of the file in the given directory with the given name,
+    /// or None if there is no such file.
+    pub fn get_id_of(&self, parent: i64, name: &[u8]) -> Result<Option<i64>> {
+        self.0.prepare("SELECT `id` FROM `file` \
+                        WHERE `parent` = ?1 AND `name` = ?2")
+            .binding(1, parent).binding(2, name)
+            .first(|s| s.read(0))
+    }
+    /// Returns the entry with the given parent and name, or None if there is
+    /// no such file.
+    pub fn get_by_name(&self, parent: i64, name: &[u8])
+                       -> Result<Option<FileEntry<'static>>> {
+        self.0.prepare(
+            "SELECT `id`, `parent`, `name`, `type`, `mode`, `content` \
+             FROM `file` \
+             WHERE `parent` = ?1 AND `name` = ?2")
+            .binding(1, parent).binding(2, name)
+            .first(|s| FileEntry::read(s))
+    }
+
     /// Returns whether there exist any direct children of the given directory.
     pub fn has_children(&self, parent: i64) -> Result<bool> {
         self.0.prepare(
@@ -219,12 +239,12 @@ impl Dao {
 
     /// Creates a file matching `e` (but with a new surrogate id).
     ///
-    /// Returns whether such a file was created. No file is created if anything
-    /// with that name in that directory already exists.
-    pub fn create(&self, e: &FileEntry) -> Result<bool> {
+    /// If a file was created, returns its id. If a file with the chosen name
+    /// and parent already exists, returns None.
+    pub fn create(&self, e: &FileEntry) -> Result<Option<i64>> {
         tx(&self.0, || {
             if try!(self.exists(e.parent, &*e.name)) {
-                Ok(false)
+                Ok(None)
             } else {
                 try!(self.0.prepare(
                     "INSERT INTO `file` ( \
@@ -233,7 +253,7 @@ impl Dao {
                      .binding(1, e.parent).binding(2, &*e.name)
                      .binding(3, e.typ).binding(4, e.mode)
                      .binding(5, &*e.content).run());
-                Ok(true)
+                Ok(try!(self.get_id_of(e.parent, &*e.name)))
             }
         })
     }
@@ -271,19 +291,34 @@ impl Dao {
     pub fn delete(&self, e: &FileEntry) -> Result<DeleteStatus> {
         tx(&self.0, || {
             if let Some(id) = try!(self.get_matching(e)) {
-                if try!(self.has_children(id)) {
-                    Ok(DeleteStatus::DirNotEmpty)
-                } else {
-                    try!(self.0.prepare("DELETE FROM `file` WHERE `id` = ?1")
-                         .binding(1, id).run());
-                    Ok(DeleteStatus::Ok)
-                }
+                self.delete_raw_impl(id)
             } else if try!(self.exists(e.parent, &*e.name)) {
                 Ok(DeleteStatus::NotMatched)
             } else {
                 Ok(DeleteStatus::NotFound)
             }
         })
+    }
+
+    /// Deletes a file directly by its id.
+    ///
+    /// This is still subject to the empty directory restriction, but otherwise
+    /// will always remove anything there.
+    ///
+    /// If `id` does not refer to an existing file, this call silently
+    /// succeeds.
+    pub fn delete_raw(&self, id: i64) -> Result<DeleteStatus> {
+        tx(&self.0, || self.delete_raw_impl(id))
+    }
+
+    fn delete_raw_impl(&self, id: i64) -> Result<DeleteStatus> {
+        if try!(self.has_children(id)) {
+            Ok(DeleteStatus::DirNotEmpty)
+        } else {
+            try!(self.0.prepare("DELETE FROM `file` WHERE `id` = ?1")
+                 .binding(1, id).run());
+            Ok(DeleteStatus::Ok)
+        }
     }
 
     /// Condemns the name `name` within the directory identified by `parent`.
@@ -349,7 +384,7 @@ mod test {
             typ: 2,
             mode: 0o777,
             content: Cow::Borrowed(b"baz"),
-        }).unwrap());
+        }).unwrap().is_some());
 
         let mut listed = Vec::new();
         assert!(dao.list(true, 0, |e| listed.push(e)).unwrap());
@@ -372,7 +407,7 @@ mod test {
             typ: 1,
             mode: 0o666,
             content: Cow::Borrowed(b"xyzzy"),
-        }).unwrap());
+        }).unwrap().is_some());
 
         let mut listed = Vec::new();
         assert!(dao.list(true, e.id, |s| listed.push(s)).unwrap());
@@ -395,8 +430,8 @@ mod test {
             content: Cow::Borrowed(b""),
         };
 
-        assert!(dao.create(&e).unwrap());
-        assert!(!dao.create(&e).unwrap());
+        assert!(dao.create(&e).unwrap().is_some());
+        assert!(!dao.create(&e).unwrap().is_some());
     }
 
     fn se(parent: i64, name: &'static [u8], mode: i64) -> FileEntry<'static> {
@@ -428,7 +463,7 @@ mod test {
     fn update_mismatch() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
+        assert!(dao.create(&se(0, b"foo", 0)).unwrap().is_some());
         assert_eq!(UpdateStatus::NotMatched,
                    dao.update(&se(0, b"foo", 1), &se(0, b"foo", 2)).unwrap());
 
@@ -441,11 +476,10 @@ mod test {
     fn update_success() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
+        let foo_id = dao.create(&se(0, b"foo", 0)).unwrap().unwrap();
         // Extra files to make sure filtering happens
-        let foo_id = list(&dao, true, 0)[0].id;
-        assert!(dao.create(&se(foo_id, b"foo", 0)).unwrap());
-        assert!(dao.create(&se(0, b"bar", 0)).unwrap());
+        assert!(dao.create(&se(foo_id, b"foo", 0)).unwrap().is_some());
+        assert!(dao.create(&se(0, b"bar", 0)).unwrap().is_some());
 
         assert_eq!(UpdateStatus::Ok,
                    dao.update(&se(0, b"foo", 0), &se(0, b"foo", 1)).unwrap());
@@ -477,7 +511,7 @@ mod test {
     fn delete_not_matched() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 1)).unwrap());
+        assert!(dao.create(&se(0, b"foo", 1)).unwrap().is_some());
         assert_eq!(DeleteStatus::NotMatched,
                    dao.delete(&se(0, b"foo", 2)).unwrap());
     }
@@ -486,9 +520,8 @@ mod test {
     fn delete_not_empty_then_success() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
-        let foo_id = list(&dao, true, 0)[0].id;
-        assert!(dao.create(&se(foo_id, b"foo", 1)).unwrap());
+        let foo_id = dao.create(&se(0, b"foo", 0)).unwrap().unwrap();
+        assert!(dao.create(&se(foo_id, b"foo", 1)).unwrap().is_some());
 
         assert_eq!(DeleteStatus::DirNotEmpty,
                    dao.delete(&se(0, b"foo", 0)).unwrap());
@@ -510,8 +543,8 @@ mod test {
     fn rename_dest_exists() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
-        assert!(dao.create(&se(0, b"bar", 0)).unwrap());
+        assert!(dao.create(&se(0, b"foo", 0)).unwrap().is_some());
+        assert!(dao.create(&se(0, b"bar", 0)).unwrap().is_some());
         assert_eq!(RenameStatus::DestExists,
                    dao.rename(0, b"foo", b"bar").unwrap());
     }
@@ -520,11 +553,10 @@ mod test {
     fn rename_success() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
+        let foo_id = dao.create(&se(0, b"foo", 0)).unwrap().unwrap();
         // Create child and sibling to ensure filtering is applied correctly
-        let foo_id = list(&dao, true, 0)[0].id;
-        assert!(dao.create(&se(foo_id, b"foo", 0)).unwrap());
-        assert!(dao.create(&se(0, b"quux", 0)).unwrap());
+        assert!(dao.create(&se(foo_id, b"foo", 0)).unwrap().is_some());
+        assert!(dao.create(&se(0, b"quux", 0)).unwrap().is_some());
         assert_eq!(RenameStatus::Ok,
                    dao.rename(0, b"foo", b"bar").unwrap());
 
@@ -547,8 +579,8 @@ mod test {
     fn condemnation() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
-        assert!(dao.create(&se(0, b"bar", 0)).unwrap());
+        assert!(dao.create(&se(0, b"foo", 0)).unwrap().is_some());
+        assert!(dao.create(&se(0, b"bar", 0)).unwrap().is_some());
         assert_eq!(2, list(&dao, true, 0).len());
         dao.condemn(0, b"foo").unwrap();
 
@@ -562,7 +594,7 @@ mod test {
         assert_eq!(b"bar", &*l[0].name);
 
         // List with condemn clears condemnation
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
+        assert!(dao.create(&se(0, b"foo", 0)).unwrap().is_some());
         assert_eq!(2, list(&dao, true, 0).len());
     }
 
@@ -572,11 +604,11 @@ mod test {
 
         dao.condemn(0, b"foo").unwrap();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
+        assert!(dao.create(&se(0, b"foo", 0)).unwrap().is_some());
         let foo_id = list(&dao, false, 0)[0].id;
-        assert!(dao.create(&se(foo_id, b"bar", 0)).unwrap());
+        assert!(dao.create(&se(foo_id, b"bar", 0)).unwrap().is_some());
         let bar_id = list(&dao, false, foo_id)[0].id;
-        assert!(dao.create(&se(bar_id, b"quux", 0)).unwrap());
+        assert!(dao.create(&se(bar_id, b"quux", 0)).unwrap().is_some());
 
         assert!(list(&dao, true, 0).is_empty());
         assert!(!dao.exists(foo_id, b"bar").unwrap());
@@ -587,8 +619,8 @@ mod test {
     fn uncondemn_clears_condemnation() {
         let dao = mkdao();
 
-        assert!(dao.create(&se(0, b"foo", 0)).unwrap());
-        assert!(dao.create(&se(0, b"bar", 0)).unwrap());
+        assert!(dao.create(&se(0, b"foo", 0)).unwrap().is_some());
+        assert!(dao.create(&se(0, b"bar", 0)).unwrap().is_some());
         dao.condemn(0, b"foo").unwrap();
         dao.condemn(0, b"bar").unwrap();
         dao.uncondemn(0, b"foo").unwrap();
