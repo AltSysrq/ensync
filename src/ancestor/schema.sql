@@ -15,6 +15,11 @@
 
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
+-- Running multiple processes on the same ancestor store is not useful and can
+-- only cause problems, so prohibit. This also frees us from needing to handle
+-- "database locked" errors, since such errors indicate that we're in a fatal
+-- situation anyway.
+PRAGMA locking_mode = EXCLUSIVE;
 
 -- The "file" table stores all the data in the ancestor replica.
 --

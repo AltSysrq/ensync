@@ -285,11 +285,12 @@ impl Replica for AncestorReplica {
                         } else {
                             let mut hash = [0;32];
                             hash.copy_from_slice(&*e.content);
-                            Some(FileData::Regular(e.mode as u16, 0, 0, hash))
+                            Some(FileData::Regular(e.mode as FileMode,
+                                                   0, 0, hash))
                         }
                     },
                     T_DIRECTORY => {
-                        Some(FileData::Directory(e.mode as u16))
+                        Some(FileData::Directory(e.mode as FileMode))
                     },
                     T_SYMLINK => {
                         if let Ok(target) = CString::new(&*e.content) {

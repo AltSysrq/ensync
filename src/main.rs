@@ -36,6 +36,7 @@ mod memory_replica;
 mod reconcile;
 mod block_xfer;
 mod ancestor;
+mod posix;
 
 fn main() {
     println!("hello world");

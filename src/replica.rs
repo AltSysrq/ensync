@@ -165,6 +165,15 @@ pub trait Replica {
     /// replica.
     fn transfer(&self, &Self::Directory, file: File)
                 -> Self::TransferOut;
+
+    /// Performs any final cleanup on this replica.
+    ///
+    /// This should not affect the actual content of the replica; instead, it
+    /// gives it a chance to remove temporary data, clean up orphaned files,
+    /// etc.
+    ///
+    /// The default is a noop.
+    fn clean_up(&self) -> Result<()> { Ok(()) }
 }
 
 /// A Replica which supports a "null transfer" input.
