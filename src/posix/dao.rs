@@ -13,8 +13,6 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#![allow(dead_code)]
-
 use std::ffi::{CStr,CString,NulError};
 use std::path::Path;
 use std::result::Result as StdResult;
@@ -517,5 +515,25 @@ mod test {
         // /fooo survives since it is not under /foo
         assert!(dao.cached_file_hash(&oss("/fooo"), &stat, 2)
                 .unwrap().is_some());
+    }
+
+    #[test]
+    fn rename_delete_cached_files() {
+        let dao = new();
+        let stat = InodeStatus {
+            ino: 42,
+            mtime: 56,
+            size: 1024,
+        };
+
+        dao.cache_file_hashes(&oss("/foo"), &[1;32], &[], 2048, &stat, 0)
+            .unwrap();
+        assert_eq!(oss("/foo"), dao.find_file_with_hash(&[1;32])
+                   .unwrap().unwrap());
+        dao.rename_cache(&oss("/foo"), &oss("/bar")).unwrap();
+        assert_eq!(oss("/bar"), dao.find_file_with_hash(&[1;32])
+                   .unwrap().unwrap());
+        dao.delete_cache(&oss("/bar")).unwrap();
+        assert!(dao.find_file_with_hash(&[1;32]).unwrap().is_none());
     }
 }
