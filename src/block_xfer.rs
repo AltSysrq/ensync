@@ -58,7 +58,9 @@
 
 #![allow(dead_code)]
 
+use std::error::Error as StdError;
 use std::io;
+use std::sync::Arc;
 
 use keccak::Keccak;
 
@@ -93,6 +95,17 @@ pub struct BlockList {
     pub blocks: Vec<HashId>,
     /// The total number of bytes that were read from the stream.
     pub size: FileSize,
+}
+
+/// Computes the hash of the given block using the same method used internally
+/// in the block transfer system.
+pub fn hash_block(secret: &[u8], block: &[u8]) -> HashId {
+    let mut kc = Keccak::new_sha3_256();
+    kc.update(secret);
+    kc.update(block);
+    let mut hash = [0;32];
+    kc.finalize(&mut hash);
+    hash
 }
 
 /// Breaks the input byte stream `input` into non-empty byte blocks up to size
@@ -148,10 +161,7 @@ pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> io::Result<()>,
         // Empty block == EOF
         if 0 == off { break; }
 
-        let mut kc = Keccak::new_sha3_256();
-        kc.update(secret);
-        kc.update(&block_data[0..off]);
-        kc.finalize(&mut hash);
+        hash = hash_block(secret, &block_data[0..off]);
 
         try!(block_out(&hash, &block_data[0..off]));
         total_kc.update(&hash);
@@ -229,6 +239,33 @@ pub fn blocks_to_stream<R : io::Read,
     }
 
     return Ok(())
+}
+
+/// A file data source (eg, for `Replica::TransferIn` or
+/// `Replica::TransferOut`) representing a backing store which is not
+/// content-addressable but instead presents files as linear byte streams.
+pub trait StreamSource : io::Read {
+    /// Notifies the source of the final computed block list that was read from
+    /// the source (once hitting EOF) so that it can update its own data
+    /// structures accordinly.
+    fn finish(&mut self, blocks: &BlockList) -> Result<(),Box<StdError>>;
+}
+
+/// A file data source representing a content-addressable backing store which
+/// does not support inherent byte streams.
+#[derive(Clone)]
+pub struct ContentAddressableSource {
+    /// The block list of the file being transferred.
+    pub blocks: BlockList,
+    /// Object from which to read actual block content.
+    pub fetch: Arc<BlockFetch>,
+}
+
+/// Trait for fetching blocks found in a `ContentAddressableSource`.
+pub trait BlockFetch {
+    /// Fetches the block identified by `block`, returning a stream that can be
+    /// used to obtain the data within.
+    fn fetch(&self, block: &HashId) -> io::Result<Box<io::Read>>;
 }
 
 #[cfg(test)]
