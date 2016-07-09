@@ -168,6 +168,35 @@ impl Dao {
         Ok(())
     }
 
+    /// Returns whether the directory indicated by path `path_str` is
+    /// considered clean.
+    ///
+    /// `path_str` must have both leading and trailing slash.
+    pub fn is_dir_clean(&self, path_str: &CStr) -> Result<bool> {
+        let mut path = path_str.to_bytes();
+
+        loop {
+            debug_assert!(b'/' == path[0]);
+            debug_assert!(b'/' == path[path.len() - 1]);
+
+            if try!(self.0.prepare("SELECT 1 from `clean_dirs` \
+                                    WHERE `path` = ?1")
+                    .binding(1, path).exists()) {
+                return Ok(true);
+            }
+
+            if let Some(slash) = path[0..path.len()-1].iter().rposition(
+                |c| b'/' == *c)
+            {
+                path = &path[0..slash+1];
+            } else {
+                break;
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Determines the new generation number for the cache.
     pub fn next_generation(&self) -> Result<i64> {
         Ok(try!(self.0.prepare("SELECT MAX(`generation`) + 1 \
@@ -412,6 +441,18 @@ mod test {
         let second = dao.iter_clean_dirs().unwrap()
             .map(|r| r.unwrap()).collect::<Vec<_>>();
         assert_eq!(vec![(oss("/foo/plugh/"),H)], second);
+    }
+
+    #[test]
+    fn clean_dir_test() {
+        let dao = new();
+
+        dao.set_dir_clean(&oss("/foo/bar/"), &H).unwrap();
+        assert!(dao.is_dir_clean(&oss("/foo/bar/")).unwrap());
+        assert!(dao.is_dir_clean(&oss("/foo/bar/baz/")).unwrap());
+        assert!(!dao.is_dir_clean(&oss("/foo/plugh/")).unwrap());
+        assert!(!dao.is_dir_clean(&oss("/foo/")).unwrap());
+        assert!(!dao.is_dir_clean(&oss("/")).unwrap());
     }
 
     #[test]
