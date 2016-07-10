@@ -13,7 +13,7 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
 use std::path::PathBuf;
 
 use defs::*;
@@ -29,8 +29,8 @@ use log::ReplicaSide;
 /// The extension is always preserved; eg, "foo.txt" may become "foo~1.txt".
 ///
 /// If `orig` is not valid UTF-8, invalid sequences may be clobbered.
-pub fn gen_alternate_name<F : Fn (&CStr) -> bool>(
-    orig: &CStr, in_use: F) -> CString
+pub fn gen_alternate_name<F : Fn (&OsStr) -> bool>(
+    orig: &OsStr, in_use: F) -> OsString
 {
     let orig_osstr: String = orig.to_string_lossy().into_owned();
     let mut path = PathBuf::new();
@@ -49,8 +49,7 @@ pub fn gen_alternate_name<F : Fn (&CStr) -> bool>(
     }
 
     for n in 1u64.. {
-        let new = CString::new(
-            format!("{}{}{}", &base, n, &extension)).unwrap();
+        let new: OsString = format!("{}{}{}", &base, n, &extension).into();
         if !in_use(&new) {
             return new;
         }
@@ -349,15 +348,11 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
 #[cfg(test)]
 mod test {
     use std::collections::HashSet;
-    use std::ffi::CString;
 
     use super::*;
     use defs::*;
+    use defs::test_helpers::*;
     use rules::*;
-
-    fn oss(s: &str) -> CString {
-        CString::new(s).unwrap()
-    }
 
     #[test]
     fn simple_gen_alternate_name() {

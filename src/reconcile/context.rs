@@ -16,7 +16,7 @@
 use std::cmp::{Ord,Ordering};
 use std::collections::{BinaryHeap,BTreeMap,HashMap};
 use std::num::Wrapping;
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
 use std::sync::Mutex;
 
 use defs::*;
@@ -160,7 +160,7 @@ pub struct SingleDirContext<T> {
     /// The `Replica::Directory` object.
     pub dir: T,
     /// The files in this directory when it was listed.
-    pub files: BTreeMap<CString,FileData>,
+    pub files: BTreeMap<OsString,FileData>,
 }
 
 /// Directory-specific context information.
@@ -171,7 +171,7 @@ pub struct DirContextRaw<CD,AD,SD,RU> {
     /// Queue of filenames to process. Files are processed in approximately
     /// asciibetical order so that informational messages can give a rough idea
     /// of progress.
-    pub todo: BinaryHeap<Reversed<CString>>,
+    pub todo: BinaryHeap<Reversed<OsString>>,
     pub rules: RU,
 }
 /// Convenience for `DirContextRaw` without needing to type everything out
@@ -188,7 +188,7 @@ pub type DirContext<I : Interface> = DirContextRaw<
         I::CliDir, I::AncDir, I::SrvDir, I::Rules>;
 
 impl<CD,AD,SD,RU> DirContextRaw<CD,AD,SD,RU> {
-    pub fn name_in_use(&self, name: &CStr) -> bool {
+    pub fn name_in_use(&self, name: &OsStr) -> bool {
         self.cli.files.contains_key(name) ||
             self.anc.files.contains_key(name) ||
             self.srv.files.contains_key(name)

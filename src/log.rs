@@ -22,7 +22,7 @@
 #![allow(dead_code)]
 
 use std::error::Error;
-use std::ffi::CStr;
+use std::ffi::OsStr;
 use reconcile::compute::{Reconciliation,Conflict};
 
 use defs::*;
@@ -55,33 +55,33 @@ pub enum EditDeleteConflictResolution {
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum EditEditConflictResolution<'a> {
     Choose(ReplicaSide),
-    Rename(ReplicaSide, &'a CStr),
+    Rename(ReplicaSide, &'a OsStr),
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ErrorOperation<'a> {
     List,
     MarkClean,
-    Chdir(&'a CStr),
-    Create(&'a CStr),
-    Update(&'a CStr),
-    Rename(&'a CStr),
-    Remove(&'a CStr),
+    Chdir(&'a OsStr),
+    Create(&'a OsStr),
+    Update(&'a OsStr),
+    Rename(&'a OsStr),
+    Remove(&'a OsStr),
     Rmdir,
-    Access(&'a CStr),
+    Access(&'a OsStr),
 }
 
 #[derive(Clone,Copy,Debug)]
 pub enum Log<'a> {
-    EnterDirectory(&'a CStr),
-    LeaveDirectory(&'a CStr),
-    Inspect(&'a CStr, &'a CStr, Reconciliation, Conflict),
-    Create(ReplicaSide, &'a CStr, &'a CStr, &'a FileData),
-    Update(ReplicaSide, &'a CStr, &'a CStr, &'a FileData, &'a FileData),
-    Rename(ReplicaSide, &'a CStr, &'a CStr, &'a CStr),
-    Remove(ReplicaSide, &'a CStr, &'a CStr, &'a FileData),
-    Rmdir(ReplicaSide, &'a CStr),
-    Error(ReplicaSide, &'a CStr, ErrorOperation<'a>, &'a Error),
+    EnterDirectory(&'a OsStr),
+    LeaveDirectory(&'a OsStr),
+    Inspect(&'a OsStr, &'a OsStr, Reconciliation, Conflict),
+    Create(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
+    Update(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData, &'a FileData),
+    Rename(ReplicaSide, &'a OsStr, &'a OsStr, &'a OsStr),
+    Remove(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
+    Rmdir(ReplicaSide, &'a OsStr),
+    Error(ReplicaSide, &'a OsStr, ErrorOperation<'a>, &'a Error),
 }
 
 pub trait Logger {

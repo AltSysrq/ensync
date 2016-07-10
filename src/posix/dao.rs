@@ -13,7 +13,7 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::{CStr,CString,NulError};
+use std::ffi::{OsStr,OsString,NulError};
 use std::path::Path;
 use std::result::Result as StdResult;
 
@@ -64,9 +64,9 @@ fn to_hashid(v: Vec<u8>) -> Result<HashId> {
 }
 
 impl<'a> Iterator for CleanDirs<'a> {
-    type Item = Result<(CString,HashId)>;
+    type Item = Result<(OsString,HashId)>;
 
-    fn next(&mut self) -> Option<Result<(CString,HashId)>> {
+    fn next(&mut self) -> Option<Result<(OsString,HashId)>> {
         match self.0.next() {
             Ok(State::Row) => { },
             Ok(State::Done) => return None,
@@ -78,8 +78,8 @@ impl<'a> Iterator for CleanDirs<'a> {
 }
 
 impl<'a> CleanDirs<'a> {
-    fn read_row(&mut self) -> Result<(CString,HashId)> {
-        let path = try!(CString::new(try!(self.0.read::<Vec<u8>>(0))));
+    fn read_row(&mut self) -> Result<(OsString,HashId)> {
+        let path = try!(try!(self.0.read::<Vec<u8>>(0)).as_nstr()).to_owned();
         let hash = try!(to_hashid(try!(self.0.read::<Vec<u8>>(1))));
         Ok((path, hash))
     }
@@ -122,8 +122,8 @@ impl Dao {
     ///
     /// If there is already a record for `path_str`, it is updated to reference
     /// `hash`.
-    pub fn set_dir_clean(&self, path_str: &CStr, hash: &HashId) -> Result<()> {
-        let path = path_str.to_bytes();
+    pub fn set_dir_clean(&self, path_str: &OsStr, hash: &HashId) -> Result<()> {
+        let path = path_str.as_nbytes();
 
         debug_assert!(b'/' == path[0]);
         debug_assert!(b'/' == path[path.len() - 1]);
@@ -145,8 +145,8 @@ impl Dao {
     /// such a case, whether that directory shows up in the `SELECT` results is
     /// unspecified (see http://sqlite.org/isolation.html) but produces
     /// reasonable results either way.
-    pub fn set_dir_dirty(&self, path_str: &CStr) -> Result<()> {
-        let mut path = path_str.to_bytes();
+    pub fn set_dir_dirty(&self, path_str: &OsStr) -> Result<()> {
+        let mut path = path_str.as_nbytes();
 
         loop {
             debug_assert!(b'/' == path[0]);
@@ -171,8 +171,8 @@ impl Dao {
     /// considered clean.
     ///
     /// `path_str` must have both leading and trailing slash.
-    pub fn is_dir_clean(&self, path_str: &CStr) -> Result<bool> {
-        let mut path = path_str.to_bytes();
+    pub fn is_dir_clean(&self, path_str: &OsStr) -> Result<bool> {
+        let mut path = path_str.as_nbytes();
 
         loop {
             debug_assert!(b'/' == path[0]);
@@ -210,11 +210,11 @@ impl Dao {
     /// the file. `block_size` indicates the block size used in the
     /// calculation. `stat` indicates the status of the file at the time the
     /// hashes were computed.
-    pub fn cache_file_hashes(&self, path_str: &CStr, hash: &HashId,
+    pub fn cache_file_hashes(&self, path_str: &OsStr, hash: &HashId,
                              blocks: &[HashId], block_size: usize,
                              stat: &InodeStatus, generation: i64)
                              -> Result<()> {
-        let path = path_str.to_bytes();
+        let path = path_str.as_nbytes();
 
         try!(tx(&self.0, || {
             // Kill any existing entry to transitively remove any block caches
@@ -261,7 +261,7 @@ impl Dao {
     ///
     /// When an entry is matched, its generation is updated to `generation` so
     /// that it will survive pruning.
-    pub fn cached_file_hash(&self, path: &CStr, stat: &InodeStatus,
+    pub fn cached_file_hash(&self, path: &OsStr, stat: &InodeStatus,
                             generation: i64)
                             -> Result<Option<HashId>> {
         let hashvec = try!(tx(&self.0, || {
@@ -271,7 +271,7 @@ impl Dao {
                      WHERE `path` = ?1 \
                      AND   `inode` = ?2 AND `size` = ?3 \
                      AND   `mtime` = ?4")
-                    .binding(1, path.to_bytes())
+                    .binding(1, path.as_nbytes())
                     .binding(2, stat.ino as i64)
                     .binding(3, stat.size as i64)
                     .binding(4, stat.mtime as i64)
@@ -301,9 +301,9 @@ impl Dao {
 
     /// Prunes from the file and block hash caches all entries beneath `root`
     /// whose generation predates `generation`.
-    pub fn prune_hash_cache(&self, root: &CStr, generation: i64)
+    pub fn prune_hash_cache(&self, root: &OsStr, generation: i64)
                             -> Result<()> {
-        let mut lower = root.to_bytes().to_vec();
+        let mut lower = root.as_nbytes().to_vec();
         if Some(&b'/') != lower.last() {
             lower.push(b'/');
         }
@@ -325,7 +325,7 @@ impl Dao {
     /// guarantee that the file still has that hash, or that it even exists for
     /// that matter.
     pub fn find_file_with_hash(&self, hash: &HashId)
-                               -> Result<Option<CString>> {
+                               -> Result<Option<OsString>> {
         let pathvec = try!(self.0.prepare("SELECT `path` FROM `hash_cache` \
                                            WHERE `hash` = ?1 \
                                            LIMIT 1")
@@ -333,7 +333,7 @@ impl Dao {
                            .first(|s| s.read::<Vec<u8>>(0)));
 
         if let Some(pv) = pathvec {
-            Ok(Some(try!(CString::new(pv))))
+            Ok(Some(try!(pv.as_nstr()).to_owned()))
         } else {
             Ok(None)
         }
@@ -351,7 +351,7 @@ impl Dao {
     /// that the file is actually large enough to contain that block, or even
     /// that the file still exists.
     pub fn find_block_with_hash(&self, hash: &HashId)
-                                -> Result<Option<(CString,i64,i64)>> {
+                                -> Result<Option<(OsString,i64,i64)>> {
         let res = try!(self.0.prepare(
             "SELECT `hash_cache`.`path`, `hash_cache`.`block_size`, \
                     `block_cache`.`offset` \
@@ -364,7 +364,7 @@ impl Dao {
                            try!(s.read::<i64>(2))))));
 
         if let Some((pathvec, bs, off)) = res {
-            Ok(Some((try!(CString::new(pathvec)), bs, off)))
+            Ok(Some((try!(pathvec.as_nstr()).to_owned(), bs, off)))
         } else {
             Ok(None)
         }
@@ -372,17 +372,17 @@ impl Dao {
 
     /// Updates any cache for the file at path `old` to be at path `new`,
     /// preserving all caching information.
-    pub fn rename_cache(&self, old: &CStr, new: &CStr) -> Result<()> {
+    pub fn rename_cache(&self, old: &OsStr, new: &OsStr) -> Result<()> {
         Ok(try!(self.0.prepare("UPDATE `hash_cache` SET `path` = ?2 \
                                 WHERE `path` = ?1")
-                .binding(1, old.to_bytes()).binding(2, new.to_bytes())
+                .binding(1, old.as_nbytes()).binding(2, new.as_nbytes())
                 .run()))
     }
 
     /// Deletes any cache entry for the file at `path`.
-    pub fn delete_cache(&self, path: &CStr) -> Result<()> {
+    pub fn delete_cache(&self, path: &OsStr) -> Result<()> {
         Ok(try!(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
-                .binding(1, path.to_bytes()).run()))
+                .binding(1, path.as_nbytes()).run()))
     }
 }
 

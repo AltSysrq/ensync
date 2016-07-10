@@ -14,8 +14,7 @@
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 use std::borrow::Cow;
-use std::ffi::{CStr,CString,NulError};
-use std::os::raw::c_char;
+use std::ffi::{OsStr,OsString,NulError};
 use std::result::Result as StdResult;
 use std::sync::{Arc,Mutex};
 
@@ -23,6 +22,7 @@ use sqlite;
 
 use defs::*;
 use replica::*;
+use sql::{AsNBytes,AsNStr};
 use super::dao::*;
 
 const T_REGULAR : i64 = 0;
@@ -104,7 +104,7 @@ pub struct SynthDir {
     /// Otherwise, the directory does not exist.
     id: Option<i64>,
     /// The name of the directory to create as-needed.
-    name: CString,
+    name: OsString,
     /// The mode of the directory to create should we need to.
     mode: FileMode,
 }
@@ -161,7 +161,7 @@ impl DirHandle {
 
     /// Creates a new synthetic subdirectory with this directory as its parent,
     /// and with the given subdirectory name and mode.
-    fn push_synth(&self, name: &CStr, mode: FileMode) -> Self {
+    fn push_synth(&self, name: &OsStr, mode: FileMode) -> Self {
         DirHandle::Synth(Arc::new(Mutex::new(SynthDir {
             parent: self.clone(),
             id: None,
@@ -181,15 +181,9 @@ impl DirHandle {
     }
 }
 
-static EMPTY_CSTR : c_char = 0;
-
 impl ReplicaDirectory for DirHandle {
-    fn full_path(&self) -> &CStr {
-        // Awkwardly, there's no safe way in stable 1.9 to create an &CStr
-        // reference; from_bytes_with_nul() is not yet stabilised.
-        unsafe {
-            CStr::from_ptr(&EMPTY_CSTR as *const c_char)
-        }
+    fn full_path(&self) -> &OsStr {
+        OsStr::new("")
     }
 }
 
@@ -235,7 +229,7 @@ impl AsEntry for FileData {
                 name: Cow::Borrowed(b""),
                 typ: T_SYMLINK,
                 mode: 0,
-                content: Cow::Borrowed(target.to_bytes()),
+                content: Cow::Borrowed(target.as_nbytes()),
             },
             FileData::Special =>
                 panic!("Attempt to store Special file in ancestor replica"),
@@ -246,7 +240,7 @@ impl AsEntry for FileData {
 impl<'a> AsEntry for File<'a> {
     fn as_entry(&self, dir: i64) -> FileEntry {
         let mut e = self.1.as_entry(dir);
-        e.name = Cow::Borrowed(self.0.to_bytes());
+        e.name = Cow::Borrowed(self.0.as_nbytes());
         e
     }
 }
@@ -263,7 +257,7 @@ impl Replica for AncestorReplica {
         Ok(DirHandle::Real(RealDir(0)))
     }
 
-    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(CString,FileData)>> {
+    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
         let mut ret = Vec::new();
 
         if dir.is_deferred() {
@@ -276,7 +270,7 @@ impl Replica for AncestorReplica {
 
         let h = try!(dir.get_h());
         let exists = try!(self.dao.lock().unwrap().list(true, h, |e| {
-            if let Ok(name) = CString::new(&*e.name) {
+            if let Ok(name) = e.name.as_nstr() {
                 if let Some(d) = match e.typ {
                     T_REGULAR => {
                         if 32 != e.content.len() {
@@ -293,8 +287,8 @@ impl Replica for AncestorReplica {
                         Some(FileData::Directory(e.mode as FileMode))
                     },
                     T_SYMLINK => {
-                        if let Ok(target) = CString::new(&*e.content) {
-                            Some(FileData::Symlink(target))
+                        if let Ok(target) = e.content.as_nstr() {
+                            Some(FileData::Symlink(target.to_owned()))
                         } else {
                             nul_error = true;
                             None
@@ -305,7 +299,7 @@ impl Replica for AncestorReplica {
                         None
                     }
                 } /* then */ {
-                    ret.push((name, d));
+                    ret.push((name.to_owned(), d));
                 }
             } else {
                 nul_error = true;
@@ -325,11 +319,11 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn rename(&self, dir: &mut DirHandle, old: &CStr, new: &CStr)
+    fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
               -> Result<()> {
         let h = try!(dir.get_h());
         match try!(self.dao.lock().unwrap().rename(
-            h, old.to_bytes(), new.to_bytes()))
+            h, old.as_nbytes(), new.as_nbytes()))
         {
             RenameStatus::Ok => Ok(()),
             RenameStatus::SourceNotFound => Err(Error::NotFound.into()),
@@ -360,7 +354,7 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn update(&self, dir: &mut DirHandle, name: &CStr,
+    fn update(&self, dir: &mut DirHandle, name: &OsStr,
               old: &FileData, new_nonxfer: &FileData,
               xfer: FileData) -> Result<FileData> {
         if is_dir(Some(old)) && !is_dir(Some(&xfer)) {
@@ -384,10 +378,10 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn chdir(&self, dir: &DirHandle, subdir: &CStr) -> Result<DirHandle> {
+    fn chdir(&self, dir: &DirHandle, subdir: &OsStr) -> Result<DirHandle> {
         let h = try!(dir.get_h());
         if let Some(f) = try!(self.dao.lock().unwrap().get_by_name(
-            h, subdir.to_bytes()))
+            h, subdir.as_nbytes()))
         {
             if T_DIRECTORY == f.typ {
                 Ok(DirHandle::Real(RealDir(f.id)))
@@ -399,7 +393,7 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn synthdir(&self, dir: &mut DirHandle, subdir: &CStr, mode: FileMode)
+    fn synthdir(&self, dir: &mut DirHandle, subdir: &OsStr, mode: FileMode)
                 -> DirHandle {
         dir.push_synth(subdir, mode)
     }
@@ -430,14 +424,14 @@ impl NullTransfer for AncestorReplica {
 }
 
 impl Condemn for AncestorReplica {
-    fn condemn(&self, dir: &mut DirHandle, name: &CStr) -> Result<()> {
+    fn condemn(&self, dir: &mut DirHandle, name: &OsStr) -> Result<()> {
         let h = try!(dir.get_h());
-        Ok(try!(self.dao.lock().unwrap().condemn(h, name.to_bytes())))
+        Ok(try!(self.dao.lock().unwrap().condemn(h, name.as_nbytes())))
     }
 
-    fn uncondemn(&self, dir: &mut DirHandle, name: &CStr) -> Result<()> {
+    fn uncondemn(&self, dir: &mut DirHandle, name: &OsStr) -> Result<()> {
         let h = try!(dir.get_h());
-        Ok(try!(self.dao.lock().unwrap().uncondemn(h, name.to_bytes())))
+        Ok(try!(self.dao.lock().unwrap().uncondemn(h, name.as_nbytes())))
     }
 }
 

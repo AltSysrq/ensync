@@ -14,7 +14,7 @@
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 use std::collections::{BTreeMap,HashSet};
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
 use std::sync::atomic::{AtomicBool,AtomicUsize};
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
@@ -85,7 +85,7 @@ pub type DirStateRef = Arc<DirState>;
 fn process_file<I : Interface>(
     i: &I,
     dir: &mut DirContext<I>,
-    dir_path: &CStr, name: &CStr,
+    dir_path: &OsStr, name: &OsStr,
     dirstate: &DirStateRef)
 {
     let cli = dir.cli.files.get(name).cloned();
@@ -133,9 +133,9 @@ fn process_file<I : Interface>(
 /// If an error occurs, it is logged and returned (so that the caller can use
 /// `try!`).
 fn read_dir_contents<R : Replica, RB : DirRulesBuilder, LOG : Logger>(
-    r: &R, dir: &mut R::Directory, dir_path: &CStr,
+    r: &R, dir: &mut R::Directory, dir_path: &OsStr,
     mut rb: Option<&mut RB>, log: &LOG, side : log::ReplicaSide)
-    -> Result<BTreeMap<CString,FileData>>
+    -> Result<BTreeMap<OsString,FileData>>
 {
     let mut ret = BTreeMap::new();
     let list = match r.list(dir) {
@@ -248,8 +248,8 @@ fn process_dir<I : Interface,
 ///
 /// If an error occurs, it is logged and `None` is returned.
 fn try_chdir<R : Replica, LOG : Logger>(r: &R, parent: &R::Directory,
-                                        parent_name: &CStr,
-                                        name: &CStr,
+                                        parent_name: &OsStr,
+                                        name: &OsStr,
                                         log: &LOG, side: log::ReplicaSide)
                                         -> Option<R::Directory> {
     match r.chdir(parent, name) {
@@ -273,7 +273,7 @@ fn try_chdir<R : Replica, LOG : Logger>(r: &R, parent: &R::Directory,
 fn recurse_into_dir<I : Interface>(
     i: &I,
     dir: &mut DirContext<I>,
-    parent_name: &CStr, name: &CStr,
+    parent_name: &OsStr, name: &OsStr,
     file_rules: <I::Rules as DirRules>::FileRules,
     state: DirStateRef)
 {
@@ -346,7 +346,7 @@ fn mark_both_clean<I : Interface>(i: &I, dir: &DirContext<I>)
 
 fn mark_clean<R : Replica, L : Logger>(
     r: &R, dir: &R::Directory,
-    log: &L, side: log::ReplicaSide, dir_path: &CStr) -> bool
+    log: &L, side: log::ReplicaSide, dir_path: &OsStr) -> bool
 {
     match r.set_dir_clean(dir) {
         Ok(clean) => clean,
@@ -380,7 +380,7 @@ fn finish_task_in_dir<I : Interface>(i: &I, state: &DirStateRef,
 /// marked clean.
 fn recursive_delete<I : Interface>(
     i: &I, dir: &mut DirContext<I>,
-    parent_name: &CStr, name: &CStr,
+    parent_name: &OsStr, name: &OsStr,
     file_rules: <I::Rules as DirRules>::FileRules,
     state: DirStateRef,
     side: ReconciliationSide, mode: FileMode)
@@ -389,7 +389,7 @@ fn recursive_delete<I : Interface>(
         r: &R, dir: &mut R::Directory,
         this_side: ReconciliationSide, phys_side: ReconciliationSide,
         log: &LOG,
-        parent_name: &CStr, name: &CStr, mode: FileMode)
+        parent_name: &OsStr, name: &OsStr, mode: FileMode)
         -> Option<R::Directory>
     {
         if this_side == phys_side {
@@ -419,7 +419,7 @@ fn recursive_delete<I : Interface>(
 }
 
 fn try_rmdir<R : Replica, LOG : Logger>(r: &R, dir: &mut R::Directory,
-                                        log: &LOG, dir_path: &CStr,
+                                        log: &LOG, dir_path: &OsStr,
                                         side: log::ReplicaSide) -> bool {
     log.log(log::EDIT, &Log::Rmdir(side, dir_path));
     match r.rmdir(dir) {
@@ -478,7 +478,7 @@ pub fn start_root<I : Interface>(i: &I)
 mod test {
     use std::cell::Cell;
     use std::collections::{HashMap,HashSet};
-    use std::ffi::CString;
+    use std::ffi::OsStr;
     use std::io::Write;
     use std::iter::Iterator;
     use std::sync::Arc;
@@ -528,7 +528,7 @@ mod test {
 
             for en in ls {
                 let (f, faults) = slot(en);
-                let name = CString::new(en.0).unwrap();
+                let name = OsStr::new(en.0).to_owned();
                 match f {
                     Nil => (),
                     Reg(mode, hash) => {
@@ -622,7 +622,7 @@ mod test {
                 if let Dir(_) = slot(en).0 {
                     verify_dir(name, replica,
                                &mut replica.chdir(
-                                   dir, &CString::new(en.0).unwrap()).unwrap(),
+                                   dir, OsStr::new(en.0)).unwrap(),
                                &en.4, slot);
                 }
             }

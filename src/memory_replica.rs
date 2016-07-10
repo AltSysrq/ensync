@@ -33,7 +33,7 @@
 //! simply clear the clean flag again.
 
 use std::collections::{HashMap,HashSet};
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
 use std::sync::{Mutex,MutexGuard};
 
 use defs::*;
@@ -46,28 +46,28 @@ pub enum Op {
     ReadRoot,
     /// Matched when `Replica::list()` is called. The string is the full path
     /// to the directory, eg, "/foo/bar".
-    List(CString),
+    List(OsString),
     /// Matched when `Replica::rename()` is called or when an operation
     /// performs a rename internally. The fields are: path, old name.
-    Rename(CString,CString),
+    Rename(OsString,OsString),
     /// Matched when `Replica::remove()` is called or when an operation
     /// performs a removal internally. The fields are: path, filename.
-    Remove(CString,CString),
+    Remove(OsString,OsString),
     /// Matched when `Replica::create()` is called or when an operation
     /// performs a creation internally.
-    Create(CString,CString),
+    Create(OsString,OsString),
     /// Matched when a directory with the given path is created implicitly due
     /// to creating a file within a synthetic directory.
-    CreateSynthetic(CString),
+    CreateSynthetic(OsString),
     /// Matched when a file is updated. Fields are: path, filename.
-    Update(CString,CString),
+    Update(OsString,OsString),
     /// Matched when `Replica::chdir()` is used to descend into the given full
     /// path.
-    Chdir(CString),
+    Chdir(OsString),
     /// Matched when `Replica::transfer()` is called for the given (path,file).
     /// If the fault fails, this is reflected if the transfer value is actually
     /// used.
-    Transfer(CString,CString),
+    Transfer(OsString,OsString),
 }
 
 /// An entry in a `MemoryReplica` directory.
@@ -81,7 +81,7 @@ pub enum Entry {
     /// `MemoryReplicaImpl.dirs`.
     Directory(FileMode),
     Regular(Regular),
-    Symlink(CString),
+    Symlink(OsString),
     Special,
 }
 
@@ -89,9 +89,9 @@ pub enum Entry {
 #[derive(Clone,Debug,Default)]
 pub struct Directory {
     /// The files in this directory. Defaults to empty.
-    pub contents: HashMap<CString, Entry>,
+    pub contents: HashMap<OsString, Entry>,
     /// The names which have been condemned in this directory.
-    pub condemned: HashSet<CString>,
+    pub condemned: HashSet<OsString>,
     /// Whether this directory is marked clean. Defaults to false.
     pub clean: bool,
 }
@@ -167,14 +167,13 @@ pub struct MemoryReplicaImpl {
     /// The root directory is "". Subdirectories follow UNIX convention,
     /// notated as the full path of the parent directory followed by a "/" and
     /// the name of the subdirectory.
-    pub dirs: HashMap<CString, Directory>,
+    pub dirs: HashMap<OsString, Directory>,
 }
 
 impl MemoryReplicaImpl {
     fn empty() -> Self {
         let mut root = HashMap::new();
-        root.insert(CString::new("").unwrap(),
-                    Default::default());
+        root.insert(OsString::new(), Default::default());
 
         MemoryReplicaImpl {
             faults: HashMap::new(),
@@ -196,12 +195,12 @@ impl MemoryReplicaImpl {
 
 #[derive(Debug,Clone)]
 pub struct DirHandle {
-    path: CString,
-    synthetics: Vec<(CString, CString, FileMode)>,
+    path: OsString,
+    synthetics: Vec<(OsString, OsString, FileMode)>,
 }
 
 impl ReplicaDirectory for DirHandle {
-    fn full_path(&self) -> &CStr {
+    fn full_path(&self) -> &OsStr {
         &self.path
     }
 }
@@ -218,11 +217,11 @@ pub fn simple_error<T>() -> Result<T> {
     Err(Box::new(VarError::NotPresent))
 }
 
-pub fn catpath(a: &CStr, b: &CStr) -> CString {
-    let mut cat: Vec<u8> = a.to_bytes().iter().cloned().collect();
-    cat.push('/' as u8);
-    cat.extend(b.to_bytes().iter());
-    CString::new(cat).unwrap()
+pub fn catpath(a: &OsStr, b: &OsStr) -> OsString {
+    let mut cat = a.to_owned();
+    cat.push("/");
+    cat.push(b);
+    cat
 }
 
 impl MemoryReplica {
@@ -269,7 +268,7 @@ impl MemoryReplica {
         }
     }
 
-    pub fn is_condemned(&self, dir: &DirHandle, file: &CStr)
+    pub fn is_condemned(&self, dir: &DirHandle, file: &OsStr)
                         -> Result<bool> {
         let d = self.data();
 
@@ -307,11 +306,10 @@ impl Replica for MemoryReplica {
     fn root(&self) -> Result<DirHandle> {
         let mut d = self.data();
         try!(d.test_op(&Op::ReadRoot));
-        Ok(DirHandle { path: CString::new("").unwrap(),
-                       synthetics: vec![] })
+        Ok(DirHandle { path: OsString::new(), synthetics: vec![] })
     }
 
-    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(CString,FileData)>> {
+    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
         let mut d = self.data();
         try!(d.test_op(&Op::List(dir.path.clone())));
 
@@ -344,14 +342,14 @@ impl Replica for MemoryReplica {
         // first find what keys to remove, and another to remove them.
         let mut to_remove = vec![];
         for prefix in prefices_to_remove {
-            fn is_under(c_big: &CStr, c_prefix: &CStr) -> bool {
-                let big = c_big.to_bytes();
-                let prefix = c_prefix.to_bytes();
+            fn is_under(c_big: &OsStr, c_prefix: &OsStr) -> bool {
+                let big = c_big.to_str().unwrap();
+                let prefix = c_prefix.to_str().unwrap();
 
                 prefix == big || (
                     prefix.len() < big.len() &&
                     prefix == &big[0..prefix.len()] &&
-                    '/' as u8 == big[prefix.len()])
+                    "/"[..] == big[prefix.len()..prefix.len()+1])
             }
 
             for tr in d.dirs.keys().filter(|k| is_under(k, &prefix)) {
@@ -366,7 +364,7 @@ impl Replica for MemoryReplica {
         result
     }
 
-    fn rename(&self, dir: &mut DirHandle, old: &CStr, new: &CStr)
+    fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
               -> Result<()> {
         let mut d = self.data();
         try!(d.test_op(&Op::Rename(dir.path.clone(), old.to_owned())));
@@ -395,19 +393,19 @@ impl Replica for MemoryReplica {
             // In retrospect, it would probably have been better to use numeric
             // directory nodes or something.
             let old_prefix = catpath(&catpath(&dir.path, old),
-                                     &CString::new("").unwrap()).into_bytes();
+                                     OsStr::new("")).into_string().unwrap();
             let new_prefix = catpath(&catpath(&dir.path, new),
-                                     &CString::new("").unwrap()).into_bytes();
+                                     OsStr::new("")).into_string().unwrap();
             let to_rename = d.dirs.keys().filter(
-                |k| k.as_bytes().starts_with(&old_prefix))
-                .map(|k| k.as_bytes().to_vec()).collect::<Vec<_>>();
+                |k| k.to_str().unwrap().starts_with(&old_prefix))
+                .map(|k| k.to_owned()).collect::<Vec<_>>();
             for old_name in to_rename {
-                let new_name = CString::new(
-                    [&new_prefix[..], &old_name[old_prefix.len() ..]]
-                        .concat()).unwrap();
+                let mut new_name = OsString::new();
+                new_name.push(&new_prefix);
+                new_name.push(&old_name.to_str().unwrap()[
+                    old_prefix.len()..]);
 
-                let contents = d.dirs.remove(
-                    &CString::new(old_name).unwrap()).unwrap();
+                let contents = d.dirs.remove(&old_name).unwrap();
                 d.dirs.insert(new_name, contents);
             }
         }
@@ -497,7 +495,7 @@ impl Replica for MemoryReplica {
         res
     }
 
-    fn update(&self, dir: &mut DirHandle, name: &CStr,
+    fn update(&self, dir: &mut DirHandle, name: &OsStr,
               old: &FileData, new: &FileData,
               xfer: Result<HashId>) -> Result<FileData> {
         {
@@ -542,17 +540,16 @@ impl Replica for MemoryReplica {
             return self.create(dir, File(name, new), xfer);
         }
 
-        let mut tmpname_v: Vec<u8> = name.to_bytes().iter().cloned().collect();
+        let mut tmpname = name.to_owned();
         // Blindly assume this doesn't exist. Good enough for tests.
-        tmpname_v.extend("!testtmp".bytes());
-        let tmpname = CString::new(tmpname_v).unwrap();
+        tmpname.push("!testtmp");
         try!(self.rename(dir, name, &tmpname));
         let res = try!(self.create(dir, File(name, new), xfer));
         try!(self.remove(dir, File(&tmpname, old)));
         Ok(res)
     }
 
-    fn chdir(&self, dir: &DirHandle, subdir: &CStr)
+    fn chdir(&self, dir: &DirHandle, subdir: &OsStr)
              -> Result<DirHandle> {
         let mut d = self.data();
         let dirname = catpath(&dir.path, subdir);
@@ -568,23 +565,22 @@ impl Replica for MemoryReplica {
         }
     }
 
-    fn synthdir(&self, dir: &mut DirHandle, subdir: &CStr, mode: FileMode)
+    fn synthdir(&self, dir: &mut DirHandle, subdir: &OsStr, mode: FileMode)
                 -> DirHandle {
-        let mut sub_path: Vec<u8> =
-            dir.path.to_bytes().iter().cloned().collect();
-        sub_path.push('/' as u8);
-        sub_path.extend(subdir.to_bytes().iter());
+        let mut sub_path = dir.path.to_owned();
+        sub_path.push("/");
+        sub_path.push(subdir);
 
         let mut sub = dir.clone();
-        sub.path = CString::new(sub_path).unwrap();
+        sub.path = sub_path;
         sub.synthetics.push((dir.path.clone(), subdir.to_owned(), mode));
         sub
     }
 
     fn rmdir(&self, dir: &mut DirHandle) -> Result<()> {
-        let mut split = dir.path.to_bytes().rsplitn(2, |u| b'/' == *u);
-        let name = CString::new(split.next().unwrap()).unwrap();
-        let path = CString::new(split.next().unwrap()).unwrap();
+        let mut split = dir.path.to_str().unwrap().rsplitn(2, '/');
+        let name = OsStr::new(split.next().unwrap()).to_owned();
+        let path = OsStr::new(split.next().unwrap()).to_owned();
         assert!(split.next().is_none());
 
         let mut parent = DirHandle {
@@ -633,7 +629,7 @@ impl NullTransfer for MemoryReplica {
 }
 
 impl Condemn for MemoryReplica {
-    fn condemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()> {
+    fn condemn(&self, dir: &mut Self::Directory, file: &OsStr) -> Result<()> {
         let mut d = self.data();
 
         if let Some(contents) = d.dirs.get_mut(&dir.path) {
@@ -644,7 +640,7 @@ impl Condemn for MemoryReplica {
         }
     }
 
-    fn uncondemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()> {
+    fn uncondemn(&self, dir: &mut Self::Directory, file: &OsStr) -> Result<()> {
         let mut d = self.data();
 
         if let Some(contents) = d.dirs.get_mut(&dir.path) {

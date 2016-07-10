@@ -15,7 +15,7 @@
 
 #![allow(dead_code)]
 
-use std::ffi::{CStr,CString,OsStr};
+use std::ffi::{OsStr,OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::sync::{Arc,Mutex};
 
@@ -27,8 +27,8 @@ use super::dir::*;
 
 pub struct PosixReplica {
     hmac_secret: Vec<u8>,
-    root: CString,
-    private_dir: CString,
+    root: OsString,
+    private_dir: OsString,
     // Since the transfer objects need to write back into the DAO, and the lack
     // of HKTs means they can't hold a reference to the replica itself, we need
     // to use Arc to allow the DAO to be shared explicitly.
@@ -55,11 +55,11 @@ impl Replica for PosixReplica {
         Ok(DirHandle::root(self.root.clone()))
     }
 
-    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(CString,FileData)>> {
+    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
         unimplemented!()
     }
 
-    fn rename(&self, dir: &mut DirHandle, old: &CStr, new: &CStr)
+    fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
               -> Result<()> {
         unimplemented!()
     }
@@ -74,19 +74,19 @@ impl Replica for PosixReplica {
         unimplemented!()
     }
 
-    fn update(&self, dir: &mut DirHandle, name: &CStr,
+    fn update(&self, dir: &mut DirHandle, name: &OsStr,
               old: &FileData, new: &FileData,
               xfer: Option<Box<ContentAddressableSource>>)
               -> Result<FileData> {
         unimplemented!()
     }
 
-    fn chdir(&self, dir: &DirHandle, subdir: &CStr)
+    fn chdir(&self, dir: &DirHandle, subdir: &OsStr)
              -> Result<DirHandle> {
         unimplemented!()
     }
 
-    fn synthdir(&self, dir: &mut DirHandle, subdir: &CStr, mode: FileMode)
+    fn synthdir(&self, dir: &mut DirHandle, subdir: &OsStr, mode: FileMode)
                 -> DirHandle {
         unimplemented!()
     }

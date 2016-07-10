@@ -13,7 +13,7 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
 use std::error::Error;
 use std::result::Result as StdResult;
 
@@ -25,7 +25,7 @@ pub type Result<T> = StdResult<T, Box<Error>>;
 pub trait ReplicaDirectory {
     /// Returns the full path of this directory, suitable for display to the
     /// user.
-    fn full_path(&self) -> &CStr;
+    fn full_path(&self) -> &OsStr;
 }
 
 /// Represents one of the two replicas; ie, the client filesystem or the
@@ -38,7 +38,7 @@ pub trait ReplicaDirectory {
 /// Replicas are intended to use interior mutability if they must keep mutable
 /// state. All methods on `Replica` therefore take an immutable `self`
 /// reference. This is a consequence of there currently being no way to express
-/// something like `fn chdir<'a>(&'a self, &CStr) -> Self::Directory<'a>` to
+/// something like `fn chdir<'a>(&'a self, &OsStr) -> Self::Directory<'a>` to
 /// allow the mutable state to be moved into the directory objects instead.
 pub trait Replica {
     /// Type representing an operating directory.
@@ -78,12 +78,12 @@ pub trait Replica {
     /// On success, the full conents of the directory (excluding "." and ".."
     /// if returned by the underlying system) after transform/filtering are
     /// returned, in no particular order.
-    fn list(&self, &mut Self::Directory) -> Result<Vec<(CString,FileData)>>;
+    fn list(&self, &mut Self::Directory) -> Result<Vec<(OsString,FileData)>>;
     /// Renames a file within a directory.
     ///
     /// The file of any type named by `old` is renamed to `new`. A best effort
     /// is made to prevent renaming onto an existing file.
-    fn rename(&self, &mut Self::Directory, old: &CStr, new: &CStr)
+    fn rename(&self, &mut Self::Directory, old: &OsStr, new: &OsStr)
               -> Result<()>;
     /// Deletes the file within a directory.
     ///
@@ -133,11 +133,11 @@ pub trait Replica {
     ///
     /// Returns the actual file version resulting from this update. This may be
     /// different from `new` if the hash on `new` was incorrect.
-    fn update(&self, &mut Self::Directory, name: &CStr,
+    fn update(&self, &mut Self::Directory, name: &OsStr,
               old: &FileData, new: &FileData,
               xfer: Self::TransferIn) -> Result<FileData>;
     /// Creates a new context within the subdirectory identified by `subdir`.
-    fn chdir(&self, &Self::Directory, subdir: &CStr)
+    fn chdir(&self, &Self::Directory, subdir: &OsStr)
              -> Result<Self::Directory>;
     /// Creates a "synthetic" subdirectory and returns a context that can be
     /// used to manipulate it.
@@ -149,7 +149,7 @@ pub trait Replica {
     ///
     /// `Replica::ls()` always returns the empty vector for synthetic
     /// directories that have not yet materialised.
-    fn synthdir(&self, &mut Self::Directory, subdir: &CStr, mode: FileMode)
+    fn synthdir(&self, &mut Self::Directory, subdir: &OsStr, mode: FileMode)
                 -> Self::Directory;
     /// Deletes the directory identified by the given handle, if it is empty.
     ///
@@ -212,9 +212,9 @@ pub trait Condemn : Replica {
     /// gracelessly.
     ///
     /// Condemning a name which is already condemned has no effect.
-    fn condemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()>;
+    fn condemn(&self, dir: &mut Self::Directory, file: &OsStr) -> Result<()>;
     /// Reverses a call to `condemn()`.
     ///
     /// Uncondemning a name which is not condemned has no effect.
-    fn uncondemn(&self, dir: &mut Self::Directory, file: &CStr) -> Result<()>;
+    fn uncondemn(&self, dir: &mut Self::Directory, file: &OsStr) -> Result<()>;
 }

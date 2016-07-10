@@ -39,8 +39,8 @@
 //!
 //! Originally, the intent here was to use the raw POSIX API for interacting
 //! with the filesystem due to the Rust API needing us to convert our
-//! `CString`s into `OsStr`s just so it can convert them back into new
-//! `CString`s. However, the fact that Linux *still* uses 32-bit off_t on
+//! `OsString`s into `OsStr`s just so it can convert them back into new
+//! `OsString`s. However, the fact that Linux *still* uses 32-bit off_t on
 //! 32-bit platforms and requires separate 64-suffixed functions and types to
 //! deal with that was sufficient inconvenience to use the API provided by
 //! Rust.

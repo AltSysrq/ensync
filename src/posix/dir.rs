@@ -20,7 +20,8 @@
 
 #![allow(dead_code)]
 
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::sync::{Arc,Mutex};
 
 use keccak::Keccak;
@@ -49,9 +50,9 @@ struct DirContentMut {
 #[derive(Debug)]
 struct DirContent {
     /// The fully-quallified path to this directory, including trailing slash.
-    path: CString,
+    path: OsString,
     /// The name of this directory within its parent.
-    name: CString,
+    name: OsString,
     /// If a parent directory handle exists, that parent. This is needed so
     /// that directories created implicitly via the synthdir mechanism
     /// correctly update the parent's hash.
@@ -68,7 +69,7 @@ struct DirContent {
 pub struct DirHandle(Arc<DirContent>);
 
 impl ReplicaDirectory for DirHandle {
-    fn full_path(&self) -> &CStr {
+    fn full_path(&self) -> &OsStr {
         &self.0.path
     }
 }
@@ -79,11 +80,13 @@ fn kc_update_mode(kc: &mut Keccak, mode: FileMode) {
                 (m >> 16) as u8, (m >> 24) as u8])
 }
 
+static NUL: &'static [u8] = &[0u8];
+
 impl DirHandle {
-    pub fn root(path: CString) -> Self {
+    pub fn root(path: OsString) -> Self {
         DirHandle(Arc::new(DirContent {
             path: path,
-            name: CString::new("").unwrap(),
+            name: OsString::new(),
             parent: None,
             mcontent: Mutex::new(DirContentMut {
                 synth_mode: None,
@@ -110,7 +113,8 @@ impl DirHandle {
     pub fn toggle_file(&self, file: &File) {
         let hash = {
             let mut kc = Keccak::new_sha3_256();
-            kc.update(file.0.to_bytes_with_nul());
+            kc.update(file.0.as_bytes());
+            kc.update(NUL);
             match *file.1 {
                 FileData::Regular(mode, _, _, ref h) => {
                     kc.update(&[0u8]);
@@ -123,7 +127,8 @@ impl DirHandle {
                 },
                 FileData::Symlink(ref target) => {
                     kc.update(&[2u8]);
-                    kc.update(target.to_bytes_with_nul());
+                    kc.update(target.as_bytes());
+                    kc.update(NUL);
                 },
                 FileData::Special => {
                     kc.update(&[3u8]);

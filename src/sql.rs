@@ -15,6 +15,15 @@
 
 //! Miscelaneous utilities for working with SQLite.
 
+// Because we need to be able to represent an `OsStr` as bytes in the database.
+// This does not actually depend on anything POSIX-specific; if you're porting
+// to non-POSIX, it might be worth trying to simply get the internal WTF-8
+// encoding out and store that rather than using different behaviours for
+// different platforms.
+use std::os::unix::ffi::OsStrExt;
+use std::ffi::{CString,OsStr,NulError};
+use std::result::Result as StdResult;
+
 use sqlite::*;
 
 /// Executes `f` within a transaction.
@@ -105,5 +114,36 @@ impl<'l> StatementEx for Result<Statement<'l>> {
         (self, f: F) -> Result<Option<R>>
     {
         self.and_then(|r| r.first(f))
+    }
+}
+
+/// Provides a conversion from `&[u8]` to `&OsStr` which checks for embedded
+/// NUL bytes (which aren't actually legal in any syscall, but nonetheless
+/// allowed in generic `OsStr`s).
+pub trait AsNStr {
+    fn as_nstr(&self) -> StdResult<&OsStr,NulError>;
+}
+
+impl AsNStr for [u8] {
+    fn as_nstr(&self) -> StdResult<&OsStr,NulError> {
+        if self.contains(&0u8) {
+            // There's no public API for constructing a `NulError`, so let
+            // `CString` do it for us.
+            Err(CString::new(self).err().unwrap())
+        } else {
+            Ok(OsStr::from_bytes(self))
+        }
+    }
+}
+
+/// Extension for `OsStr` which converts it into a byte sequence which
+/// `as_nstr()` can reverse.
+pub trait AsNBytes {
+    fn as_nbytes(&self) -> &[u8];
+}
+
+impl AsNBytes for OsStr {
+    fn as_nbytes(&self) -> &[u8] {
+        self.as_bytes()
     }
 }

@@ -14,7 +14,7 @@
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 use std::collections::BTreeMap;
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
 use std::result;
 
 use defs::*;
@@ -34,8 +34,8 @@ use super::context::*;
 /// directories if `old` is an existing directory and `new` is not.
 fn replace_ancestor<A : Replica + NullTransfer>(
     replica: &A, in_dir: &mut A::Directory,
-    files: &mut BTreeMap<CString,FileData>,
-    name: &CStr,
+    files: &mut BTreeMap<OsString,FileData>,
+    name: &OsStr,
     old: Option<&FileData>, new: Option<&FileData>)
     -> Result<()>
 {
@@ -111,8 +111,8 @@ impl<E> ResultToBoolExt for result::Result<(),E> {
 /// Returns whether successful.
 fn try_replace_ancestor<A : Replica + NullTransfer, LOG : Logger>(
     replica: &A, in_dir: &mut A::Directory,
-    files: &mut BTreeMap<CString,FileData>,
-    dir_name: &CStr, name: &CStr,
+    files: &mut BTreeMap<OsString,FileData>,
+    dir_name: &OsStr, name: &OsStr,
     old: Option<&FileData>, new: Option<&FileData>,
     log: &LOG) -> bool
 {
@@ -142,9 +142,9 @@ fn replace_replica<DST : Replica,
                    SRC : Replica<TransferOut = DST::TransferIn>,
                    LOG : Logger>(
     dst: &DST, dst_dir: &mut DST::Directory,
-    dst_files: &mut BTreeMap<CString,FileData>,
+    dst_files: &mut BTreeMap<OsString,FileData>,
     src: &SRC, src_dir: &SRC::Directory,
-    dir_name: &CStr, name: &CStr,
+    dir_name: &OsStr, name: &OsStr,
     old: Option<&FileData>, new: Option<&FileData>,
     log: &LOG, side: ReplicaSide)
     -> Result<Option<FileData>>
@@ -226,8 +226,8 @@ fn replace_replica<DST : Replica,
 /// Returns whether successful.
 fn try_rename_replica<A : Replica, LOG : Logger>(
     replica: &A, dir: &mut A::Directory,
-    files: &mut BTreeMap<CString,FileData>,
-    dir_name: &CStr, old_name: &CStr, new_name: &CStr,
+    files: &mut BTreeMap<OsString,FileData>,
+    dir_name: &OsStr, old_name: &OsStr, new_name: &OsStr,
     log: &LOG, side: ReplicaSide) -> bool
 {
     log.log(log::EDIT, &Log::Rename(
@@ -270,11 +270,11 @@ fn apply_use<DST : Replica,
              SRC : Replica<TransferOut = DST::TransferIn>,
              LOG : Logger>
     (dst: &DST, dst_dir: &mut DST::Directory,
-     dst_files: &mut BTreeMap<CString,FileData>,
+     dst_files: &mut BTreeMap<OsString,FileData>,
      anc: &ANC, anc_dir: &mut ANC::Directory,
-     anc_files: &mut BTreeMap<CString,FileData>,
+     anc_files: &mut BTreeMap<OsString,FileData>,
      src: &SRC, src_dir: &SRC::Directory,
-     dir_name: &CStr, name: &CStr,
+     dir_name: &OsStr, name: &OsStr,
      old_dst: Option<&FileData>, old_src: Option<&FileData>,
      log: &LOG, side: ReconciliationSide)
     -> result::Result<Option<Option<FileData>>, ApplyResult>
@@ -326,7 +326,7 @@ fn apply_use<DST : Replica,
 /// Errors are passed down the context's logger.
 pub fn apply_reconciliation<I : Interface>(
     i: &I, dir: &mut DirContext<I>,
-    dir_name: &CStr, name: &CStr,
+    dir_name: &OsStr, name: &OsStr,
     recon: Reconciliation,
     old_cli: Option<&FileData>, old_srv: Option<&FileData>)
     -> ApplyResult
@@ -489,10 +489,11 @@ pub fn apply_reconciliation<I : Interface>(
 #[cfg(test)]
 pub mod test {
     use std::collections::{BTreeMap,BinaryHeap};
-    use std::ffi::{CString,CStr};
+    use std::ffi::{OsString,OsStr};
     use std::io::Write;
 
     use defs::*;
+    use defs::test_helpers::*;
     use work_stack::WorkStack;
     use log::{PrintlnLogger,ReplicaSide,PrintWriter};
     use replica::{Replica,NullTransfer};
@@ -565,10 +566,6 @@ pub mod test {
         }
     }
 
-    pub fn oss(s: &str) -> CString {
-        CString::new(s).unwrap()
-    }
-
     pub fn replica() -> (MemoryReplica, DirHandle) {
         let mr = MemoryReplica::empty();
         let root = mr.root().unwrap();
@@ -600,8 +597,8 @@ pub mod test {
     }
 
     pub fn mkreg(replica: &mut MemoryReplica, dir: &mut DirHandle,
-                 files: &mut BTreeMap<CString,FileData>,
-                 name: &CStr) -> FileData {
+                 files: &mut BTreeMap<OsString,FileData>,
+                 name: &OsStr) -> FileData {
         let fd = genreg(replica);
         replica.create(dir, File(name, &fd), MemoryReplica::null_transfer(&fd))
             .unwrap();
@@ -610,8 +607,8 @@ pub mod test {
     }
 
     pub fn mksym(replica: &MemoryReplica, dir: &mut DirHandle,
-                 files: &mut BTreeMap<CString,FileData>,
-                 name: &CStr, target: &str) -> FileData {
+                 files: &mut BTreeMap<OsString,FileData>,
+                 name: &OsStr, target: &str) -> FileData {
         let fd = FileData::Symlink(oss(target));
         replica.create(dir, File(name, &fd), MemoryReplica::null_transfer(&fd))
             .unwrap();
@@ -620,8 +617,8 @@ pub mod test {
     }
 
     pub fn mkspec(replica: &MemoryReplica, dir: &mut DirHandle,
-                  files: &mut BTreeMap<CString,FileData>,
-                  name: &CStr) -> FileData {
+                  files: &mut BTreeMap<OsString,FileData>,
+                  name: &OsStr) -> FileData {
         let fd = FileData::Special;
         replica.create(dir, File(name, &fd), MemoryReplica::null_transfer(&fd))
             .unwrap();
@@ -630,8 +627,8 @@ pub mod test {
     }
 
     pub fn mkdir(replica: &MemoryReplica, dir: &mut DirHandle,
-                 files: &mut BTreeMap<CString,FileData>,
-                 name: &CStr, mode: FileMode) -> FileData {
+                 files: &mut BTreeMap<OsString,FileData>,
+                 name: &OsStr, mode: FileMode) -> FileData {
         let fd = FileData::Directory(mode);
         replica.create(dir, File(name, &fd),
                        MemoryReplica::null_transfer(&fd)).unwrap();

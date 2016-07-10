@@ -13,7 +13,7 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-use std::ffi::{CStr,CString};
+use std::ffi::{OsStr,OsString};
 
 /// Type for content hashes of regular files and for blob identifiers on the
 /// server.
@@ -46,7 +46,7 @@ pub enum FileData {
     /// for files freshly streamed off the client filesystem.
     Regular(FileMode, FileSize, FileTime, HashId),
     /// A symbolic link. The only data is its actual content.
-    Symlink(CString),
+    Symlink(OsString),
     /// Any other type of non-regular file.
     Special,
 }
@@ -99,7 +99,7 @@ impl FileData {
 
 /// Convenience for passing a file name and data together.
 #[derive(Clone,Debug,PartialEq,Eq)]
-pub struct File<'a> (pub &'a CStr, pub &'a FileData);
+pub struct File<'a> (pub &'a OsStr, pub &'a FileData);
 
 pub fn is_dir(fd: Option<&FileData>) -> bool {
     match fd {
@@ -110,18 +110,17 @@ pub fn is_dir(fd: Option<&FileData>) -> bool {
 
 #[cfg(test)]
 pub mod test_helpers {
-    use std::ffi::CString;
+    use std::ffi::{OsStr,OsString};
 
-    pub fn oss(s: &str) -> CString {
-        CString::new(s).unwrap()
+    pub fn oss(s: &str) -> OsString {
+        OsStr::new(s).to_owned()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::ffi::CString;
-
     use super::*;
+    use super::test_helpers::*;
 
     #[test]
     fn file_newer_than() {
@@ -142,9 +141,9 @@ mod test {
         let f4 = FileData::Regular(0o777, 0, 42, [1;32]);
         let d1 = FileData::Directory(0o777);
         let d2 = FileData::Directory(0o666);
-        let s1 = FileData::Symlink(CString::new("foo").unwrap());
-        let s2 = FileData::Symlink(CString::new("bar").unwrap());
-        let s3 = FileData::Symlink(CString::new("foo").unwrap());
+        let s1 = FileData::Symlink(oss("foo"));
+        let s2 = FileData::Symlink(oss("bar"));
+        let s3 = FileData::Symlink(oss("foo"));
         let special = FileData::Special;
 
         assert!(f1.matches(&f1));

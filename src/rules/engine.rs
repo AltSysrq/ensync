@@ -675,11 +675,10 @@ impl DirRulesBuilder for DirEngineBuilder {
 
 #[cfg(test)]
 mod test {
-    use std::ffi::CString;
-
     use toml;
 
     use defs::*;
+    use defs::test_helpers::*;
     use rules::defs::*;
     use super::*;
     use super::{Condition,Action,StopType};
@@ -950,10 +949,6 @@ switch = "a"
 
     fn engine(text: &str) -> DirEngine {
         FileEngine::new(parse_rules(text).unwrap()).subdir().build()
-    }
-
-    fn oss(s: &str) -> CString {
-        CString::new(s).unwrap()
     }
 
     fn regular(de: &DirEngine, name: &str, mode: FileMode,
