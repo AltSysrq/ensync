@@ -16,7 +16,6 @@
 use std::ffi::{CStr,CString,NulError};
 use std::path::Path;
 use std::result::Result as StdResult;
-use libc::ino_t;
 
 use sqlite::{self,Connection,State,Statement};
 
@@ -89,7 +88,7 @@ impl<'a> CleanDirs<'a> {
 /// The subset of `struct stat` that we actually care about here.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct InodeStatus {
-    pub ino: ino_t,
+    pub ino: FileInode,
     pub mtime: FileTime,
     pub size: FileSize,
 }

@@ -14,7 +14,6 @@
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 use std::ffi::{CStr,CString};
-use libc;
 
 /// Type for content hashes of regular files and for blob identifiers on the
 /// server.
@@ -28,12 +27,12 @@ pub type HashId = [u8;32];
 /// case.
 pub const UNKNOWN_HASH : HashId = [0;32];
 
-// Maybe someday we can move to rust's platform-independent stuff, but time
-// support is missing from 1.7.0 and the permissions model is sufficiently
-// awkward that it's not really comfortable to trust for file syncing.
-pub type FileMode = libc::mode_t;
-pub type FileSize = libc::off_t;
-pub type FileTime = libc::time_t;
+// These were originally defined to `mode_t`, `off_t`, `time_t`, and `ino_t`
+// when we planned to use the POSIX API directly.
+pub type FileMode = u32;
+pub type FileSize = u64;
+pub type FileTime = i64;
+pub type FileInode = u64;
 
 /// Shallow data about a file in the sync process, excluding its name.
 #[derive(Clone,Debug,PartialEq,Eq)]

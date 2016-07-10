@@ -15,7 +15,6 @@
 
 extern crate tiny_keccak as keccak;
 extern crate gpgme;
-extern crate libc;
 extern crate toml;
 extern crate regex;
 extern crate sqlite;

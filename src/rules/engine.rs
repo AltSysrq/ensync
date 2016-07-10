@@ -449,7 +449,7 @@ fn parse_file_size(val: &toml::Value, loc: ErrorLocation)
                    -> Result<FileSize> {
     if let Some(i) = val.as_integer() {
         if i >= 0 && i == (i as FileSize as i64) {
-            Ok(i)
+            Ok(i as FileSize)
         } else {
             Err(Error::FileSizeOutOfRange(loc, i))
         }
