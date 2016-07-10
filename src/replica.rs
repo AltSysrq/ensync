@@ -166,6 +166,13 @@ pub trait Replica {
     fn transfer(&self, &Self::Directory, file: File)
                 -> Self::TransferOut;
 
+    /// Performs any initial setup of this replica.
+    ///
+    /// This is generally a scan for dirty directories, sanity checks, etc.
+    ///
+    /// The default is a noop.
+    fn prepare(&self) -> Result<()> { Ok(()) }
+
     /// Performs any final cleanup on this replica.
     ///
     /// This should not affect the actual content of the replica; instead, it

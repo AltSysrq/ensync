@@ -46,3 +46,8 @@
 //! Rust.
 
 mod dao;
+mod dir;
+mod replica;
+
+pub use self::dir::DirHandle;
+pub use self::replica::PosixReplica;
