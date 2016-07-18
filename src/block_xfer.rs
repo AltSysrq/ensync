@@ -257,6 +257,8 @@ pub trait StreamSource : io::Read {
 pub struct ContentAddressableSource {
     /// The block list of the file being transferred.
     pub blocks: BlockList,
+    /// The block size used for this object
+    pub block_size: usize,
     /// Object from which to read actual block content.
     pub fetch: Arc<BlockFetch>,
 }

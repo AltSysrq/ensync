@@ -52,6 +52,16 @@ pub enum FileData {
 }
 
 impl FileData {
+    /// Returns whether this `FileData` is a directory.
+    pub fn is_dir(&self) -> bool {
+        match *self {
+            FileData::Directory(_) => true,
+            _ => false,
+        }
+    }
+}
+
+impl FileData {
     /// Returns whether both `self` and `other` are regular files and `self`'s
     /// modification time is greater than `other`'s.
     pub fn newer_than(&self, other: &Self) -> bool {
@@ -98,7 +108,7 @@ impl FileData {
 }
 
 /// Convenience for passing a file name and data together.
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct File<'a> (pub &'a OsStr, pub &'a FileData);
 
 pub fn is_dir(fd: Option<&FileData>) -> bool {

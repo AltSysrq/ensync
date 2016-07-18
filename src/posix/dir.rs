@@ -65,6 +65,10 @@ struct DirContent {
 ///
 /// Note that this does not involve an actual native file descriptor or other
 /// kernel handle.
+///
+/// The full path of a directory handle always includes a trailing slash, so it
+/// can be used directly with the DAO methods and child paths can be created by
+/// simply appending the base name of the child to that of the directory.
 #[derive(Debug,Clone)]
 pub struct DirHandle(Arc<DirContent>);
 
@@ -81,18 +85,43 @@ fn kc_update_mode(kc: &mut Keccak, mode: FileMode) {
 }
 
 static NUL: &'static [u8] = &[0u8];
+const INIT_HASH: HashId = [0;32];
 
 impl DirHandle {
-    pub fn root(path: OsString) -> Self {
+    pub fn root(mut path: OsString) -> Self {
+        // If not /-terminated, add a trailing slash
+        if path.as_bytes().last().map_or(true, |c| b'/' != *c) {
+            path.push("/");
+        }
+
         DirHandle(Arc::new(DirContent {
             path: path,
             name: OsString::new(),
             parent: None,
             mcontent: Mutex::new(DirContentMut {
                 synth_mode: None,
-                hash: [0;32],
+                hash: INIT_HASH,
             }),
         }))
+    }
+
+    pub fn subdir(&self, name: &OsStr, synth: Option<FileMode>)
+                  -> DirHandle {
+        let mut path = self.child(name);
+        path.push("/");
+        DirHandle(Arc::new(DirContent {
+            path: path,
+            name: name.to_owned(),
+            parent: Some(self.clone()),
+            mcontent: Mutex::new(DirContentMut {
+                synth_mode: synth,
+                hash: INIT_HASH,
+            }),
+        }))
+    }
+
+    pub fn name(&self) -> &OsStr {
+        &self.0.name
     }
 
     pub fn hash(&self) -> HashId {
@@ -101,7 +130,19 @@ impl DirHandle {
 
     /// Resets the hash of this directory to the hash of the empty directory.
     pub fn reset_hash(&self) {
-        self.0.mcontent.lock().unwrap().hash = [0;32]
+        self.0.mcontent.lock().unwrap().hash = INIT_HASH
+    }
+
+    /// Returns the full path to the child file of the given name within this
+    /// directory.
+    pub fn child(&self, sub: &OsStr) -> OsString {
+        let mut ret = self.full_path().to_owned();
+        ret.push(sub);
+        ret
+    }
+
+    pub fn parent(&self) -> Option<&DirHandle> {
+        self.0.parent.as_ref()
     }
 
     /// Updates the hash of this directory to account for the presence or
@@ -110,7 +151,7 @@ impl DirHandle {
     /// If `file` has not yet been accumulated to the hash, the hash is updated
     /// to reflect a directory containing `file`. Otherwise, the hash is
     /// updated to reflect a directory not containing `file`.
-    pub fn toggle_file(&self, file: &File) {
+    pub fn toggle_file(&self, file: File) {
         let hash = {
             let mut kc = Keccak::new_sha3_256();
             kc.update(file.0.as_bytes());
