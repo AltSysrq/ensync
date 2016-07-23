@@ -481,6 +481,7 @@ mod test {
     use std::ffi::OsStr;
     use std::io::Write;
     use std::iter::Iterator;
+    use std::panic::{self,AssertUnwindSafe};
     use std::sync::Arc;
     use std::sync::atomic::Ordering::SeqCst;
 
@@ -1042,13 +1043,12 @@ mod test {
         return true;
     }
 
-    fn run_test<F : 'static + Send + FnOnce (Vec<En>, SyncMode,
-                                             &mut Write) -> bool>(
+    fn run_test<F : 'static + Send +
+                FnOnce (Vec<En>, SyncMode, &mut Write) -> bool>(
         fs: Vec<En>, mode: SyncMode, f: F) -> TestResult
     {
         use std::io;
         use std::sync::{Arc,Mutex};
-        use std::thread::spawn;
 
         if !names_unique(&fs) {
             return TestResult::discard();
@@ -1061,12 +1061,11 @@ mod test {
         let stdout = Arc::new(Mutex::new(Vec::<u8>::new()));
         let stdout2 = stdout.clone();
 
-        // Run the task on its own thread to isolate panics
-        let res = spawn(move || {
+        let res = panic::catch_unwind(AssertUnwindSafe(move || {
             let  writer : &mut Write = &mut &mut *stdout2.lock().unwrap();
             writeln!(writer, "\n\n---\nTesting: {} {:?}", mode, fs).unwrap();
             f(fs, mode, writer)
-        }).join();
+        }));
 
         // Extricate the output, even if the task died
         let output = match stdout.lock() {
