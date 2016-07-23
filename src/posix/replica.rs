@@ -30,7 +30,7 @@ use defs::*;
 use replica::*;
 use block_xfer::{BlockList,StreamSource,ContentAddressableSource,BlockFetch};
 use block_xfer::{blocks_to_stream,hash_block,stream_to_blocks};
-use super::dao::{self,Dao,InodeStatus};
+use super::dao::{Dao,InodeStatus};
 use super::dir::*;
 
 quick_error! {
@@ -204,9 +204,7 @@ impl Replica for PosixReplica {
         if let FileData::Directory(_) = *target.1 {
             try!(fs::remove_dir(&path));
         } else {
-            // TODO Should rename into a scratch file if this is a regular
-            // file, so that renames are handled efficiently.
-            try!(fs::remove_file(&path));
+            try!(self.hide_file(&path));
         }
 
         let _ = self.dao.lock().unwrap().delete_cache(&path);
@@ -293,9 +291,7 @@ impl Replica for PosixReplica {
         }));
 
         if let Some(shunted) = shunted_name {
-            // TODO: Move to scratch location
-            try!(fs::remove_file(&shunted));
-            let _ = self.dao.lock().unwrap().delete_cache(&shunted);
+            try!(self.hide_file(&shunted));
         }
 
         dir.toggle_file(File(name, old));
@@ -350,11 +346,45 @@ impl Replica for PosixReplica {
     }
 
     fn prepare(&self) -> Result<()> {
-        unimplemented!()
+        // Reclaim any files left over from a crashed run
+        try!(self.clean_scratch());
+
+        // Walk all directories marked clean and check whether they are still
+        // clean.
+        let dao = self.dao.lock().unwrap();
+        for clean_dir in try!(dao.iter_clean_dirs()) {
+            let (path, expected_hash) = try!(clean_dir);
+            let dir = DirHandle::root(path);
+
+            for entry in try!(fs::read_dir(dir.full_path())) {
+                let entry = try!(entry);
+
+                let name = entry.file_name();
+                if OsStr::new(".") == &name ||
+                    OsStr::new("..") == &name
+                {
+                    continue;
+                }
+
+                let fd = try!(metadata_to_fd(
+                    entry.path().as_os_str(), &try!(entry.metadata()),
+                    &*dao, false, &*self.config));
+                dir.toggle_file(File(&name, &fd));
+            }
+
+            if expected_hash != dir.hash() {
+                try!(dao.set_dir_dirty(dir.full_path()));
+            }
+        }
+
+        Ok(())
     }
 
     fn clean_up(&self) -> Result<()> {
-        unimplemented!()
+        try!(self.clean_scratch());
+        let _ = self.dao.lock().unwrap().prune_hash_cache(
+            &self.config.root, self.config.cache_generation);
+        Ok(())
     }
 }
 
@@ -492,6 +522,17 @@ impl PosixReplica {
                 }
             },
         }
+    }
+
+    /// Moves the file at `old_path` to a scratch location, so that it will be
+    /// absent from its current location and scheduled for deletion, while
+    /// still available in the block cache for efficient renames.
+    fn hide_file(&self, old_path: &OsStr) -> Result<()> {
+        let (_, new_path) = try!(self.scratch_regular(0o600));
+        try!(fs::rename(old_path, &new_path));
+        let _ = self.dao.lock().unwrap().rename_cache(
+            &old_path, &new_path);
+        Ok(())
     }
 
     /// Transfers the file described by `xfer` into `dst`.
@@ -645,6 +686,22 @@ impl PosixReplica {
         } else {
             Ok(())
         }
+    }
+
+    /// Removes all scratch files in the private directory.
+    fn clean_scratch(&self) -> Result<()> {
+        for file in try!(fs::read_dir(&self.config.private_dir)) {
+            let file = try!(file);
+            if file.file_name().to_str().map_or(
+                false, |name| name.starts_with("scratch"))
+            {
+                let path = file.path();
+                let _ = fs::remove_file(&path);
+                let _ = self.dao.lock().unwrap()
+                    .delete_cache(path.as_os_str());
+            }
+        }
+        Ok(())
     }
 }
 
