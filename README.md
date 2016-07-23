@@ -322,6 +322,6 @@ content of the directory may propagate as a regular file instead.
 Building from Source
 --------------------
 
-Install Rust 1.9.0 and Cargo 0.9.0 or later (https://www.rust-lang.org/).
+Install Rust 1.10 and Cargo 0.9.0 or later (https://www.rust-lang.org/).
 
 Install `gpgme` and sqlite, eg, `pkg install gpgme sqlite3` as root.
