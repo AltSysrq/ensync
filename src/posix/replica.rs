@@ -13,8 +13,6 @@
 // OF  CONTRACT, NEGLIGENCE  OR OTHER  TORTIOUS ACTION,  ARISING OUT  OF OR  IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#![allow(dead_code)]
-
 use std::ffi::{OsStr,OsString};
 use std::fs;
 use std::io::{self,Read,Seek,Write};
@@ -86,12 +84,12 @@ fn metadata_to_fd(path: &OsStr, md: &fs::Metadata,
                   -> Result<FileData> {
     let typ = md.file_type();
     if typ.is_dir() {
-        Ok(FileData::Directory(md.mode()))
+        Ok(FileData::Directory(md.mode() & 0o7777))
     } else if typ.is_symlink() {
         let target = try!(fs::read_link(path)).into_os_string();
         Ok(FileData::Symlink(target))
     } else if typ.is_file() {
-        let mode = md.mode();
+        let mode = md.mode() & 0o7777;
         let mtime = md.mtime();
         let ino = md.ino();
         let size = md.size();
@@ -121,12 +119,15 @@ fn get_or_compute_hash(path: &OsStr, dao: &Dao, stat: &InodeStatus,
     let blocklist = try!(stream_to_blocks(
         try!(fs::File::open(path)), config.block_size, &config.hmac_secret[..],
         |_,_| Ok(())));
+    let _ = dao.cache_file_hashes(
+        path, &blocklist.total, &blocklist.blocks[..],
+        config.block_size, stat, config.cache_generation);
     Ok(blocklist.total)
 }
 
 impl Replica for PosixReplica {
     type Directory = DirHandle;
-    type TransferIn = Option<Box<ContentAddressableSource>>;
+    type TransferIn = Option<ContentAddressableSource>;
     type TransferOut = Option<Box<StreamSource>>;
 
     fn is_dir_dirty(&self, dir: &DirHandle) -> bool {
@@ -201,11 +202,7 @@ impl Replica for PosixReplica {
         let path = dir.child(target.0);
         try!(self.check_matches(&path, target.1));
 
-        if let FileData::Directory(_) = *target.1 {
-            try!(fs::remove_dir(&path));
-        } else {
-            try!(self.hide_file(&path));
-        }
+        try!(self.remove_general(&path, target.1));
 
         let _ = self.dao.lock().unwrap().delete_cache(&path);
         dir.toggle_file(target);
@@ -214,7 +211,7 @@ impl Replica for PosixReplica {
     }
 
     fn create(&self, dir: &mut DirHandle, source: File,
-              xfer: Option<Box<ContentAddressableSource>>)
+              xfer: Option<ContentAddressableSource>)
               -> Result<FileData> {
         let path = dir.child(source.0);
         let ret = try!(self.put_file(dir, source, xfer, || {
@@ -236,7 +233,7 @@ impl Replica for PosixReplica {
 
     fn update(&self, dir: &mut DirHandle, name: &OsStr,
               old: &FileData, new: &FileData,
-              xfer: Option<Box<ContentAddressableSource>>)
+              xfer: Option<ContentAddressableSource>)
               -> Result<FileData> {
         let path = dir.child(name);
 
@@ -291,7 +288,7 @@ impl Replica for PosixReplica {
         }));
 
         if let Some(shunted) = shunted_name {
-            try!(self.hide_file(&shunted));
+            try!(self.remove_general(&shunted, old));
         }
 
         dir.toggle_file(File(name, old));
@@ -304,6 +301,7 @@ impl Replica for PosixReplica {
              -> Result<DirHandle> {
         let path = dir.child(subdir);
         let md = try!(fs::symlink_metadata(&path));
+        // TODO: Check for xdev
         if !md.file_type().is_dir() {
             Err(Error::NotADir.into())
         } else {
@@ -323,7 +321,7 @@ impl Replica for PosixReplica {
         let path = dir.child(subdir.name());
         let md = try!(fs::symlink_metadata(&path));
         try!(fs::remove_dir(&path));
-        dir.toggle_file(File(&path, &FileData::Directory(md.mode())));
+        dir.toggle_file(File(&path, &FileData::Directory(md.mode() & 0o7777)));
         Ok(())
     }
 
@@ -389,6 +387,34 @@ impl Replica for PosixReplica {
 }
 
 impl PosixReplica {
+    /// Creates a new POSIX replica.
+    ///
+    /// `root` is the root directory for syncing purposes. `private_dir` is the
+    /// already-existing directory created for use by the replica.
+    /// `hmac_secret` and `block_size` specify the secret and size for block
+    /// hashing.
+    pub fn new(root: &str, private_dir: &str,
+               hmac_secret: &[u8], block_size: usize)
+               -> Result<Self> {
+        let dao = try!(Dao::open(&format!("{}/db.sqlite", private_dir)));
+        let cache_generation = try!(dao.next_generation());
+        let root_dev = try!(fs::symlink_metadata(root)).dev();
+        // TODO: Check that private dir is on same device as root
+
+        Ok(PosixReplica {
+            config: Arc::new(Config {
+                hmac_secret: hmac_secret.to_vec(),
+                root: root.into(),
+                private_dir: private_dir.into(),
+                block_size: block_size,
+                cache_generation: cache_generation,
+                root_dev: root_dev,
+            }),
+            dao: Arc::new(Mutex::new(dao)),
+            tmpix: AtomicUsize::new(0),
+        })
+    }
+
     /// Atomically creates a new "scratch" file within the replica's private
     /// directory.
     ///
@@ -409,7 +435,7 @@ impl PosixReplica {
     {
         loop {
             let ix = self.tmpix.fetch_add(1, Ordering::SeqCst);
-            let mut path: PathBuf = self.config.root.clone().into();
+            let mut path: PathBuf = self.config.private_dir.clone().into();
             path.push(format!("scratch-{}", ix));
 
             match create(&path) {
@@ -473,7 +499,7 @@ impl PosixReplica {
     /// things such as moving a directory to be replaced out of the way.
     fn put_file<F : FnOnce () -> Result<()>>(
         &self, dir: &mut DirHandle, source: File,
-        xfer: Option<Box<ContentAddressableSource>>,
+        xfer: Option<ContentAddressableSource>,
         before_establish: F)
         -> Result<FileData>
     {
@@ -502,7 +528,7 @@ impl PosixReplica {
                     try!(self.scratch_regular(mode));
                 if let Some(xfer) = xfer {
                     // Copy the file to the local filesystem
-                    try!(self.xfer_file(&mut scratch_file, &*xfer));
+                    try!(self.xfer_file(&mut scratch_file, &xfer));
                     // Move anything out of the way as needed
                     try!(before_establish());
                     let new_path = dir.child(source.0);
@@ -521,6 +547,15 @@ impl PosixReplica {
                     Err(Error::MissingXfer.into())
                 }
             },
+        }
+    }
+
+    /// Removes the file at `path` with data `fd` in the most appropriate way.
+    fn remove_general(&self, path: &OsStr, fd: &FileData) -> Result<()> {
+        match *fd {
+            FileData::Regular(..) => self.hide_file(path),
+            FileData::Directory(..) => Ok(try!(fs::remove_dir(path))),
+            _ => Ok(try!(fs::remove_file(path))),
         }
     }
 
@@ -629,7 +664,7 @@ impl PosixReplica {
     /// Otherwise, a `Vec` of the data corresponding to `hash` is returned.
     fn fetch_block_local(&self, hash: &HashId) -> Option<Vec<u8>> {
         // See if we know about any blocks with this hash
-        if let Ok(Some((path, off, len))) = self.dao.lock().unwrap()
+        if let Ok(Some((path, bs, off))) = self.dao.lock().unwrap()
             .find_block_with_hash(hash)
         {
             // Looks like we know about one. Try to read the block in. Quietly
@@ -637,8 +672,8 @@ impl PosixReplica {
             // match `hash`.
             let mut data: Vec<u8> = Vec::new();
             let _ = fs::File::open(&path).and_then(|mut src| {
-                try!(src.seek(io::SeekFrom::Start(off as u64)));
-                try!(src.take(len as u64).read_to_end(&mut data));
+                try!(src.seek(io::SeekFrom::Start((off * bs) as u64)));
+                try!(src.take(bs as u64).read_to_end(&mut data));
                 Ok(())
             });
 
@@ -759,5 +794,651 @@ impl StreamSource for FileStreamSource {
             self.mode, 0, 0, blocks.total)));
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+    use std::ffi::CString;
+    use std::fs;
+    use std::io::{self,Read,Write};
+    use std::os::unix;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::path::Path;
+    use std::sync::Arc;
+    use libc;
+
+    use tempdir::TempDir;
+
+    use defs::*;
+    use defs::test_helpers::*;
+    use replica::*;
+    use block_xfer;
+    use super::*;
+
+    static SECRET: &'static str = "secret";
+    const BLOCK_SZ: usize = 4;
+
+    pub fn new_simple() -> (TempDir,TempDir,PosixReplica) {
+        let root = TempDir::new("posix-root").unwrap();
+        let private = TempDir::new("posix-private").unwrap();
+        let replica = PosixReplica::new(
+            root.path().to_str().unwrap(),
+            private.path().to_str().unwrap(),
+            SECRET.as_bytes(), BLOCK_SZ).unwrap();
+
+        (root, private, replica)
+    }
+
+    fn spit<P : AsRef<Path>>(path: P, text: &str) {
+        let mut out = fs::File::create(path).unwrap();
+        out.write_all(text.as_bytes()).unwrap();
+    }
+
+    fn slurp<P : AsRef<Path>>(path: P) -> String {
+        let mut inf = fs::File::open(path).unwrap();
+        let mut ret = String::new();
+        inf.read_to_string(&mut ret).unwrap();
+        ret
+    }
+
+    struct MemoryBlockFetch {
+        blocks: HashMap<HashId,Vec<u8>>,
+    }
+
+    impl block_xfer::BlockFetch for MemoryBlockFetch {
+        fn fetch(&self, block: &HashId) -> io::Result<Box<Read>> {
+            Ok(Box::new(io::Cursor::new(
+                self.blocks.get(block).expect("Unexpected block fetched")
+                    .clone())))
+        }
+    }
+
+    fn make_ca_source(text: &str) -> block_xfer::ContentAddressableSource {
+        let mut blocks = HashMap::new();
+        let bl = block_xfer::stream_to_blocks(&mut text.as_bytes(), BLOCK_SZ,
+                                              SECRET.as_bytes(), |hash, data| {
+            blocks.insert(*hash, data.to_vec());
+            Ok(())
+        }).unwrap();
+
+        block_xfer::ContentAddressableSource {
+            blocks: bl,
+            block_size: BLOCK_SZ,
+            fetch: Arc::new(MemoryBlockFetch {
+                blocks: blocks,
+            })
+        }
+    }
+
+    fn make_ca_empty_source(text: &str)
+                            -> block_xfer::ContentAddressableSource {
+        let mut xfer = make_ca_source(text);
+        xfer.fetch = Arc::new(MemoryBlockFetch {
+            blocks: HashMap::new(),
+        });
+        xfer
+    }
+
+    #[test]
+    fn trivial() {
+        let (_root, _private, replica) = new_simple();
+        replica.prepare().unwrap();
+        replica.clean_up().unwrap();
+    }
+
+    #[test]
+    fn list_and_transfer_out_regular_file() {
+        let (root, _private, replica) = new_simple();
+        spit(root.path().join("foo"), "hello world");
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(oss("foo"), list[0].0);
+
+        if let FileData::Regular(mode, size, _, hash) = list[0].1 {
+            assert_eq!(0o644, mode);
+            assert_eq!("hello world".as_bytes().len() as FileSize, size);
+            assert_eq!(block_xfer::stream_to_blocks(
+                "hello world".as_bytes(), BLOCK_SZ, SECRET.as_bytes(),
+                |_, _| Ok(())).unwrap().total, hash);
+        } else {
+            panic!("Unexpected file returned: {:?}", list[0].1);
+        }
+    }
+
+    #[test]
+    fn list_non_regular_files() {
+        let (root, _private, replica) = new_simple();
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("dir")).unwrap();
+        unix::fs::symlink("target", root.path().join("sym")).unwrap();
+        unsafe {
+            assert_eq!(0, libc::mkfifo(
+                CString::new(root.path().join("fifo").to_str().unwrap())
+                    .unwrap().as_ptr(), 0o000));
+        }
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(3, list.len());
+        for (name, fd) in list {
+            if oss("dir") == name {
+                assert_eq!(FileData::Directory(0o700), fd);
+            } else if oss("sym") == name {
+                assert_eq!(FileData::Symlink(oss("target")), fd);
+            } else if oss("fifo") == name {
+                assert_eq!(FileData::Special, fd);
+            } else {
+                panic!("Unexpected filename: {:?}", name);
+            }
+        }
+    }
+
+    #[test]
+    fn create_regular_file_via_xfer() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        let xfer = make_ca_source("Three pounds of VAX!");
+        replica.create(&mut dir, File(
+            &oss("vax"), &FileData::Regular(
+                0o600, 0, 0, xfer.blocks.total)),
+            Some(xfer)).unwrap();
+
+        assert_eq!("Three pounds of VAX!",
+                   &slurp(root.path().join("vax")));
+        assert_eq!(0o600, fs::symlink_metadata(root.path().join("vax"))
+                   .unwrap().mode() & 0o7777);
+    }
+
+    #[test]
+    fn create_directory() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+        replica.create(&mut dir, File(&oss("d"), &FileData::Directory(0o700)),
+                       None).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("d")).unwrap();
+        assert!(md.is_dir());
+        assert_eq!(0o700, md.mode() & 0o7777);
+    }
+
+    #[test]
+    fn create_symlink() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+        replica.create(&mut dir, File(&oss("sym"),
+                                      &FileData::Symlink(oss("plugh"))),
+                       None).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("sym")).unwrap();
+        assert!(md.file_type().is_symlink());
+        assert_eq!(oss("plugh"), fs::read_link(root.path().join("sym"))
+                   .unwrap().into_os_string());
+    }
+
+    #[test]
+    fn create_fails_if_alread_exists() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+        let _ = replica.list(&mut dir).unwrap();
+
+        spit(root.path().join("foo"), "exists");
+
+        assert!(replica.create(&mut dir, File(&oss("foo"),
+                                              &FileData::Directory(0o700)),
+                               None).is_err());
+    }
+
+    #[test]
+    fn replace_file_with_file() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "Three pounds of VAX");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        let xfer = make_ca_source("Three pounds of flax");
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1,
+                       &FileData::Regular(
+                           0o611, 0, 0, xfer.blocks.total),
+                       Some(xfer)).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert_eq!(0o611, md.mode() & 0o7777);
+        assert_eq!("Three pounds of flax", slurp(root.path().join("foo")));
+    }
+
+    #[test]
+    fn chmod_file() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "Three pounds of VAX");
+        let old_ino = fs::symlink_metadata(root.path().join("foo"))
+            .unwrap().ino();
+
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        let new_fd = if let FileData::Regular(_, _, _, hash) = list[0].1 {
+            FileData::Regular(0o611, 0, 0, hash)
+        } else {
+            panic!("Unexpected file data: {:?}", list[0].1);
+        };
+
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1, &new_fd, None).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert_eq!(0o611, md.mode() & 0o7777);
+        assert_eq!("Three pounds of VAX", slurp(root.path().join("foo")));
+        assert_eq!(old_ino, md.ino());
+    }
+
+    #[test]
+    fn replace_file_with_dir() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "foo");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1, &FileData::Directory(0o711), None)
+            .unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert!(md.file_type().is_dir());
+        assert_eq!(0o711, md.mode() & 0o7777);
+    }
+
+    #[test]
+    fn replace_file_with_symlink() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "foo");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1, &FileData::Symlink(oss("plugh")), None)
+            .unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert!(md.file_type().is_symlink());
+        assert_eq!(oss("plugh"), fs::read_link(root.path().join("foo"))
+                   .unwrap().into_os_string());
+    }
+
+    #[test]
+    fn replace_dir_with_file() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        let xfer = make_ca_source("Three pounds of flax");
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1,
+                       &FileData::Regular(
+                           0o611, 0, 0, xfer.blocks.total),
+                       Some(xfer)).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert_eq!(0o611, md.mode() & 0o7777);
+        assert_eq!("Three pounds of flax", slurp(root.path().join("foo")));
+    }
+
+    #[test]
+    fn chmod_dir() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1,
+                       &FileData::Directory(0o711),
+                       None).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert!(md.is_dir());
+        assert_eq!(0o711, md.mode() & 0o7777);
+    }
+
+    #[test]
+    fn replace_dir_with_symlink() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1,
+                       &FileData::Symlink(oss("plugh")),
+                       None).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert!(md.file_type().is_symlink());
+        assert_eq!(oss("plugh"), fs::read_link(root.path().join("foo"))
+                   .unwrap().into_os_string());
+    }
+
+    #[test]
+    fn replace_symlink_with_file() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        let xfer = make_ca_source("Three pounds of flax");
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1,
+                       &FileData::Regular(
+                           0o611, 0, 0, xfer.blocks.total),
+                       Some(xfer)).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert_eq!(0o611, md.mode() & 0o7777);
+        assert_eq!("Three pounds of flax", slurp(root.path().join("foo")));
+    }
+
+    #[test]
+    fn replace_symlink_with_dir() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1,
+                       &FileData::Directory(0o711),
+                       None).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert!(md.is_dir());
+        assert_eq!(0o711, md.mode() & 0o7777);
+    }
+
+    #[test]
+    fn replace_symlink_with_symlink() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.update(&mut dir, &oss("foo"),
+                       &list[0].1,
+                       &FileData::Symlink(oss("xyzzy")),
+                       None).unwrap();
+
+        let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
+        assert!(md.file_type().is_symlink());
+        assert_eq!(oss("xyzzy"), fs::read_link(root.path().join("foo"))
+                   .unwrap().into_os_string());
+    }
+
+    #[test]
+    fn replace_fails_if_not_matched() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "foo");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        // Given how fast this test is, it is possible that changing to "bar"
+        // wouldn't be detected, since the mtime could be the same and the file
+        // size and inode would not change.
+        spit(root.path().join("foo"), "quux");
+
+        assert!(replica.update(&mut dir, &oss("foo"),
+                               &list[0].1,
+                               &FileData::Directory(0o700),
+                               None)
+                .is_err());
+
+        assert_eq!("quux", &slurp(root.path().join("foo")));
+    }
+
+    #[test]
+    fn remove_file() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "content");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+            .unwrap();
+
+        assert!(fs::symlink_metadata(root.path().join("foo"))
+                .is_err());
+    }
+
+    #[test]
+    fn remove_dir() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+            .unwrap();
+
+        assert!(fs::symlink_metadata(root.path().join("foo"))
+                .is_err());
+    }
+
+    #[test]
+    fn remove_symlink() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+            .unwrap();
+
+        assert!(fs::symlink_metadata(root.path().join("foo"))
+                .is_err());
+    }
+
+    #[test]
+    fn remove_fails_if_not_matched() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "content");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        // Again, we need a length change to ensure the change is detected due
+        // to how fast this test executes.
+        spit(root.path().join("foo"), "new-content");
+
+        assert!(replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+                .is_err());
+        assert_eq!("new-content", &slurp(root.path().join("foo")));
+    }
+
+    #[test]
+    fn file_copies_optimised() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "Three pounds of VAX");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        let xfer = make_ca_empty_source("Three pounds of VAX");
+        replica.create(&mut dir, File(&oss("bar"), &list[0].1),
+                       Some(xfer))
+            .unwrap();
+
+        assert_eq!("Three pounds of VAX", &slurp(root.path().join("bar")));
+    }
+
+    #[test]
+    fn file_block_copies_optimised() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("race"), "racecars");
+        spit(root.path().join("ways"), "pathways");
+        let _ = replica.list(&mut dir).unwrap();
+
+        let xfer = make_ca_empty_source("raceways");
+        replica.create(
+            &mut dir, File(
+                &oss("raceways"),
+                &FileData::Regular(
+                    0o600, 8, 0, make_ca_source("raceways")
+                        .blocks.total)),
+            Some(xfer)).unwrap();
+
+        assert_eq!("raceways", &slurp(root.path().join("raceways")));
+    }
+
+    #[test]
+    fn delete_create_renames_optimised() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "Three pounds of VAX");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+            .unwrap();
+
+        let xfer = make_ca_empty_source("Three pounds of VAX");
+        replica.create(&mut dir, File(&oss("bar"), &list[0].1),
+                       Some(xfer)).unwrap();
+
+        assert_eq!("Three pounds of VAX", &slurp(root.path().join("bar")));
+    }
+
+    #[test]
+    fn file_copy_optimisation_handles_corruption() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("foo"), "Three pounds of VAX");
+        let list = replica.list(&mut dir).unwrap();
+        assert_eq!(1, list.len());
+
+        // Concurrent modification that won't be reflected in the hash cache
+        spit(root.path().join("foo"), "Three kilos of flax");
+
+        let xfer = make_ca_source("Three pounds of VAX");
+        replica.create(&mut dir, File(&oss("bar"), &list[0].1),
+                       Some(xfer))
+            .unwrap();
+
+        assert_eq!("Three pounds of VAX", &slurp(root.path().join("bar")));
+    }
+
+    #[test]
+    fn block_copy_optimisation_handles_corruption() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        spit(root.path().join("race"), "racecars");
+        spit(root.path().join("ways"), "pathways");
+        let _ = replica.list(&mut dir).unwrap();
+
+        spit(root.path().join("race"), "RACECARS");
+        spit(root.path().join("ways"), "PATHWAYS");
+
+        let xfer = make_ca_source("raceways");
+        replica.create(
+            &mut dir, File(
+                &oss("raceways"),
+                &FileData::Regular(
+                    0o600, 8, 0, make_ca_source("raceways")
+                        .blocks.total)),
+            Some(xfer)).unwrap();
+
+        assert_eq!("raceways", &slurp(root.path().join("raceways")));
     }
 }

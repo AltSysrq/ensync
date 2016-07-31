@@ -22,6 +22,8 @@ extern crate sqlite;
 
 #[cfg(test)] extern crate quickcheck;
 #[cfg(test)] extern crate rand;
+#[cfg(test)] extern crate tempdir;
+#[cfg(test)] extern crate libc;
 
 mod defs;
 mod work_stack;
