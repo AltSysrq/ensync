@@ -612,9 +612,8 @@ impl PosixReplica {
     /// matching `hash`.
     fn copy_file_local(&self, dst: &mut fs::File, hash: &HashId,
                        block_size: usize) -> bool {
-        if let Ok(Some(srcname)) =
-            self.dao.lock().unwrap().find_file_with_hash(hash)
-        {
+        let srcname = self.dao.lock().unwrap().find_file_with_hash(hash);
+        if let Ok(Some(srcname)) = srcname {
             // We think srcname has content equal to `hash`. Copy it to `dst`
             // while calculating the real hash at the same time.
             //
@@ -664,9 +663,9 @@ impl PosixReplica {
     /// Otherwise, a `Vec` of the data corresponding to `hash` is returned.
     fn fetch_block_local(&self, hash: &HashId) -> Option<Vec<u8>> {
         // See if we know about any blocks with this hash
-        if let Ok(Some((path, bs, off))) = self.dao.lock().unwrap()
-            .find_block_with_hash(hash)
-        {
+        let pbo = self.dao.lock().unwrap()
+            .find_block_with_hash(hash);
+        if let Ok(Some((path, bs, off))) = pbo {
             // Looks like we know about one. Try to read the block in. Quietly
             // drop errors; if anything fails, the hash of `data` will not
             // match `hash`.
