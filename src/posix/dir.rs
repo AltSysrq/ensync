@@ -145,6 +145,11 @@ impl DirHandle {
         self.0.parent.as_ref()
     }
 
+    pub fn is_synth(&self) -> bool {
+        let locked = self.0.mcontent.lock().unwrap();
+        locked.synth_mode.is_some()
+    }
+
     /// Updates the hash of this directory to account for the presence or
     /// absence of the given file.
     ///

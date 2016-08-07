@@ -149,7 +149,21 @@ impl Replica for PosixReplica {
         let mut ret = Vec::new();
 
         dir.reset_hash();
-        for entry in try!(fs::read_dir(dir.full_path())) {
+        let read_result = fs::read_dir(dir.full_path());
+        let entries = match read_result {
+            Ok(entries) => entries,
+            Err(err) => {
+                if io::ErrorKind::NotFound == err.kind() &&
+                    dir.is_synth()
+                {
+                    return Ok(ret);
+                } else {
+                    return Err(err.into());
+                }
+            },
+
+        };
+        for entry in entries {
             let entry = try!(entry);
 
             let name = entry.file_name();
@@ -213,6 +227,8 @@ impl Replica for PosixReplica {
     fn create(&self, dir: &mut DirHandle, source: File,
               xfer: Option<ContentAddressableSource>)
               -> Result<FileData> {
+        try!(dir.create_if_needed(self, None));
+
         let path = dir.child(source.0);
         let ret = try!(self.put_file(dir, source, xfer, || {
             // Make sure the file doesn't already exist.
@@ -468,7 +484,7 @@ impl PosixReplica {
     /// established.
     fn shunt_file(&self, old_path: &OsStr) -> Result<OsString> {
         // Less persistent here than the reconciler's renamer in case
-        // symlink_metadata() consistently fails for some other reason.
+        // symlink_metadata() consistently succeeds for some other reason.
         for sfx in 1..65536 {
             let mut new_path = old_path.to_owned();
             new_path.push(format!("!{}", sfx));
@@ -509,9 +525,14 @@ impl PosixReplica {
 
             FileData::Directory(mode) => {
                 try!(before_establish());
+                let path = dir.child(source.0);
                 try!(fs::DirBuilder::new()
                      .mode(mode)
-                     .create(dir.child(source.0)));
+                     .create(&path));
+                // mkdir() restricts the mode via umask, so we need to make
+                // another call to get the mode we actually want.
+                try!(fs::set_permissions(
+                    &path, fs::Permissions::from_mode(mode)));
                 Ok(source.1.clone())
             },
 
@@ -525,14 +546,16 @@ impl PosixReplica {
 
             FileData::Regular(mode, _, _, _) => {
                 let (mut scratch_file, scratch_path) =
-                    try!(self.scratch_regular(mode));
+                    try!(self.scratch_regular(0o600));
                 if let Some(xfer) = xfer {
                     // Copy the file to the local filesystem
                     try!(self.xfer_file(&mut scratch_file, &xfer));
                     // Move anything out of the way as needed
                     try!(before_establish());
                     let new_path = dir.child(source.0);
-                    // Atomically put into place
+                    // Atomically put into place after setting the mode
+                    try!(fs::set_permissions(
+                        &scratch_path, fs::Permissions::from_mode(mode)));
                     try!(fs::rename(&scratch_path, &new_path));
                     // Cache the content of the file, assuming that nobody
                     // modified it between us renaming it there and `stat()`ing
@@ -954,6 +977,25 @@ mod test {
         assert_eq!("Three pounds of VAX!",
                    &slurp(root.path().join("vax")));
         assert_eq!(0o600, fs::symlink_metadata(root.path().join("vax"))
+                   .unwrap().mode() & 0o7777);
+    }
+
+    #[test]
+    fn create_regular_file_with_perm_777() {
+        let (root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        let xfer = make_ca_source("Three pounds of VAX!");
+        replica.create(&mut dir, File(
+            &oss("vax"), &FileData::Regular(
+                0o777, 0, 0, xfer.blocks.total)),
+            Some(xfer)).unwrap();
+
+        assert_eq!("Three pounds of VAX!",
+                   &slurp(root.path().join("vax")));
+        assert_eq!(0o777, fs::symlink_metadata(root.path().join("vax"))
                    .unwrap().mode() & 0o7777);
     }
 
@@ -1439,5 +1481,115 @@ mod test {
             Some(xfer)).unwrap();
 
         assert_eq!("raceways", &slurp(root.path().join("raceways")));
+    }
+
+
+    #[test]
+    fn chdir_not_found() {
+        let (_root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let dir = replica.root().unwrap();
+
+        assert!(replica.chdir(&dir, &oss("foo"))
+                .is_err());
+    }
+
+    #[test]
+    fn chdir_into_non_dir() {
+        let (root, _private, replica) = new_simple();
+        spit(root.path().join("foo"), "bar");
+
+        replica.prepare().unwrap();
+        let dir = replica.root().unwrap();
+        assert!(replica.chdir(&dir, &oss("foo"))
+                .is_err());
+    }
+
+    #[test]
+    fn chdir_into_subdirs() {
+        let (root, _private, replica) = new_simple();
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("child")).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("child").join("grandchild"))
+            .unwrap();
+        unix::fs::symlink(
+            "target", root.path().join("child")
+                .join("grandchild").join("foo")).unwrap();
+
+        replica.prepare().unwrap();
+
+        let dir = replica.root().unwrap();
+
+        let mut subdir = replica.chdir(&dir, &oss("child")).unwrap();
+        let s_list = replica.list(&mut subdir).unwrap();
+        assert_eq!(1, s_list.len());
+        assert_eq!(&oss("grandchild"), &s_list[0].0);
+        assert_eq!(&FileData::Directory(0o700), &s_list[0].1);
+
+        let mut ssdir = replica.chdir(&subdir, &oss("grandchild")).unwrap();
+        let ss_list = replica.list(&mut ssdir).unwrap();
+        assert_eq!(1, ss_list.len());
+        assert_eq!(&oss("foo"), &ss_list[0].0);
+        assert_eq!(&FileData::Symlink(oss("target")),
+                   &ss_list[0].1);
+    }
+
+    #[test]
+    fn synthdir_tree() {
+        let (_root, _private, replica) = new_simple();
+
+        let mut dir = replica.root().unwrap();
+        let mut dfoo = replica.synthdir(&mut dir, &oss("foo"), 0o700);
+        let mut dbar = replica.synthdir(&mut dfoo, &oss("bar"), 0o740);
+        let mut dbaz = replica.synthdir(&mut dfoo, &oss("baz"), 0o770);
+
+        assert_eq!(0, replica.list(&mut dir).unwrap().len());
+        assert_eq!(0, replica.list(&mut dfoo).unwrap().len());
+
+        replica.create(&mut dbar, File(&oss("plugh"),
+                                       &FileData::Symlink(oss("xyzzy"))),
+                       None).unwrap();
+        replica.create(&mut dbaz, File(&oss("fee"),
+                                       &FileData::Symlink(oss("fum"))),
+                       None).unwrap();
+
+        let foo_list = replica.list(&mut dfoo).unwrap();
+        assert_eq!(2, foo_list.len());
+        for (name, fd) in foo_list {
+            if &oss("bar") == &name {
+                assert_eq!(FileData::Directory(0o740), fd);
+            } else if &oss("baz") == &name {
+                assert_eq!(FileData::Directory(0o770), fd);
+            } else {
+                panic!("Unexpected filename: {:?}", name);
+            }
+        }
+    }
+
+    #[test]
+    fn rmdir_success() {
+        let (root, _private, replica) = new_simple();
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("child")).unwrap();
+
+        replica.prepare().unwrap();
+
+        let mut dir = replica.root().unwrap();
+        let mut subdir = replica.chdir(&dir, &oss("child")).unwrap();
+        replica.rmdir(&mut subdir).unwrap();
+
+        assert_eq!(0, replica.list(&mut dir).unwrap().len());
+    }
+
+    #[test]
+    fn cannot_rmdir_root() {
+        let (_root, _private, replica) = new_simple();
+
+        replica.prepare().unwrap();
+        let mut dir = replica.root().unwrap();
+
+        assert!(replica.rmdir(&mut dir).is_err());
     }
 }
