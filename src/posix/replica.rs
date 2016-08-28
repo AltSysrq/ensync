@@ -55,6 +55,13 @@ quick_error! {
         RmdirRoot {
             description("Cannot remove root directory")
         }
+        ChdirXDev {
+            description("Cannot traverse filesystem boundary")
+        }
+        PrivateXDev {
+            description("Private directory is on different filesystem from \
+                         sync root")
+        }
     }
 }
 
@@ -317,9 +324,10 @@ impl Replica for PosixReplica {
              -> Result<DirHandle> {
         let path = dir.child(subdir);
         let md = try!(fs::symlink_metadata(&path));
-        // TODO: Check for xdev
         if !md.file_type().is_dir() {
             Err(Error::NotADir.into())
+        } else if md.dev() != self.config.root_dev {
+            Err(Error::ChdirXDev.into())
         } else {
             Ok(dir.subdir(subdir, None))
         }
@@ -415,7 +423,11 @@ impl PosixReplica {
         let dao = try!(Dao::open(&format!("{}/db.sqlite", private_dir)));
         let cache_generation = try!(dao.next_generation());
         let root_dev = try!(fs::symlink_metadata(root)).dev();
-        // TODO: Check that private dir is on same device as root
+        let private_dev = try!(fs::symlink_metadata(private_dir)).dev();
+
+        if root_dev != private_dev {
+            return Err(Error::PrivateXDev.into());
+        }
 
         Ok(PosixReplica {
             config: Arc::new(Config {
