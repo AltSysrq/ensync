@@ -842,13 +842,22 @@ mod test {
     static SECRET: &'static str = "secret";
     const BLOCK_SZ: usize = 4;
 
-    pub fn new_simple() -> (TempDir,TempDir,PosixReplica) {
+    fn new_dirs() -> (TempDir, TempDir) {
         let root = TempDir::new("posix-root").unwrap();
         let private = TempDir::new("posix-private").unwrap();
-        let replica = PosixReplica::new(
+        (root, private)
+    }
+
+    fn new_in(root: &TempDir, private: &TempDir) -> PosixReplica {
+        PosixReplica::new(
             root.path().to_str().unwrap(),
             private.path().to_str().unwrap(),
-            SECRET.as_bytes(), BLOCK_SZ).unwrap();
+            SECRET.as_bytes(), BLOCK_SZ).unwrap()
+    }
+
+    fn new_simple() -> (TempDir,TempDir,PosixReplica) {
+        let (root, private) = new_dirs();
+        let replica = new_in(&root, &private);
 
         (root, private, replica)
     }
@@ -927,6 +936,11 @@ mod test {
             assert_eq!(block_xfer::stream_to_blocks(
                 "hello world".as_bytes(), BLOCK_SZ, SECRET.as_bytes(),
                 |_, _| Ok(())).unwrap().total, hash);
+
+            let mut data = Vec::new();
+            replica.transfer(&dir, File(&list[0].0, &list[0].1)).unwrap()
+                .read_to_end(&mut data).unwrap();
+            assert_eq!("hello world".as_bytes(), &data[..]);
         } else {
             panic!("Unexpected file returned: {:?}", list[0].1);
         }
@@ -1591,5 +1605,161 @@ mod test {
         let mut dir = replica.root().unwrap();
 
         assert!(replica.rmdir(&mut dir).is_err());
+    }
+
+    #[test]
+    fn simple_dirty_tracking() {
+        let (root, private) = new_dirs();
+        let subdir = root.path().join("child");
+        fs::DirBuilder::new().mode(0o700).create(&subdir).unwrap();
+        unix::fs::symlink("target", subdir.join("sym")).unwrap();
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+            let mut rdir = replica.root().unwrap();
+            assert!(replica.is_dir_dirty(&rdir));
+            replica.list(&mut rdir).unwrap();
+
+            let mut cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            assert!(replica.is_dir_dirty(&cdir));
+            replica.list(&mut cdir).unwrap();
+
+            replica.set_dir_clean(&cdir).unwrap();
+            replica.set_dir_clean(&rdir).unwrap();
+            replica.clean_up().unwrap();
+        }
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+            let rdir = replica.root().unwrap();
+            assert!(!replica.is_dir_dirty(&rdir));
+            let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            assert!(!replica.is_dir_dirty(&cdir));
+        }
+
+        unix::fs::symlink("xyzzy", subdir.join("plugh")).unwrap();
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+            let rdir = replica.root().unwrap();
+            assert!(replica.is_dir_dirty(&rdir));
+            let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            assert!(replica.is_dir_dirty(&cdir));
+        }
+    }
+
+    #[test]
+    fn own_edits_accounted_for_in_dirty_tracking() {
+        let (root, private) = new_dirs();
+        let subdir = root.path().join("child");
+        fs::DirBuilder::new().mode(0o700).create(&subdir).unwrap();
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+
+            let mut rdir = replica.root().unwrap();
+            replica.list(&mut rdir).unwrap();
+
+            let mut cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            replica.list(&mut cdir).unwrap();
+
+            replica.create(&mut cdir, File(
+                &oss("sym"), &FileData::Symlink(oss("target"))), None)
+                .unwrap();
+            replica.set_dir_clean(&cdir).unwrap();
+            replica.set_dir_clean(&rdir).unwrap();
+            replica.clean_up().unwrap();
+        }
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+
+            let rdir = replica.root().unwrap();
+            assert!(!replica.is_dir_dirty(&rdir));
+            let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            assert!(!replica.is_dir_dirty(&cdir));
+        }
+    }
+
+    #[test]
+    fn dir_clean_marker_tracks_placeholder_hash_of_untransferred_regular() {
+        let (root, private) = new_dirs();
+        let subdir = root.path().join("child");
+        fs::DirBuilder::new().mode(0o700).create(&subdir).unwrap();
+        spit(subdir.join("foo"), "bar");
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+
+            let mut rdir = replica.root().unwrap();
+            replica.list(&mut rdir).unwrap();
+
+            let mut cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            replica.list(&mut cdir).unwrap();
+
+            replica.set_dir_clean(&cdir).unwrap();
+            replica.set_dir_clean(&rdir).unwrap();
+            replica.clean_up().unwrap();
+        }
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+
+            let rdir = replica.root().unwrap();
+            assert!(!replica.is_dir_dirty(&rdir));
+            let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            assert!(!replica.is_dir_dirty(&cdir));
+        }
+    }
+
+    #[test]
+    fn dir_clean_marker_tracks_actual_hash_of_transferred_regular() {
+        let (root, private) = new_dirs();
+        let subdir = root.path().join("child");
+        fs::DirBuilder::new().mode(0o700).create(&subdir).unwrap();
+        spit(subdir.join("foo"), "bar");
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+
+            let mut rdir = replica.root().unwrap();
+            replica.list(&mut rdir).unwrap();
+
+            let mut cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            let list = replica.list(&mut cdir).unwrap();
+            assert_eq!(1, list.len());
+            let (fname, fdata) = list.into_iter().next().unwrap();
+
+            // Concurrent modification
+            spit(subdir.join("foo"), "plugh");
+
+            let mut ss = replica.transfer(&cdir, File(&fname, &fdata)).unwrap();
+            let bl = block_xfer::stream_to_blocks(&mut ss, BLOCK_SZ,
+                                                  SECRET.as_bytes(),
+                                                  |_, _| Ok(()))
+                .unwrap();
+            ss.finish(&bl).unwrap();
+
+            replica.set_dir_clean(&cdir).unwrap();
+            replica.set_dir_clean(&rdir).unwrap();
+            replica.clean_up().unwrap();
+        }
+
+        {
+            let replica = new_in(&root, &private);
+            replica.prepare().unwrap();
+
+            let rdir = replica.root().unwrap();
+            assert!(!replica.is_dir_dirty(&rdir));
+            let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
+            assert!(!replica.is_dir_dirty(&cdir));
+        }
     }
 }
