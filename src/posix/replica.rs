@@ -62,6 +62,10 @@ quick_error! {
             description("Private directory is on different filesystem from \
                          sync root")
         }
+        BadFilename(name: OsString) {
+            description("Illegal file name")
+            display("Illegal file name: {:?}", name)
+        }
     }
 }
 
@@ -132,6 +136,25 @@ fn get_or_compute_hash(path: &OsStr, dao: &Dao, stat: &InodeStatus,
     Ok(blocklist.total)
 }
 
+/// Return Err if `name` has special significance on UNIX, eg, is "." or "..",
+/// or contains a `/` or NUL character.
+///
+/// This isn't strictly necessary. We do it as a safety precaution, so that
+/// corrupted server replicas (accidental or otherwise) cannot "escape" the
+/// sync root by having ".." as a literal directory, for example.
+fn assert_sane_filename(name: &OsStr) -> Result<()> {
+    if name == OsStr::new(".") || name == OsStr::new("..") {
+        return Err(Error::BadFilename(name.to_owned()).into());
+    }
+
+    let s = name.to_string_lossy();
+    if s.contains('/') || s.contains('\x00') {
+        return Err(Error::BadFilename(name.to_owned()).into());
+    }
+
+    Ok(())
+}
+
 impl Replica for PosixReplica {
     type Directory = DirHandle;
     type TransferIn = Option<ContentAddressableSource>;
@@ -192,6 +215,9 @@ impl Replica for PosixReplica {
 
     fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
               -> Result<()> {
+        try!(assert_sane_filename(old));
+        try!(assert_sane_filename(new));
+
         // Make sure the name under `new` doesn't already exist. This isn't
         // quite atomic with the rest of the operation, but there's no way to
         // accomplish that, so this will have to be good enough.
@@ -220,6 +246,8 @@ impl Replica for PosixReplica {
     }
 
     fn remove(&self, dir: &mut DirHandle, target: File) -> Result<()> {
+        try!(assert_sane_filename(target.0));
+
         let path = dir.child(target.0);
         try!(self.check_matches(&path, target.1));
 
@@ -234,6 +262,7 @@ impl Replica for PosixReplica {
     fn create(&self, dir: &mut DirHandle, source: File,
               xfer: Option<ContentAddressableSource>)
               -> Result<FileData> {
+        try!(assert_sane_filename(source.0));
         try!(dir.create_if_needed(self, None));
 
         let path = dir.child(source.0);
@@ -258,6 +287,8 @@ impl Replica for PosixReplica {
               old: &FileData, new: &FileData,
               xfer: Option<ContentAddressableSource>)
               -> Result<FileData> {
+        try!(assert_sane_filename(name));
+
         let path = dir.child(name);
 
         // If this can be translated to a simple `chmod()`, do so.
@@ -322,6 +353,8 @@ impl Replica for PosixReplica {
 
     fn chdir(&self, dir: &DirHandle, subdir: &OsStr)
              -> Result<DirHandle> {
+        try!(assert_sane_filename(subdir));
+
         let path = dir.child(subdir);
         let md = try!(fs::symlink_metadata(&path));
         if !md.file_type().is_dir() {
@@ -1773,5 +1806,16 @@ mod test {
             let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
             assert!(!replica.is_dir_dirty(&cdir));
         }
+    }
+
+    #[test]
+    fn insane_filenames_blocked() {
+        let (_root, _private, replica) = new_simple();
+
+        let dir = replica.root().unwrap();
+        assert!(replica.chdir(&dir, &oss(".")).is_err());
+        assert!(replica.chdir(&dir, &oss("..")).is_err());
+        assert!(replica.chdir(&dir, &oss("a/b")).is_err());
+        assert!(replica.chdir(&dir, &oss("a\x00b")).is_err());
     }
 }
