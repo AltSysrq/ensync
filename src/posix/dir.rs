@@ -30,7 +30,8 @@ use std::sync::{Arc,Mutex};
 use keccak::Keccak;
 
 use defs::*;
-use replica::{Replica,ReplicaDirectory,Result};
+use errors::*;
+use replica::{Replica,ReplicaDirectory};
 
 #[derive(Debug,Clone)]
 struct DirContentMut {

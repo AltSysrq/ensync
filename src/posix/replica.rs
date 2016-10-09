@@ -28,49 +28,12 @@ use std::sync::{Arc,Mutex};
 use std::sync::atomic::{AtomicUsize,Ordering};
 
 use defs::*;
+use errors::*;
 use replica::*;
 use block_xfer::{BlockList,StreamSource,ContentAddressableSource,BlockFetch};
 use block_xfer::{blocks_to_stream,hash_block,stream_to_blocks};
 use super::dao::{Dao,InodeStatus};
 use super::dir::*;
-
-quick_error! {
-    #[derive(Debug)]
-    enum Error {
-        RenameTargetAlreadyExists {
-            description("New name already in use")
-        }
-        NotMatched {
-            description("File changed since last seen")
-        }
-        AlreadyExists {
-            description("File with this name created since directory listed")
-        }
-        AllSuffixesInUse {
-            description("Shunt failed: All file sufixes in use")
-        }
-        MissingXfer {
-            description("BUG: No xfer provided for file transfer")
-        }
-        NotADir {
-            description("Not a directory")
-        }
-        RmdirRoot {
-            description("Cannot remove root directory")
-        }
-        ChdirXDev {
-            description("Cannot traverse filesystem boundary")
-        }
-        PrivateXDev {
-            description("Private directory is on different filesystem from \
-                         sync root")
-        }
-        BadFilename(name: OsString) {
-            description("Illegal file name")
-            display("Illegal file name: {:?}", name)
-        }
-    }
-}
 
 struct Config {
     hmac_secret: Vec<u8>,
@@ -147,12 +110,12 @@ fn get_or_compute_hash(path: &OsStr, dao: &Dao, stat: &InodeStatus,
 /// sync root by having ".." as a literal directory, for example.
 fn assert_sane_filename(name: &OsStr) -> Result<()> {
     if name == OsStr::new(".") || name == OsStr::new("..") {
-        return Err(Error::BadFilename(name.to_owned()).into());
+        return Err(ErrorKind::BadFilename(name.to_owned()).into());
     }
 
     let s = name.to_string_lossy();
     if s.contains('/') || s.contains('\x00') {
-        return Err(Error::BadFilename(name.to_owned()).into());
+        return Err(ErrorKind::BadFilename(name.to_owned()).into());
     }
 
     Ok(())
@@ -227,7 +190,7 @@ impl Replica for PosixReplica {
         let new_path = dir.child(new);
 
         match fs::symlink_metadata(&new_path) {
-            Ok(_) => return Err(Error::RenameTargetAlreadyExists.into()),
+            Ok(_) => return Err(ErrorKind::RenameDestExists.into()),
             Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
             Err(e) => return Err(e.into()),
         }
@@ -275,7 +238,7 @@ impl Replica for PosixReplica {
             // file with the desired content if and only if no file with that name
             // already exists.
             match fs::symlink_metadata(&path) {
-                Ok(_) => Err(Error::AlreadyExists.into()),
+                Ok(_) => Err(ErrorKind::CreateExists.into()),
                 Err(ref err) if io::ErrorKind::NotFound == err.kind() =>
                     Ok(()),
                 Err(err) => Err(err.into()),
@@ -361,9 +324,9 @@ impl Replica for PosixReplica {
         let path = dir.child(subdir);
         let md = try!(fs::symlink_metadata(&path));
         if !md.file_type().is_dir() {
-            Err(Error::NotADir.into())
+            Err(ErrorKind::NotADirectory.into())
         } else if md.dev() != self.config.root_dev {
-            Err(Error::ChdirXDev.into())
+            Err(ErrorKind::ChdirXDev.into())
         } else {
             Ok(dir.subdir(subdir, None))
         }
@@ -375,7 +338,7 @@ impl Replica for PosixReplica {
     }
 
     fn rmdir(&self, subdir: &mut DirHandle) -> Result<()> {
-        let dir = try!(subdir.parent().cloned().ok_or(Error::RmdirRoot));
+        let dir = try!(subdir.parent().cloned().ok_or(ErrorKind::RmdirRoot));
         // Need to build the simple name (without the leading slash) so we can
         // toggle it from the parent dir hash anyway.
         let path = dir.child(subdir.name());
@@ -462,7 +425,7 @@ impl PosixReplica {
         let private_dev = try!(fs::symlink_metadata(private_dir)).dev();
 
         if root_dev != private_dev {
-            return Err(Error::PrivateXDev.into());
+            return Err(ErrorKind::PrivateXDev.into());
         }
 
         Ok(PosixReplica {
@@ -549,7 +512,7 @@ impl PosixReplica {
             }
         }
 
-        Err(Error::AllSuffixesInUse.into())
+        Err(ErrorKind::AllSuffixesInUse.into())
     }
 
     /// Transfers `source` into `dir` using `xfer`.
@@ -615,7 +578,7 @@ impl PosixReplica {
                         &new_path, &xfer.blocks, xfer.block_size);
                     Ok(source.1.clone())
                 } else {
-                    Err(Error::MissingXfer.into())
+                    Err(ErrorKind::MissingXfer.into())
                 }
             },
         }
@@ -787,7 +750,7 @@ impl PosixReplica {
             &path, &try!(fs::symlink_metadata(&path)),
             &dao, false, &*self.config));
         if !curr_fd.matches(fd) {
-            Err(Error::NotMatched.into())
+            Err(ErrorKind::ExpectationNotMatched.into())
         } else {
             Ok(())
         }

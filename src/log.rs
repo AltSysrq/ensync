@@ -24,11 +24,11 @@
 
 #![allow(dead_code)]
 
-use std::error::Error;
 use std::ffi::OsStr;
 use reconcile::compute::{Reconciliation,Conflict};
 
 use defs::*;
+use errors::Error;
 
 pub type LogLevel = u8;
 /// Log level indicating an unrecoverable, non-localised error.

@@ -61,28 +61,13 @@
 
 #![allow(dead_code)]
 
-use std::error::Error as StdError;
 use std::io;
 use std::sync::Arc;
 
 use keccak::Keccak;
 
 use defs::*;
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            cause(err)
-            from()
-            description("I/O error")
-            display("{}", err)
-        }
-        InvalidHmac {
-            description("HMAC does not match content")
-        }
-    }
-}
+use errors::*;
 
 /// The representation of a list of blocks into which an input stream was
 /// split.
@@ -198,7 +183,7 @@ pub fn blocks_to_stream<R : io::Read,
                         F : FnMut (&HashId) -> io::Result<R>,
                         W : io::Write>
     (input: &BlockList, mut output: W, secret: &[u8],
-     mut block_fetch: F) -> Result<(),Error>
+     mut block_fetch: F) -> Result<()>
 {
     let mut hash = [0u8;32];
     let mut buf = [0u8;4096];
@@ -213,7 +198,7 @@ pub fn blocks_to_stream<R : io::Read,
         kc.finalize(&mut hash);
 
         if hash != input.total {
-            return Err(Error::InvalidHmac);
+            return Err(ErrorKind::HmacMismatch.into());
         }
     }
 
@@ -237,7 +222,7 @@ pub fn blocks_to_stream<R : io::Read,
 
         kc.finalize(&mut hash);
         if hash != *id {
-            return Err(Error::InvalidHmac);
+            return Err(ErrorKind::HmacMismatch.into());
         }
     }
 
@@ -251,7 +236,7 @@ pub trait StreamSource : io::Read {
     /// Notifies the source of the final computed block list that was read from
     /// the source (once hitting EOF) so that it can update its own data
     /// structures accordinly.
-    fn finish(&mut self, blocks: &BlockList) -> Result<(),Box<StdError>>;
+    fn finish(&mut self, blocks: &BlockList) -> Result<()>;
 }
 
 /// A file data source representing a content-addressable backing store which
@@ -278,6 +263,7 @@ mod test {
     use std::collections::HashMap;
 
     use defs::*;
+    use errors::*;
     use super::*;
 
     fn to_blocklist(text: &[u8], secret: &[u8])
@@ -294,7 +280,7 @@ mod test {
     }
 
     fn to_stream(blocklist: &BlockList, blocks: &HashMap<HashId,Vec<u8>>,
-                 secret: &[u8]) -> Result<Vec<u8>,Error> {
+                 secret: &[u8]) -> Result<Vec<u8>> {
         let mut output = Vec::new();
         try!(blocks_to_stream(&blocklist, &mut output, secret,
                               |h| Ok(&blocks[h][..])));
@@ -319,16 +305,23 @@ mod test {
         assert_eq!(text, &output[..]);
     }
 
+    fn assert_hmac_mismatch<T>(r: Result<T>) {
+        match r {
+            Ok(_) => panic!("HMAC didn't fail!"),
+            Err(e) => match *e.kind() {
+                ErrorKind::HmacMismatch => (),
+                _ => panic!("Unexpected error: {}", e),
+            },
+        }
+    }
+
     #[test]
     fn hmac_fails_if_secret_wrong() {
         let text = &b"hello world"[..];
         let (blocklist, blocks) = to_blocklist(text, &b"secret"[..]);
 
-        match to_stream(&blocklist, &blocks, &b"geheimniss"[..]) {
-            Err(Error::InvalidHmac) => (),
-            Err(e) => panic!("Unexpected error: {}", e),
-            Ok(_) => panic!("Incorrect secret didn't fail the HMAC!"),
-        }
+        assert_hmac_mismatch(
+            to_stream(&blocklist, &blocks, &b"geheimniss"[..]));
     }
 
     #[test]
@@ -338,11 +331,8 @@ mod test {
 
         blocklist.blocks.swap(0, 1);
 
-        match to_stream(&blocklist, &blocks, &b"secret"[..]) {
-            Err(Error::InvalidHmac) => (),
-            Err(e) => panic!("Unexpected error: {}", e),
-            Ok(_) => panic!("Incorrect secret didn't fail the HMAC!"),
-        }
+        assert_hmac_mismatch(
+            to_stream(&blocklist, &blocks, &b"secret"[..]));
     }
 
     #[test]
@@ -352,10 +342,7 @@ mod test {
 
         blocks.get_mut(&blocklist.blocks[2]).unwrap()[0] ^= 1;
 
-        match to_stream(&blocklist, &blocks, &b"secret"[..]) {
-            Err(Error::InvalidHmac) => (),
-            Err(e) => panic!("Unexpected error: {}", e),
-            Ok(_) => panic!("Incorrect secret didn't fail the HMAC!"),
-        }
+        assert_hmac_mismatch(
+            to_stream(&blocklist, &blocks, &b"secret"[..]));
     }
 }

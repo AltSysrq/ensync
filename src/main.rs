@@ -16,12 +16,15 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+#![recursion_limit = "1024"]
+
 extern crate tiny_keccak as keccak;
 extern crate gpgme;
 extern crate toml;
 extern crate regex;
 extern crate sqlite;
 extern crate tempfile;
+#[macro_use] extern crate error_chain;
 #[macro_use] extern crate quick_error;
 
 #[cfg(test)] extern crate quickcheck;
@@ -29,6 +32,7 @@ extern crate tempfile;
 #[cfg(test)] extern crate tempdir;
 #[cfg(test)] extern crate libc;
 
+mod errors;
 mod defs;
 mod work_stack;
 mod sql;

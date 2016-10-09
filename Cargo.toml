@@ -4,13 +4,14 @@ version = "0.1.0"
 authors = ["Jason Lingle <jason@lin.gl>"]
 
 [dependencies]
-tiny-keccak = "1.1.0"
+error-chain = "0.5.0"
 gpgme = "0.4.0"
-toml = "0.1.30"
-regex = "0.1.73"
 quick-error = "1.1.0"
+regex = "0.1.73"
 sqlite = "0.23.0"
 tempfile = "2.1.4"
+tiny-keccak = "1.1.0"
+toml = "0.1.30"
 
 [dev-dependencies]
 quickcheck = "0.3.1"

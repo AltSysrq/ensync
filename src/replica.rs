@@ -17,12 +17,9 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::ffi::{OsStr,OsString};
-use std::error::Error;
-use std::result::Result as StdResult;
 
 use defs::*;
-
-pub type Result<T> = StdResult<T, Box<Error>>;
+use errors::Result;
 
 /// Trait for the `Replica::Directory` type.
 pub trait ReplicaDirectory {

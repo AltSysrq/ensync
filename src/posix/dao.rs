@@ -16,35 +16,14 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::ffi::{OsStr,OsString,NulError};
+use std::ffi::{OsStr,OsString};
 use std::path::Path;
-use std::result::Result as StdResult;
 
-use sqlite::{self,Connection,State,Statement};
+use sqlite::{Connection, State, Statement};
 
 use defs::*;
+use errors::*;
 use sql::*;
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Sqlite(err: sqlite::Error) {
-            cause(err)
-            description("SQLite error")
-            display("SQLite error: {}", err)
-            from()
-        }
-        NulInString {
-            description("NUL in string in database")
-            from(NulError)
-        }
-        InvalidHash {
-            description("Invalid hash in database")
-        }
-    }
-}
-
-pub type Result<T> = StdResult<T,Error>;
 
 /// Front-end to SQLite for the POSIX (client-side) ancestor replica.
 ///
@@ -62,7 +41,7 @@ fn to_hashid(v: Vec<u8>) -> Result<HashId> {
         ret.copy_from_slice(&*v);
         Ok(ret)
     } else {
-        Err(Error::InvalidHash)
+        Err(ErrorKind::InvalidHash.into())
     }
 }
 

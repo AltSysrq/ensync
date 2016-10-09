@@ -17,7 +17,7 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use defs::HashId;
-use replica::Result;
+use errors::Result;
 
 pub type Tx = u64;
 

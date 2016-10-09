@@ -17,13 +17,13 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::borrow::Cow;
-use std::ffi::{OsStr,OsString,NulError};
-use std::result::Result as StdResult;
+use std::ffi::{OsStr, OsString};
 use std::sync::{Arc,Mutex};
 
 use sqlite;
 
 use defs::*;
+use errors::*;
 use replica::*;
 use sql::{AsNBytes,AsNStr};
 use super::dao::*;
@@ -31,47 +31,6 @@ use super::dao::*;
 const T_REGULAR : i64 = 0;
 const T_DIRECTORY : i64 = 1;
 const T_SYMLINK : i64 = 2;
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Sqlite(err: sqlite::Error) {
-            cause(err)
-            from()
-            description("SQLite error")
-            display("SQLite error: {}", err)
-        }
-        ExpectationNotMatched {
-            description("File not in expected state")
-        }
-        NotFound {
-            description("File not found")
-        }
-        CreateExists {
-            description("File already exists")
-        }
-        DestExists {
-            description("Rename destination already exists")
-        }
-        DirNotEmpty {
-            description("Directory not empty")
-        }
-        NotADirectory {
-            description("Not a directory")
-        }
-        NulInString {
-            from(NulError)
-            description("NUL byte in string in database")
-        }
-        InvalidFileType(t: i64) {
-            description("Bad file type in database")
-            display("Bad file type in database: {}", t)
-        }
-        InvalidHash {
-            description("Invalid content hash in database")
-        }
-    }
-}
 
 /// The ancestor replica used in production contexts.
 ///
@@ -119,13 +78,13 @@ impl DirHandle {
     ///
     /// If this is a synthetic directory that has not yet been created, returns
     /// Error::NotFound.
-    fn get_h(&self) -> StdResult<i64,Error> {
+    fn get_h(&self) -> Result<i64> {
         match *self {
             DirHandle::Real(RealDir(v)) => Ok(v),
             DirHandle::Synth(ref sd) => if let Some(v) = sd.lock().unwrap().id {
                 Ok(v)
             } else {
-                Err(Error::NotFound)
+                Err(ErrorKind::NotFound.into())
             },
         }
     }
@@ -134,7 +93,7 @@ impl DirHandle {
     ///
     /// If this is a synthetic directory that has not yet been created, it is
     /// created now.
-    fn mk_h(&self, dao: &Dao) -> StdResult<i64,Error> {
+    fn mk_h(&self, dao: &Dao) -> Result<i64> {
         match *self {
             DirHandle::Real(RealDir(v)) => Ok(v),
             DirHandle::Synth(ref sd) => {
@@ -155,7 +114,7 @@ impl DirHandle {
                         // Something was created where we wanted to place the
                         // synthetic directory. This is very unexpected, so
                         // don't try to handle gracefully.
-                        Err(Error::CreateExists)
+                        Err(ErrorKind::CreateExists.into())
                     }
                 }
             },
@@ -267,56 +226,62 @@ impl Replica for AncestorReplica {
             return Ok(ret);
         }
 
-        let mut nul_error = false;
+        let mut nul_error = None;
         let mut invalid_type = None;
         let mut hash_error = false;
 
         let h = try!(dir.get_h());
         let exists = try!(self.dao.lock().unwrap().list(true, h, |e| {
-            if let Ok(name) = e.name.as_nstr() {
-                if let Some(d) = match e.typ {
-                    T_REGULAR => {
-                        if 32 != e.content.len() {
-                            hash_error = true;
+            match e.name.as_nstr() {
+                Ok(name) => {
+                    if let Some(d) = match e.typ {
+                        T_REGULAR => {
+                            if 32 != e.content.len() {
+                                hash_error = true;
+                                None
+                            } else {
+                                let mut hash = [0;32];
+                                hash.copy_from_slice(&*e.content);
+                                Some(FileData::Regular(e.mode as FileMode,
+                                                       0, 0, hash))
+                            }
+                        },
+                        T_DIRECTORY => {
+                            Some(FileData::Directory(e.mode as FileMode))
+                        },
+                        T_SYMLINK => {
+                            match e.content.as_nstr() {
+                                Ok(target) => {
+                                    Some(FileData::Symlink(target.to_owned()))
+                                },
+                                Err(ne) => {
+                                    nul_error = Some(ne);
+                                    None
+                                },
+                            }
+                        },
+                        t => {
+                            invalid_type = Some(t);
                             None
-                        } else {
-                            let mut hash = [0;32];
-                            hash.copy_from_slice(&*e.content);
-                            Some(FileData::Regular(e.mode as FileMode,
-                                                   0, 0, hash))
                         }
-                    },
-                    T_DIRECTORY => {
-                        Some(FileData::Directory(e.mode as FileMode))
-                    },
-                    T_SYMLINK => {
-                        if let Ok(target) = e.content.as_nstr() {
-                            Some(FileData::Symlink(target.to_owned()))
-                        } else {
-                            nul_error = true;
-                            None
-                        }
-                    },
-                    t => {
-                        invalid_type = Some(t);
-                        None
+                    } /* then */ {
+                        ret.push((name.to_owned(), d));
                     }
-                } /* then */ {
-                    ret.push((name.to_owned(), d));
+                },
+                Err(ne) => {
+                    nul_error = Some(ne);
                 }
-            } else {
-                nul_error = true;
             }
         }));
 
         if let Some(it) = invalid_type {
-            Err(Error::InvalidFileType(it).into())
+            Err(ErrorKind::InvalidAncestorFileType(it).into())
         } else if hash_error {
-            Err(Error::InvalidHash.into())
-        } else if nul_error {
-            Err(Error::NulInString.into())
+            Err(ErrorKind::InvalidHash.into())
+        } else if let Some(nul_error) = nul_error {
+            Err(nul_error.into())
         } else if !exists {
-            Err(Error::NotFound.into())
+            Err(ErrorKind::NotFound.into())
         } else {
             Ok(ret)
         }
@@ -329,8 +294,10 @@ impl Replica for AncestorReplica {
             h, old.as_nbytes(), new.as_nbytes()))
         {
             RenameStatus::Ok => Ok(()),
-            RenameStatus::SourceNotFound => Err(Error::NotFound.into()),
-            RenameStatus::DestExists => Err(Error::DestExists.into()),
+            RenameStatus::SourceNotFound =>
+                Err(ErrorKind::NotFound.into()),
+            RenameStatus::DestExists =>
+                Err(ErrorKind::RenameDestExists.into()),
         }
     }
 
@@ -338,11 +305,11 @@ impl Replica for AncestorReplica {
         let h = try!(dir.get_h());
         match try!(self.dao.lock().unwrap().delete(&target.as_entry(h))) {
             DeleteStatus::Ok => Ok(()),
-            DeleteStatus::NotFound => Err(Error::NotFound.into()),
+            DeleteStatus::NotFound => Err(ErrorKind::NotFound.into()),
             DeleteStatus::NotMatched =>
-                Err(Error::ExpectationNotMatched.into()),
+                Err(ErrorKind::ExpectationNotMatched.into()),
             DeleteStatus::DirNotEmpty =>
-                Err(Error::DirNotEmpty.into()),
+                Err(ErrorKind::DirNotEmpty.into()),
         }
     }
 
@@ -353,7 +320,7 @@ impl Replica for AncestorReplica {
         if try!(dao.create(&File(source.0, &xfer).as_entry(h))).is_some() {
             Ok(xfer)
         } else {
-            Err(Error::CreateExists.into())
+            Err(ErrorKind::CreateExists.into())
         }
     }
 
@@ -375,9 +342,9 @@ impl Replica for AncestorReplica {
         {
             UpdateStatus::Ok => Ok(xfer),
             UpdateStatus::NotFound =>
-                Err(Error::NotFound.into()),
+                Err(ErrorKind::NotFound.into()),
             UpdateStatus::NotMatched =>
-                Err(Error::ExpectationNotMatched.into()),
+                Err(ErrorKind::ExpectationNotMatched.into()),
         }
     }
 
@@ -389,10 +356,10 @@ impl Replica for AncestorReplica {
             if T_DIRECTORY == f.typ {
                 Ok(DirHandle::Real(RealDir(f.id)))
             } else {
-                Err(Error::NotADirectory.into())
+                Err(ErrorKind::NotADirectory.into())
             }
         } else {
-            Err(Error::NotFound.into())
+            Err(ErrorKind::NotFound.into())
         }
     }
 
@@ -411,7 +378,7 @@ impl Replica for AncestorReplica {
         let h = try!(dir.get_h());
         match try!(self.dao.lock().unwrap().delete_raw(h)) {
             DeleteStatus::Ok | DeleteStatus::NotFound => Ok(()),
-            DeleteStatus::DirNotEmpty => Err(Error::DirNotEmpty.into()),
+            DeleteStatus::DirNotEmpty => Err(ErrorKind::DirNotEmpty.into()),
             DeleteStatus::NotMatched =>
                 panic!("Got NotMatched from delete_raw()"),
         }
@@ -442,6 +409,7 @@ impl Condemn for AncestorReplica {
 mod test {
     use defs::*;
     use defs::test_helpers::*;
+    use errors::*;
     use replica::*;
     use super::*;
 

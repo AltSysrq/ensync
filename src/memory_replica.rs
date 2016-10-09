@@ -40,7 +40,8 @@ use std::ffi::{OsStr,OsString};
 use std::sync::{Mutex,MutexGuard};
 
 use defs::*;
-use replica::{Replica,ReplicaDirectory,Result,NullTransfer,Condemn};
+use errors::*;
+use replica::{Replica,ReplicaDirectory,NullTransfer,Condemn};
 
 /// Identifies an operation for purposes of mapping to a fault.
 #[derive(Clone,Debug,Hash,PartialEq,Eq)]
@@ -215,9 +216,7 @@ pub struct MemoryReplica {
 
 /// Returns an `Err` `Result` with an arbitrary error value.
 pub fn simple_error<T>() -> Result<T> {
-    use std::env::VarError;
-
-    Err(Box::new(VarError::NotPresent))
+    Err("Something broke".into())
 }
 
 pub fn catpath(a: &OsStr, b: &OsStr) -> OsString {
@@ -659,6 +658,7 @@ impl Condemn for MemoryReplica {
 mod test {
     use defs::*;
     use defs::test_helpers::*;
+    use errors::*;
     use replica::*;
     use super::*;
 

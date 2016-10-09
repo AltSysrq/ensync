@@ -21,9 +21,10 @@ use std::ffi::{OsStr,OsString};
 use std::result;
 
 use defs::*;
+use errors::*;
 use log;
 use log::{Logger,ReplicaSide,ErrorOperation,Log};
-use replica::{Replica,Result,NullTransfer,Condemn};
+use replica::{Replica,NullTransfer,Condemn};
 use super::compute::{Reconciliation,ReconciliationSide,gen_alternate_name};
 use super::compute::SplitAncestorState;
 use super::context::*;
@@ -123,7 +124,7 @@ fn try_replace_ancestor<A : Replica + NullTransfer, LOG : Logger>(
         .to_bool(|error| log.log(
             log::ERROR, &Log::Error(
                 ReplicaSide::Ancestor, dir_name,
-                ErrorOperation::Update(name), &*error)))
+                ErrorOperation::Update(name), &error)))
 }
 
 /// Updates an end replica as necessary.
@@ -170,7 +171,7 @@ fn replace_replica<DST : Replica,
                 Err(error) => {
                     log.log(log::ERROR, &Log::Error(
                         side, dir_name, ErrorOperation::Remove(name),
-                        &*error));
+                        &error));
                     Err(error)
                 }
             }
@@ -191,7 +192,7 @@ fn replace_replica<DST : Replica,
                 Err(error) => {
                     log.log(log::ERROR, &Log::Error(
                         side, dir_name, ErrorOperation::Update(name),
-                        &*error));
+                        &error));
                     Err(error)
                 }
             }
@@ -211,7 +212,7 @@ fn replace_replica<DST : Replica,
                 Err(error) => {
                     log.log(log::ERROR, &Log::Error(
                         side, dir_name, ErrorOperation::Create(name),
-                        &*error));
+                        &error));
                     Err(error)
                 }
             }
@@ -244,7 +245,7 @@ fn try_rename_replica<A : Replica, LOG : Logger>(
         },
         Err(error) => {
             log.log(log::ERROR, &Log::Error(
-                side, dir_name, ErrorOperation::Rename(old_name), &*error));
+                side, dir_name, ErrorOperation::Rename(old_name), &error));
             false
         }
     }
@@ -424,7 +425,7 @@ pub fn apply_reconciliation<I : Interface>(
                     i.anc().condemn(&mut dir.anc.dir, name).to_bool(
                         |error|  i.log().log(log::ERROR, &Log::Error(
                             ReplicaSide::Ancestor, dir_name,
-                            ErrorOperation::Access(name), &*error))),
+                            ErrorOperation::Access(name), &error))),
             }
 
             && match side {
@@ -450,7 +451,7 @@ pub fn apply_reconciliation<I : Interface>(
                     && i.anc().uncondemn(&mut dir.anc.dir, name).to_bool(
                         |error| i.log().log(log::ERROR, &Log::Error(
                             ReplicaSide::Ancestor, dir_name,
-                            ErrorOperation::Access(name), &*error)))
+                            ErrorOperation::Access(name), &error)))
                 },
             };
 

@@ -32,7 +32,7 @@ use sqlite;
 use tempfile::{NamedTempFile, PersistError};
 
 use defs::{HashId, UNKNOWN_HASH};
-use replica::Result;
+use errors::*;
 use sql::{self, StatementEx};
 use server::storage::*;
 
@@ -203,7 +203,7 @@ impl LocalStorage {
             tx.ops.push(op);
             Ok(())
         } else {
-            Err("No such transaction".into())
+            Err(ErrorKind::NoSuchTransaction(txid).into())
         }
     }
 
@@ -252,7 +252,7 @@ impl LocalStorage {
                 if (u32::MAX as u64) - (old_len as u64) <
                     (append.len() as u64)
                 {
-                    return Err("Directory too large".into());
+                    return Err(ErrorKind::DirectoryTooLarge.into());
                 }
 
                 // Run the update in SQLite first to ensure we have a write
@@ -347,8 +347,7 @@ impl LocalStorage {
         if let Some(vold_refs) = vold_refs {
             let mut refs = UNKNOWN_HASH;
             if vold_refs.len() != refs.len() {
-                return Err("Invalid object reference vector"
-                           .into());
+                return Err(ErrorKind::InvalidRefVector.into());
             }
             refs.copy_from_slice(&vold_refs);
             for (accum, &new) in refs.iter_mut().zip(linkid.iter())
@@ -392,7 +391,7 @@ impl LocalStorage {
                 let vid: Vec<u8> = try!(stmt.read(0));
                 let mut id = UNKNOWN_HASH;
                 if id.len() != vid.len() {
-                    return Err("Invalid object id".into());
+                    return Err(ErrorKind::InvalidObjectId.into());
                 }
                 id.copy_from_slice(&vid);
 
@@ -423,7 +422,7 @@ impl Storage for LocalStorage {
             if let Some((vh, iv)) = r {
                 let mut v = UNKNOWN_HASH;
                 if vh.len() != v.len() || iv < 0 || iv > u32::MAX as i64 {
-                    return Err("Invalid server directory entry".into());
+                    return Err(ErrorKind::InvalidServerDirEntry.into());
                 }
                 v.copy_from_slice(&vh);
 
@@ -448,7 +447,7 @@ impl Storage for LocalStorage {
         // The chance of getting here via race conditions is vanishingly small;
         // the database probably has a now-unchanging reference to a file that
         // does not exist.
-        Err("Dangling server directory reference".into())
+        Err(ErrorKind::DanglingServerDirectoryRef.into())
     }
 
     fn getobj(&self, id: &HashId) -> Result<Option<Vec<u8>>> {
@@ -480,7 +479,7 @@ impl Storage for LocalStorage {
             if vid.len() != id.len() || vver.len() != ver.len() ||
                 ilen < 0 || ilen > u32::MAX as i64
             {
-                return Err("Invalid server directory entry".into());
+                return Err(ErrorKind::InvalidServerDirEntry.into());
             }
 
             id.copy_from_slice(&vid);
@@ -494,7 +493,7 @@ impl Storage for LocalStorage {
     fn start_tx(&self, tx: Tx) -> Result<()> {
         let mut txns = self.txns.lock().unwrap();
         match txns.entry(tx) {
-            Occupied(_) => Err("Transaction already in use".into()),
+            Occupied(_) => Err(ErrorKind::TransactionAlreadyInUse(tx).into()),
             Vacant(e) => {
                 e.insert(Default::default());
                 Ok(())
