@@ -10,6 +10,7 @@ toml = "0.1.30"
 regex = "0.1.73"
 quick-error = "1.1.0"
 sqlite = "0.23.0"
+tempfile = "2.1.4"
 
 [dev-dependencies]
 quickcheck = "0.3.1"

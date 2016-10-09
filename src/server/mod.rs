@@ -16,34 +16,5 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-extern crate tiny_keccak as keccak;
-extern crate gpgme;
-extern crate toml;
-extern crate regex;
-extern crate sqlite;
-extern crate tempfile;
-#[macro_use] extern crate quick_error;
-
-#[cfg(test)] extern crate quickcheck;
-#[cfg(test)] extern crate rand;
-#[cfg(test)] extern crate tempdir;
-#[cfg(test)] extern crate libc;
-
-mod defs;
-mod work_stack;
-mod sql;
-
-mod rules;
-mod log;
-mod replica;
-#[cfg(test)]
-mod memory_replica;
-mod reconcile;
-mod block_xfer;
-mod ancestor;
-mod posix;
-mod server;
-
-fn main() {
-    println!("hello world");
-}
+mod storage;
+mod local_storage;

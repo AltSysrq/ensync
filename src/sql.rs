@@ -27,6 +27,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::ffi::{CString,OsStr,NulError};
 use std::result::Result as StdResult;
 
+use sqlite;
 use sqlite::*;
 
 /// Executes `f` within a transaction.
@@ -38,7 +39,10 @@ use sqlite::*;
 ///
 /// The return value from `f` is always returned, unless starting or committing
 /// the transaction fails.
-pub fn tx<T, F : FnOnce () -> Result<T>>(cxn: &Connection, f: F) -> Result<T> {
+pub fn tx_gen<T, E, F : FnOnce () -> StdResult<T,E>>(
+    cxn: &Connection, f: F)
+    -> StdResult<T,E>
+where E : From<sqlite::Error> {
     try!(cxn.execute("BEGIN TRANSACTION"));
     match f() {
         Ok(v) => {
@@ -49,9 +53,16 @@ pub fn tx<T, F : FnOnce () -> Result<T>>(cxn: &Connection, f: F) -> Result<T> {
             // Silently drop errors from ROLLBACK, since it will fail if
             // the error above caused SQLite to roll back automatically.
             drop(cxn.execute("ROLLBACK"));
-            Err(e)
+            Err(e.into())
         }
     }
+}
+
+/// A less general version of `tx_gen` which only deals in `sqlite::Error`s,
+/// which makes it work better with type inferrence.
+pub fn tx<T, F : FnOnce () -> sqlite::Result<T>>(cxn: &Connection, f: F)
+                                                 -> sqlite::Result<T> {
+    tx_gen(cxn, f)
 }
 
 pub trait StatementEx : Sized {
