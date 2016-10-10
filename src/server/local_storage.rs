@@ -264,8 +264,11 @@ impl LocalStorage {
                      .binding(2, (old_len as usize + append.len()) as i64)
                      .run());
 
-                let mut file = try!(fs::File::open(
-                    self.dir_path(&id, &ver)));
+                let mut file = try!(
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .create(false)
+                        .open(self.dir_path(&id, &ver)));
                 try!(file.seek(io::SeekFrom::Start(old_len as u64)));
                 // This will have effect even if the transaction rolls
                 // back, but the length in SQLite will still reflect the
@@ -396,7 +399,7 @@ impl LocalStorage {
                 id.copy_from_slice(&vid);
 
                 // Delete the entry first to be sure we have the SQLite lock
-                try!(db.prepare("DELETE FROM `refs` WHERE `id` = ?1")
+                try!(db.prepare("DELETE FROM `objs` WHERE `id` = ?1")
                      .binding(1, &id[..])
                      .run());
 
@@ -502,6 +505,17 @@ impl Storage for LocalStorage {
     }
 
     fn commit(&self, tx: Tx) -> Result<bool> {
+        enum CommitError {
+            Error(Error),
+            CommitFailed,
+        }
+        impl<T> From<T> for CommitError
+        where Error : From<T> {
+            fn from(t: T) -> Self {
+                CommitError::Error(Error::from(t))
+            }
+        }
+
         let mut txdat = try!(
             self.txns.lock().unwrap().remove(&tx)
                 .ok_or("No such transaction"));
@@ -510,8 +524,16 @@ impl Storage for LocalStorage {
             let db = self.db.lock().unwrap();
             // Atomically ensure that the transaction can be committed, then
             // commit it.
-            if !try!(sql::tx_gen(&db, || self.do_commit(&db, &mut txdat))) {
-                return Ok(false);
+            match sql::tx_gen(&db, || {
+                match self.do_commit(&db, &mut txdat) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err(CommitError::CommitFailed),
+                    Err(e) => Err(CommitError::Error(e)),
+                }
+            }) {
+                Ok(()) => (),
+                Err(CommitError::CommitFailed) => return Ok(false),
+                Err(CommitError::Error(e)) => return Err(e),
             }
         }
 
