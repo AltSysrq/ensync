@@ -14,7 +14,7 @@
 -- details.
 --
 -- You should have received a copy of the GNU General Public License along with
--- Ensync. If not, see <http:--www.gnu.org/licenses/>.
+-- Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 -- Schema for the persistent SQLite database for server-side storage.
 
