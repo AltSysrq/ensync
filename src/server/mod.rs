@@ -16,5 +16,5 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-mod storage;
+pub mod storage;
 mod local_storage;

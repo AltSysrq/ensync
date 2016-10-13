@@ -18,24 +18,29 @@
 
 #![recursion_limit = "1024"]
 
-extern crate tiny_keccak as keccak;
 extern crate gpgme;
-extern crate toml;
 extern crate regex;
+extern crate serde;
+extern crate serde_cbor;
 extern crate sqlite;
 extern crate tempfile;
+extern crate tiny_keccak as keccak;
+extern crate toml;
 #[macro_use] extern crate error_chain;
 #[macro_use] extern crate quick_error;
 
+#[cfg(test)] extern crate libc;
 #[cfg(test)] extern crate quickcheck;
 #[cfg(test)] extern crate rand;
 #[cfg(test)] extern crate tempdir;
-#[cfg(test)] extern crate libc;
 
-mod errors;
 mod defs;
-mod work_stack;
+mod errors;
+mod serde_types {
+    include!(concat!(env!("OUT_DIR"), "/serde_types.rs"));
+}
 mod sql;
+mod work_stack;
 
 mod rules;
 mod log;
