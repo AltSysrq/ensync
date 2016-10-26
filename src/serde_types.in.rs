@@ -1,3 +1,21 @@
+//-
+// Copyright (c) 2016, Jason Lingle
+//
+// This file is part of Ensync.
+//
+// Ensync is free software: you can  redistribute it and/or modify it under the
+// terms of  the GNU General Public  License as published by  the Free Software
+// Foundation, either version  3 of the License, or (at  your option) any later
+// version.
+//
+// Ensync is distributed  in the hope that  it will be useful,  but WITHOUT ANY
+// WARRANTY; without  even the implied  warranty of MERCHANTABILITY  or FITNESS
+// FOR  A PARTICULAR  PURPOSE.  See the  GNU General  Public  License for  more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// Ensync. If not, see <http://www.gnu.org/licenses/>.
+
 pub mod rpc {
     use serde::bytes::ByteBuf;
     use serde::de::{Deserialize, Deserializer, Error as DesError,
@@ -166,6 +184,14 @@ pub mod rpc {
         Fail,
         /// The server tried to execute the request, but failed to do so.
         Error(String),
+        /// The server encountered an error and cannot continue.
+        ///
+        /// This is mainly for things like protocol faults where recovering
+        /// from a malformed stream is not generally possible. (Even if the
+        /// framing mechanism is still working correctly, if the request that
+        /// was not understood did not take a response, returning an error
+        /// would desynchronise the request/response pairing.)
+        FatalError(String),
         /// The item referenced by the request does not exist.
         NotFound,
         /// Metadata (id, version, length) about a directory.

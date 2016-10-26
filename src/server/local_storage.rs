@@ -642,6 +642,31 @@ impl Storage for LocalStorage {
 mod test {
     include!("storage_tests.rs");
 
+    #[test]
+    fn adding_ops_to_nx_transaction_is_err() {
+        init!(dir, storage);
+
+        assert!(storage.mkdir(42, &hashid(1), &hashid(2), b"hello world")
+                .is_err());
+        assert!(storage.updir(42, &hashid(1), &hashid(2), 99, b"hello world")
+                .is_err());
+        assert!(storage.rmdir(42, &hashid(1), &hashid(2), 99).is_err());
+        // Use `putobj` first as it will actually create the object anyway, and
+        // then `linkobj` will actually need to interact with the transaction.
+        assert!(storage.putobj(42, &hashid(1), &hashid(2), b"hello world")
+                .is_err());
+        assert!(storage.linkobj(42, &hashid(1), &hashid(2)).is_err());
+        assert!(storage.unlinkobj(42, &hashid(1), &hashid(2)).is_err());
+    }
+
+    #[test]
+    fn starting_duplicate_transaction_is_err() {
+        init!(dir, storage);
+
+        storage.start_tx(42).unwrap();
+        assert!(storage.start_tx(42).is_err());
+    }
+
     use super::LocalStorage;
     fn create_storage(dir: &Path) -> LocalStorage {
         LocalStorage::open(dir).unwrap()

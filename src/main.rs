@@ -32,6 +32,7 @@ extern crate toml;
 #[cfg(test)] extern crate libc;
 #[cfg(test)] extern crate quickcheck;
 #[cfg(test)] extern crate rand;
+#[cfg(test)] extern crate os_pipe;
 #[cfg(test)] extern crate tempdir;
 
 mod defs;

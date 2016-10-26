@@ -1,8 +1,11 @@
 use std::ffi;
 use std::io;
 
+use serde_cbor;
 use sqlite;
 use tempfile;
+
+use serde_types;
 
 error_chain! {
     types {
@@ -15,6 +18,7 @@ error_chain! {
         io::Error, Io;
         sqlite::Error, Sqlite;
         ffi::NulError, NullInstring;
+        serde_cbor::Error, SerdeCbor;
     }
 
     errors {
@@ -107,6 +111,18 @@ error_chain! {
         DanglingServerDirectoryRef {
             description("Dangling server directory reference")
             display("Dangling server directory reference")
+        }
+        ServerConnectionClosed {
+            description("Server connection closed")
+            display("Server connection closed")
+        }
+        ServerError(err: String) {
+            description("Server error")
+            display("{}", err)
+        }
+        UnexpectedServerResponse(response: serde_types::rpc::Response) {
+            description("Unexpected server response")
+            display("Unexpected server response: {:?}", response)
         }
     }
 }

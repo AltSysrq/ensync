@@ -17,4 +17,6 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 pub mod storage;
-mod local_storage;
+pub mod local_storage;
+pub mod rpc;
+

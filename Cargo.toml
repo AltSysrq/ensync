@@ -23,5 +23,6 @@ toml = "0.1.30"
 quickcheck = "0.3.1"
 rand = "0.3.14"
 tempdir = "0.3.4"
+os_pipe = "0.2.0"
 # Just for `mkfifo` right now...
-libc = "0.2.14"
+libc = "0.2.17"
