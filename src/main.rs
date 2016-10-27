@@ -18,7 +18,8 @@
 
 #![recursion_limit = "1024"]
 
-extern crate gpgme;
+// Not sure why the `rust_` prefix gets stripped by cargo
+extern crate crypto as rust_crypto;
 extern crate regex;
 extern crate serde;
 extern crate serde_cbor;
