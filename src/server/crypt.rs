@@ -433,6 +433,57 @@ pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R,
     Ok(())
 }
 
+/// Encrypt a whole directory file.
+///
+/// This generates a new session key and iv. The session key is returned, which
+/// can be used with `encrypt_append_dir()` to append more data to the file.
+///
+/// `src` must produce data which is a multiple of 16 bytes long.
+pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
+                                              master: &MasterKey)
+                                              -> Result<[u8;16]> {
+    let (key, iv) = try!(write_cbc_prefix(&mut dst, master.dir_key()));
+
+    let mut cryptor = WEncryptor(aes::cbc_encryptor(
+        aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
+    try!(crypt_stream(dst, src, &mut cryptor, true));
+    Ok(key)
+}
+
+/// Encrypts data to be appended to a directory.
+///
+/// `key` is the session key returned by `encrypt_whole_dir()` or
+/// `decrypt_whole_dir()`. `iv` is the append-IV returned by `dir_append_iv()`.
+pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
+                                               key: &[u8;16], iv: &[u8;16])
+                                               -> Result<()> {
+    let mut cryptor = WEncryptor(aes::cbc_encryptor(
+        aes::KeySize::KeySize128, key, iv, blockmodes::NoPadding));
+    try!(crypt_stream(dst, src, &mut cryptor, true));
+    Ok(())
+}
+
+/// Inverts `encrypt_whole_dir()` and any subsequent calls to
+/// `encrypt_append_dir()`.
+pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
+                                              master: &MasterKey)
+                                              -> Result<[u8;16]> {
+    let (key, iv) = try!(read_cbc_prefix(&mut src, master.dir_key()));
+
+    let mut cryptor = WDecryptor(aes::cbc_decryptor(
+        aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
+    try!(crypt_stream(dst, src, &mut cryptor, false));
+    Ok(key)
+}
+
+/// Given a suffix of the full content of a directory `data`, return the IV to
+/// pass to `encrypt_append_dir` to append more data to that directory.
+pub fn dir_append_iv(data: &[u8]) -> [u8;16] {
+    let mut iv = [0u8;16];
+    iv.copy_from_slice(&data[data.len() - 16..]);
+    iv
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -460,55 +511,86 @@ mod fast_test {
         let master = MasterKey::generate_new();
 
         let mut ciphertext = Vec::new();
-        {
-            let mut dptr = data;
-            encrypt_obj(&mut ciphertext, &mut dptr, &master).unwrap();
-        }
+        encrypt_obj(&mut ciphertext, data, &master).unwrap();
 
         let mut cleartext = Vec::new();
-        decrypt_obj(&mut cleartext, &mut&ciphertext[..], &master).unwrap();
+        decrypt_obj(&mut cleartext, &ciphertext[..], &master).unwrap();
 
         assert_eq!(data, &cleartext[..]);
     }
 
     #[test]
-    fn crypt_empty_obj() {
+    fn crypt_obj_empty() {
         test_crypt_obj(&[]);
     }
 
     #[test]
-    fn crypt_one_block() {
+    fn crypt_obj_one_block() {
         test_crypt_obj(b"0123456789abcdef");
     }
 
     #[test]
-    fn crypt_partial_single_block() {
+    fn crypt_obj_partial_single_block() {
         test_crypt_obj(b"hello");
     }
 
     #[test]
-    fn crypt_partial_multi_block() {
+    fn crypt_obj_partial_multi_block() {
         test_crypt_obj(b"This is longer than sixteen bytes.");
     }
 
     #[test]
-    fn crypt_4096() {
+    fn crypt_obj_4096() {
         let mut data = [0u8;4096];
         rand(&mut data);
         test_crypt_obj(&data);
     }
 
     #[test]
-    fn crypt_4097() {
+    fn crypt_obj_4097() {
         let mut data = [0u8;4097];
         rand(&mut data);
         test_crypt_obj(&data);
     }
 
     #[test]
-    fn crypt_8191() {
+    fn crypt_obj_8191() {
         let mut data = [0u8;8191];
         rand(&mut data);
         test_crypt_obj(&data);
+    }
+
+    #[test]
+    fn crypt_dir_oneshot() {
+        let master = MasterKey::generate_new();
+
+        let orig = b"0123456789abcdef0123456789ABCDEF";
+        let mut ciphertext = Vec::new();
+        let sk1 =
+            encrypt_whole_dir(&mut ciphertext, &orig[..], &master).unwrap();
+
+        let mut cleartext = Vec::new();
+        let sk2 = decrypt_whole_dir(&mut cleartext, &ciphertext[..],
+                                    &master).unwrap();
+
+        assert_eq!(orig, &cleartext[..]);
+        assert_eq!(sk1, sk2);
+    }
+
+    #[test]
+    fn crypt_dir_appended() {
+        let master = MasterKey::generate_new();
+
+        let mut ciphertext = Vec::new();
+        let sk = encrypt_whole_dir(
+            &mut ciphertext, &b"0123456789abcdef"[..], &master).unwrap();
+        let iv = dir_append_iv(&ciphertext);
+        encrypt_append_dir(
+            &mut ciphertext, &b"0123456789ABCDEF"[..], &sk, &iv).unwrap();
+
+        let mut cleartext = Vec::new();
+        decrypt_whole_dir(&mut cleartext, &ciphertext[..], &master).unwrap();
+
+        assert_eq!(&b"0123456789abcdef0123456789ABCDEF"[..], &cleartext[..]);
     }
 }
