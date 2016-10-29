@@ -122,10 +122,10 @@
 //!
 //! - Encode the version as a little-endian 64-bit integer.
 //!
-//! - Pad it with 8 zero bytes.
+//! - Pad it with 24 zero bytes (to make it the size of a `HashId`).
 //!
 //! - Encrypt it with AES in CBC mode using the directory key and an IV equal
-//! to the directory id.
+//! to the two halves of the directory id XORed with each other.
 //!
 //! Encrypting the integers this way obfuscates how often a directory is
 //! usually updated. It does not alone prevent tampering since an attacker
@@ -152,7 +152,7 @@
 
 use std::cell::RefCell;
 use std::fmt;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::result::Result as StdResult;
 
 use keccak;
@@ -484,6 +484,66 @@ pub fn dir_append_iv(data: &[u8]) -> [u8;16] {
     iv
 }
 
+fn dir_ver_iv(dir: &HashId) -> [u8;16] {
+    let mut iv = [0u8;16];
+    for ix in 0..8 {
+        iv[ix] = dir[ix] ^ dir[ix+16];
+    }
+    iv
+}
+
+/// Encrypts the version of the given directory.
+pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, master: &MasterKey)
+                       -> HashId {
+    let mut cleartext = HashId::default();
+    for ix in 0..8 {
+        cleartext[ix] = (ver & 0xFF) as u8;
+        ver >>= 8;
+    }
+
+    let mut res = HashId::default();
+    let mut cryptor = WEncryptor(aes::cbc_encryptor(
+        aes::KeySize::KeySize128, master.dir_key(),
+        &dir_ver_iv(dir),
+        blockmodes::NoPadding));
+    crypt_stream(&mut res[..], &cleartext[..], &mut cryptor, true)
+        .expect("Directory version encryption failed");
+
+    res
+}
+
+/// Inverts `encrypt_dir_ver()`.
+///
+/// If `ciphertext` is invalid, 0 is silently returned instead.
+pub fn decrypt_dir_ver(dir: &HashId, ciphertext: &HashId, master: &MasterKey)
+                       -> u64 {
+    // Initialise to something that we'd reject below
+    let mut cleartext = [255u8;32];
+    let mut cryptor = WDecryptor(aes::cbc_decryptor(
+        aes::KeySize::KeySize128, master.dir_key(),
+        &dir_ver_iv(dir),
+        blockmodes::NoPadding));
+    // Ignore any errors and simply leave `cleartext` initialised to the
+    // invalid value.
+    let _ = crypt_stream(&mut cleartext[..], &ciphertext[..],
+                         &mut cryptor, false);
+
+    // If the padding is invalid, silently return 0 so it gets rejected the
+    // same way as simply receding the version.
+    for &padding in &cleartext[8..] {
+        if 0 != padding {
+            return 0;
+        }
+    }
+
+    let mut ver = 0u64;
+    for ix in 0..8 {
+        ver |= (cleartext[ix] as u64) << (ix * 8);
+    }
+
+    ver
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -504,6 +564,8 @@ mod test {
 // Separate module so only the fast tess can be run when so desired
 #[cfg(test)]
 mod fast_test {
+    use defs::HashId;
+
     use super::*;
     use super::rand;
 
@@ -592,5 +654,24 @@ mod fast_test {
         decrypt_whole_dir(&mut cleartext, &ciphertext[..], &master).unwrap();
 
         assert_eq!(&b"0123456789abcdef0123456789ABCDEF"[..], &cleartext[..]);
+    }
+
+    #[test]
+    fn crypt_dir_version() {
+        let master = MasterKey::generate_new();
+
+        let mut dir = HashId::default();
+        rand(&mut dir);
+
+        assert_eq!(42u64, decrypt_dir_ver(
+            &dir, &encrypt_dir_ver(&dir, 42u64, &master), &master));
+    }
+
+    #[test]
+    fn corrupt_dir_version_decrypted_to_0() {
+        let master = MasterKey::generate_new();
+
+        assert_eq!(0u64, decrypt_dir_ver(
+            &HashId::default(), &HashId::default(), &master));
     }
 }
