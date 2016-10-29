@@ -124,6 +124,10 @@ error_chain! {
             description("Unexpected server response")
             display("Unexpected server response: {:?}", response)
         }
+        CryptError {
+            description("Ciphertext corrupt")
+            display("Ciphertext corrupt")
+        }
     }
 }
 

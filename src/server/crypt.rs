@@ -146,12 +146,17 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::result::Result as StdResult;
 
 use keccak;
 use rand::{Rng, OsRng};
 use rust_crypto::{aes, blockmodes, scrypt};
+use rust_crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer,
+                          RefReadBuffer, RefWriteBuffer};
+use rust_crypto::symmetriccipher::{Decryptor, Encryptor, SymmetricCipherError};
 
 use defs::HashId;
+use errors::*;
 use serde_types::crypt::*;
 
 const SCRYPT_18_8_1: &'static str = "scrypt-18-8-1";
@@ -269,6 +274,124 @@ pub fn try_derive_key<'a, IT : IntoIterator<Item = &'a KdfEntry>>(
         .next()
 }
 
+// Since rust-crypto uses two traits which are identical except for method
+// names, for some reason, which are also incompatible with std::io
+trait Cryptor {
+    fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
+             eof: bool) -> StdResult<BufferResult, SymmetricCipherError>;
+}
+struct WEncryptor(Box<Encryptor>);
+impl Cryptor for WEncryptor {
+    fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
+             eof: bool) -> StdResult<BufferResult, SymmetricCipherError>
+    { self.0.encrypt(input, output, eof) }
+}
+struct WDecryptor(Box<Decryptor>);
+impl Cryptor for WDecryptor {
+    fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
+             eof: bool) -> StdResult<BufferResult, SymmetricCipherError>
+    { self.0.decrypt(input, output, eof) }
+}
+
+/// Copy `src` into `dst` after passing input bytes through `crypt`.
+fn crypt_stream<W : Write, R : Read, C : Cryptor>(
+    mut dst: W, mut src: R, mut crypt: &mut C)
+    -> Result<()>
+{
+    let mut src_buf = [0u8;4096];
+    let mut dst_buf = [0u8;4112]; // Extra space for final padding block
+    let mut eof = false;
+    while !eof {
+        let mut nread = 0;
+        while !eof && nread < src_buf.len() {
+            let n = try!(src.read(&mut src_buf[nread..]));
+            eof |= 0 == n;
+            nread += n;
+        }
+
+        // Passing src_buf through the cryptor should always result in the
+        // entire thing being consumed, as either we have read a multiple of
+        // the block size or EOF has been reached.
+        let dst_len = {
+            let mut dstrbuf = RefWriteBuffer::new(&mut dst_buf);
+            let mut srcrbuf = RefReadBuffer::new(&mut src_buf[..nread]);
+            try!(crypt.crypt(&mut dstrbuf, &mut srcrbuf, eof)
+                 .map_err(|_| ErrorKind::CryptError));
+            assert!(srcrbuf.is_empty());
+            dstrbuf.position()
+        };
+
+        try!(dst.write_all(&dst_buf[..dst_len]));
+    }
+
+    Ok(())
+}
+
+fn split_key_and_iv(key_and_iv: &[u8;32]) -> ([u8;16],[u8;16]) {
+    let mut key = [0u8;16];
+    key.copy_from_slice(&key_and_iv[0..16]);
+    let mut iv = [0u8;16];
+    iv.copy_from_slice(&key_and_iv[16..32]);
+    (key, iv)
+}
+
+/// Generates and writes the CBC encryption prefix to `dst`.
+///
+/// `master` is the portion of the master key used to encrypt this prefix.
+fn write_cbc_prefix<W : Write>(dst: W, master: &[u8])
+                               -> Result<([u8;16],[u8;16])> {
+    let mut key_and_iv = [0u8;32];
+    rand(&mut key_and_iv);
+
+    let mut cryptor = WEncryptor(aes::cbc_encryptor(
+        aes::KeySize::KeySize128, master, &[0u8;16],
+        blockmodes::NoPadding));
+    try!(crypt_stream(dst, &mut&key_and_iv[..], &mut cryptor));
+
+    Ok(split_key_and_iv(&key_and_iv))
+}
+
+/// Reads out the data written by `write_cbc_prefix()`.
+fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
+                             -> Result<([u8;16],[u8;16])> {
+    let mut cipher_head = [0u8;32];
+    try!(src.read_exact(&mut cipher_head));
+    let mut cryptor = WDecryptor(aes::cbc_decryptor(
+        aes::KeySize::KeySize128, master, &[0u8;16],
+        blockmodes::NoPadding));
+
+    let mut key_and_iv = [0u8;32];
+    try!(crypt_stream(&mut&mut key_and_iv[..], &mut&cipher_head[..],
+                      &mut cryptor));
+
+    Ok(split_key_and_iv(&key_and_iv))
+}
+
+/// Encrypts the object data in `src` using the key from `master`, writing the
+/// encrypted result to `dst`.
+pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R,
+                                        master: &MasterKey)
+                                        -> Result<()> {
+    let (key, iv) = try!(write_cbc_prefix(&mut dst, master.obj_key()));
+
+    let mut cryptor = WEncryptor(aes::cbc_encryptor(
+        aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
+    try!(crypt_stream(dst, src, &mut cryptor));
+    Ok(())
+}
+
+/// Reverses `encrypt_obj()`.
+pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R,
+                                        master: &MasterKey)
+                                        -> Result<()> {
+    let (key, iv) = try!(read_cbc_prefix(&mut src, master.obj_key()));
+
+    let mut cryptor = WDecryptor(aes::cbc_decryptor(
+        aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
+    try!(crypt_stream(dst, src, &mut cryptor));
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -283,5 +406,68 @@ mod test {
         assert_eq!(Some(master), try_derive_key(b"plugh", &keys));
         assert_eq!(Some(master), try_derive_key(b"xyzzy", &keys));
         assert_eq!(None, try_derive_key(b"foo", &keys));
+    }
+}
+
+// Separate module so only the fast tess can be run when so desired
+#[cfg(test)]
+mod fast_test {
+    use super::*;
+    use super::rand;
+
+    fn test_crypt_obj(data: &[u8]) {
+        let master = MasterKey::generate_new();
+
+        let mut ciphertext = Vec::new();
+        {
+            let mut dptr = data;
+            encrypt_obj(&mut ciphertext, &mut dptr, &master).unwrap();
+        }
+
+        let mut cleartext = Vec::new();
+        decrypt_obj(&mut cleartext, &mut&ciphertext[..], &master).unwrap();
+
+        assert_eq!(data, &cleartext[..]);
+    }
+
+    #[test]
+    fn crypt_empty_obj() {
+        test_crypt_obj(&[]);
+    }
+
+    #[test]
+    fn crypt_one_block() {
+        test_crypt_obj(b"0123456789abcdef");
+    }
+
+    #[test]
+    fn crypt_partial_single_block() {
+        test_crypt_obj(b"hello");
+    }
+
+    #[test]
+    fn crypt_partial_multi_block() {
+        test_crypt_obj(b"This is longer than sixteen bytes.");
+    }
+
+    #[test]
+    fn crypt_4096() {
+        let mut data = [0u8;4096];
+        rand(&mut data);
+        test_crypt_obj(&data);
+    }
+
+    #[test]
+    fn crypt_4097() {
+        let mut data = [0u8;4097];
+        rand(&mut data);
+        test_crypt_obj(&data);
+    }
+
+    #[test]
+    fn crypt_8191() {
+        let mut data = [0u8;8191];
+        rand(&mut data);
+        test_crypt_obj(&data);
     }
 }
