@@ -133,6 +133,13 @@
 //! store the version in the directory. (This aspect is documented in the
 //! directory format docs.)
 //!
+//! Using an IV based on the directory id means that every directory has a
+//! different progression of encrypted version numbers. This prevents an
+//! attacker contolling the server from sending a different directory's
+//! contents by making an educated guess as to what might have a greater
+//! version number than what clients have seen before, which could be used to
+//! create an infinite directory tree as part of a padding oracle attack, etc.
+//!
 //! # Directory Contents
 //!
 //! The contents of a directory are prefixed with an encrypted key and IV in
