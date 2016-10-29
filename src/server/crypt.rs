@@ -301,9 +301,32 @@ impl Cryptor for WDecryptor {
 }
 
 /// Copy `src` into `dst` after passing input bytes through `crypt`.
+///
+/// If `panic_on_crypt_err` is true and the cryptor itself fails, the process
+/// panics. Otherwise, any errors are handled by simply writing to `dst` a
+/// number of zero bytes equal to the unconsumed bytes from that pass in `src`.
+/// The latter is used on decryption to prevent the software from behaving
+/// differently in the presence of invalid padding.
+///
+/// (The discussion below is not really particular to this function, but it's
+/// here to keep it all in one place.)
+///
+/// Note that while this offers protection against padding oracle attacks,
+/// there are still other timing-based attacks that could be performed based on
+/// how the data is handled.
+///
+/// In the case of objects, there are no such attacks, since objects are
+/// validated by feeding the whole thing into an HMAC function.
+///
+/// For directories, we validate each chunk's signature before attempting to
+/// parse it. Even if an attacker knew the chunk boundaries (which could be
+/// discovered via a sophisticated side-channel attack), a padding-oracle style
+/// attack is infeasible since it is necessarily at least as difficult as
+/// forging SHA-3 HMAC. (Also note again that directories do not use PKCS
+/// padding.)
 fn crypt_stream<W : Write, R : Read, C : Cryptor>(
-    mut dst: W, mut src: R, mut crypt: &mut C)
-    -> Result<()>
+    mut dst: W, mut src: R, mut crypt: &mut C,
+    panic_on_crypt_err: bool) -> Result<()>
 {
     let mut src_buf = [0u8;4096];
     let mut dst_buf = [0u8;4112]; // Extra space for final padding block
@@ -322,9 +345,20 @@ fn crypt_stream<W : Write, R : Read, C : Cryptor>(
         let dst_len = {
             let mut dstrbuf = RefWriteBuffer::new(&mut dst_buf);
             let mut srcrbuf = RefReadBuffer::new(&mut src_buf[..nread]);
-            try!(crypt.crypt(&mut dstrbuf, &mut srcrbuf, eof)
-                 .map_err(|_| ErrorKind::CryptError));
-            assert!(srcrbuf.is_empty());
+            match crypt.crypt(&mut dstrbuf, &mut srcrbuf, eof) {
+                Ok(_) => {
+                    assert!(srcrbuf.is_empty());
+                },
+                Err(e) => {
+                    if panic_on_crypt_err {
+                        panic!("Crypt error: {:?}", e);
+                    }
+
+                    for d in dstrbuf.take_next(srcrbuf.remaining()) {
+                        *d = 0;
+                    }
+                },
+            };
             dstrbuf.position()
         };
 
@@ -353,7 +387,7 @@ fn write_cbc_prefix<W : Write>(dst: W, master: &[u8])
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, master, &[0u8;16],
         blockmodes::NoPadding));
-    try!(crypt_stream(dst, &mut&key_and_iv[..], &mut cryptor));
+    try!(crypt_stream(dst, &mut&key_and_iv[..], &mut cryptor, true));
 
     Ok(split_key_and_iv(&key_and_iv))
 }
@@ -369,7 +403,7 @@ fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
 
     let mut key_and_iv = [0u8;32];
     try!(crypt_stream(&mut&mut key_and_iv[..], &mut&cipher_head[..],
-                      &mut cryptor));
+                      &mut cryptor, false));
 
     Ok(split_key_and_iv(&key_and_iv))
 }
@@ -383,7 +417,7 @@ pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R,
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
-    try!(crypt_stream(dst, src, &mut cryptor));
+    try!(crypt_stream(dst, src, &mut cryptor, true));
     Ok(())
 }
 
@@ -395,7 +429,7 @@ pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R,
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
-    try!(crypt_stream(dst, src, &mut cryptor));
+    try!(crypt_stream(dst, src, &mut cryptor, false));
     Ok(())
 }
 
