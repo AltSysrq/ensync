@@ -232,3 +232,35 @@ pub mod rpc {
     }
 }
 
+pub mod crypt {
+    pub use super::rpc::H as H;
+
+    /// Stored in cleartext CBOR as directory `[0u8;32]`.
+    ///
+    /// This stores the parameters used for the key-derivation function of each
+    /// passphrase and how to move from a derived key to the master key.
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct KdfList {
+        pub keys: Vec<KdfEntry>,
+    }
+
+    /// A single passphrase which may be used to derive the master key.
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct KdfEntry {
+        /// The algorithm used.
+        ///
+        /// This includes the parameters used. Note that these are not parsed;
+        /// the possible combinations are hardwired.
+        ///
+        /// The only option right now is "scrypt-18-8-1".
+        pub algorithm: String,
+        /// The randomly-generated salt.
+        pub salt: H,
+        /// The SHA3 hash of the derived key, to determine whether the key is
+        /// correct.
+        pub hash: H,
+        /// The pairwise XOR of the master key with this derived key, allowing
+        /// the master key to be derived once this derived key is known.
+        pub master_diff: H,
+    }
+}
