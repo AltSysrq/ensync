@@ -71,6 +71,8 @@ pub trait Storage : Send + Sync {
     /// Returns whether the transaction was committed or rejected. If rejected,
     /// the caller should refetch needed data and try again with a new commit.
     fn commit(&self, tx: Tx) -> Result<bool>;
+    /// Aborts a transaction.
+    fn abort(&self, tx: Tx) -> Result<()>;
 
     /// Schedules a directory to be created with the id `id`, version `v`, and
     /// content `data`.

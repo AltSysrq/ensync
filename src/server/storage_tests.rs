@@ -68,6 +68,13 @@ fn committing_nx_transaction_is_err() {
 }
 
 #[test]
+fn aborting_nx_transaction_is_err() {
+    init!(dir, storage);
+
+    assert!(storage.abort(42).is_err());
+}
+
+#[test]
 fn transaction_number_can_be_reused_after_commit() {
     init!(dir, storage);
 

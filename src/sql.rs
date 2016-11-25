@@ -18,13 +18,14 @@
 
 //! Miscelaneous utilities for working with SQLite.
 
+use std::ffi::{CString,OsStr,NulError};
+use std::ops::{Deref, DerefMut};
 // Because we need to be able to represent an `OsStr` as bytes in the database.
 // This does not actually depend on anything POSIX-specific; if you're porting
 // to non-POSIX, it might be worth trying to simply get the internal WTF-8
 // encoding out and store that rather than using different behaviours for
 // different platforms.
 use std::os::unix::ffi::OsStrExt;
-use std::ffi::{CString,OsStr,NulError};
 use std::result::Result as StdResult;
 
 use sqlite;
@@ -161,3 +162,22 @@ impl AsNBytes for OsStr {
         self.as_bytes()
     }
 }
+
+pub struct SendConnection(pub sqlite::Connection);
+impl Deref for SendConnection {
+    type Target = sqlite::Connection;
+
+    fn deref(&self) -> &sqlite::Connection {
+        &self.0
+    }
+}
+impl DerefMut for SendConnection {
+    fn deref_mut(&mut self) -> &mut sqlite::Connection {
+        &mut self.0
+    }
+}
+
+// `sqlite::Connection` cannot make itself `Send` because the optional callback
+// it contains might not be `Send`. We do not use that feature, and SQLite
+// itself is prepared for cross-thread requests, so it is safe to be `Send`.
+unsafe impl Send for SendConnection { }

@@ -146,6 +146,11 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
                 Err(err) => err!(err),
             },
 
+            Request::Abort(tx) => match storage.abort(tx) {
+                Ok(_) => Some(Response::Done),
+                Err(err) => err!(err),
+            },
+
             Request::Mkdir { tx, id, ver, data } => {
                 let _ = storage.mkdir(tx, &id.0, &ver.0, &data[..]);
                 None
@@ -331,6 +336,14 @@ impl Storage for RemoteStorage {
 
     fn start_tx(&self, tx: Tx) -> Result<()> {
         self.send_async_request(Request::StartTx(tx))
+    }
+
+    fn abort(&self, tx: Tx) -> Result<()> {
+        handle_response!(try!(self.send_single_sync_request(
+            Request::Abort(tx)
+        )) => {
+            Response::Done => Ok(()),
+        })
     }
 
     fn commit(&self, tx: Tx) -> Result<bool> {

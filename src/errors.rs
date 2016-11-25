@@ -1,3 +1,23 @@
+//-
+// Copyright (c) 2016, Jason Lingle
+//
+// This file is part of Ensync.
+//
+// Ensync is free software: you can  redistribute it and/or modify it under the
+// terms of  the GNU General Public  License as published by  the Free Software
+// Foundation, either version  3 of the License, or (at  your option) any later
+// version.
+//
+// Ensync is distributed  in the hope that  it will be useful,  but WITHOUT ANY
+// WARRANTY; without  even the implied  warranty of MERCHANTABILITY  or FITNESS
+// FOR  A PARTICULAR  PURPOSE.  See the  GNU General  Public  License for  more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// Ensync. If not, see <http://www.gnu.org/licenses/>.
+
+#![allow(dead_code)]
+
 use std::ffi;
 use std::io;
 
@@ -9,7 +29,7 @@ use serde_types;
 
 error_chain! {
     types {
-        Error, ErrorKind, ChainErr, Result;
+        Error, ErrorKind, Result;
     }
 
     links { }
@@ -123,6 +143,51 @@ error_chain! {
         UnexpectedServerResponse(response: serde_types::rpc::Response) {
             description("Unexpected server response")
             display("Unexpected server response: {:?}", response)
+        }
+        DirectoryVersionRecessed(dir: ffi::OsString,
+                                 latest_ver: u64, latest_len: u64,
+                                 actual_ver: u64, actual_len: u64) {
+            description("Server directory version recessed")
+            display("Server directory version recessed from \
+                     ({}, {}) to ({}, {}) for '{}'",
+                    latest_ver, latest_len, actual_ver, actual_len,
+                    dir.to_string_lossy())
+        }
+        DirectoryEmbeddedIdMismatch(dir: ffi::OsString) {
+            description("Server directory content does not \
+                         correspond to directory id")
+            display("Server directory content does not \
+                     correspond to directory id of '{}'",
+                    dir.to_string_lossy())
+        }
+        DirectoryEmbeddedVerMismatch(dir: ffi::OsString) {
+            description("Server directory content does not \
+                         correspond to directory version")
+            display("Server directory content does not \
+                     correspond to directory version of '{}'",
+                    dir.to_string_lossy())
+        }
+        UnsupportedServerDirectoryFormat(dir: ffi::OsString,
+                                         supported: u32,
+                                         actual: u32) {
+            description("Server directory uses unsupported format")
+            display("Server directory uses unsupported format \
+                     version ({}; this version of ensync only supports \
+                     up to {}) for '{}'", actual, supported,
+                    dir.to_string_lossy())
+        }
+        ServerDirectoryCorrupt(dir: ffi::OsString, message: String) {
+            description("Server directory corrupt")
+            display("Server directory '{}' corrupt: {}",
+                    dir.to_string_lossy(), message)
+        }
+        TooManyTxRetries {
+            description("Transaction failed too many times")
+            display("Transaction failed too many times")
+        }
+        DirectoryMissing {
+            description("Directory missing")
+            display("Directory missing")
         }
     }
 }

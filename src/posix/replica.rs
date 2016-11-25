@@ -807,6 +807,21 @@ impl io::Read for FileStreamSource {
 }
 
 impl StreamSource for FileStreamSource {
+    fn reset(&mut self) -> Result<()> {
+        match self.file {
+            Ok(ref mut file) => {
+                file.seek(io::SeekFrom::Start(0))?;
+                Ok(())
+            },
+            Err(ref mut err) => {
+                let kind = err.kind();
+                Err(mem::replace(
+                    err, io::Error::new(kind, "Error already reported"))
+                    .into())
+            },
+        }
+    }
+
     fn finish(&mut self, blocks: &BlockList) -> Result<()> {
         let path = self.dir.child(&self.name);
         // Make a best effort to update the cache

@@ -233,6 +233,8 @@ pub fn blocks_to_stream<R : io::Read,
 /// `Replica::TransferOut`) representing a backing store which is not
 /// content-addressable but instead presents files as linear byte streams.
 pub trait StreamSource : io::Read {
+    /// Resets the stream to the beginning of the file.
+    fn reset(&mut self) -> Result<()>;
     /// Notifies the source of the final computed block list that was read from
     /// the source (once hitting EOF) so that it can update its own data
     /// structures accordinly.

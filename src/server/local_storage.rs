@@ -22,7 +22,6 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry::*;
 use std::fs;
 use std::io::{self, Read, Seek, Write};
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::u32;
@@ -33,7 +32,7 @@ use tempfile::{NamedTempFile, PersistError};
 
 use defs::{HashId, UNKNOWN_HASH};
 use errors::*;
-use sql::{self, StatementEx};
+use sql::{self, SendConnection, StatementEx};
 use server::storage::*;
 
 /// Implements the server storage system on the local filesystem.
@@ -90,24 +89,6 @@ pub struct LocalStorage {
     db: Mutex<SendConnection>,
     txns: Mutex<HashMap<Tx, TxData>>,
 }
-struct SendConnection(sqlite::Connection);
-impl Deref for SendConnection {
-    type Target = sqlite::Connection;
-
-    fn deref(&self) -> &sqlite::Connection {
-        &self.0
-    }
-}
-impl DerefMut for SendConnection {
-    fn deref_mut(&mut self) -> &mut sqlite::Connection {
-        &mut self.0
-    }
-}
-
-// `sqlite::Connection` cannot make itself `Send` because the optional callback
-// it contains might not be `Send`. We do not use that feature, and SQLite
-// itself is prepared for cross-thread requests, so it is safe to be `Send`.
-unsafe impl Send for SendConnection { }
 
 #[derive(Debug, Default)]
 struct TxData {
@@ -542,6 +523,12 @@ impl Storage for LocalStorage {
         // transaction really did commit successfully.
         self.postcommit_cleanup(&txdat);
         Ok(true)
+    }
+
+    fn abort(&self, tx: Tx) -> Result<()> {
+        self.txns.lock().unwrap().remove(&tx)
+            .ok_or("No such transaction")?;
+        Ok(())
     }
 
     fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, data: &[u8])

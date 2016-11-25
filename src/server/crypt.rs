@@ -167,6 +167,7 @@ use errors::*;
 use serde_types::crypt::*;
 
 const SCRYPT_18_8_1: &'static str = "scrypt-18-8-1";
+pub const BLKSZ: usize = 16;
 
 thread_local! {
     static RANDOM: RefCell<OsRng> = RefCell::new(
@@ -189,11 +190,11 @@ impl MasterKey {
     }
 
     pub fn dir_key(&self) -> &[u8] {
-        &self.0[0..16]
+        &self.0[0..BLKSZ]
     }
 
     pub fn obj_key(&self) -> &[u8] {
-        &self.0[16..32]
+        &self.0[BLKSZ..BLKSZ*2]
     }
 
     pub fn hmac_secret(&self) -> &[u8] {
@@ -368,11 +369,11 @@ fn crypt_stream<W : Write, R : Read, C : Cryptor>(
     Ok(())
 }
 
-fn split_key_and_iv(key_and_iv: &[u8;32]) -> ([u8;16],[u8;16]) {
-    let mut key = [0u8;16];
-    key.copy_from_slice(&key_and_iv[0..16]);
-    let mut iv = [0u8;16];
-    iv.copy_from_slice(&key_and_iv[16..32]);
+fn split_key_and_iv(key_and_iv: &[u8;32]) -> ([u8;BLKSZ],[u8;BLKSZ]) {
+    let mut key = [0u8;BLKSZ];
+    key.copy_from_slice(&key_and_iv[0..BLKSZ]);
+    let mut iv = [0u8;BLKSZ];
+    iv.copy_from_slice(&key_and_iv[BLKSZ..32]);
     (key, iv)
 }
 
@@ -380,12 +381,12 @@ fn split_key_and_iv(key_and_iv: &[u8;32]) -> ([u8;16],[u8;16]) {
 ///
 /// `master` is the portion of the master key used to encrypt this prefix.
 fn write_cbc_prefix<W : Write>(dst: W, master: &[u8])
-                               -> Result<([u8;16],[u8;16])> {
+                               -> Result<([u8;BLKSZ],[u8;BLKSZ])> {
     let mut key_and_iv = [0u8;32];
     rand(&mut key_and_iv);
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
-        aes::KeySize::KeySize128, master, &[0u8;16],
+        aes::KeySize::KeySize128, master, &[0u8;BLKSZ],
         blockmodes::NoPadding));
     try!(crypt_stream(dst, &mut&key_and_iv[..], &mut cryptor, true));
 
@@ -394,11 +395,11 @@ fn write_cbc_prefix<W : Write>(dst: W, master: &[u8])
 
 /// Reads out the data written by `write_cbc_prefix()`.
 fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
-                             -> Result<([u8;16],[u8;16])> {
+                             -> Result<([u8;BLKSZ],[u8;BLKSZ])> {
     let mut cipher_head = [0u8;32];
     try!(src.read_exact(&mut cipher_head));
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
-        aes::KeySize::KeySize128, master, &[0u8;16],
+        aes::KeySize::KeySize128, master, &[0u8;BLKSZ],
         blockmodes::NoPadding));
 
     let mut key_and_iv = [0u8;32];
@@ -438,10 +439,10 @@ pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R,
 /// This generates a new session key and iv. The session key is returned, which
 /// can be used with `encrypt_append_dir()` to append more data to the file.
 ///
-/// `src` must produce data which is a multiple of 16 bytes long.
+/// `src` must produce data which is a multiple of BLKSZ bytes long.
 pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
                                               master: &MasterKey)
-                                              -> Result<[u8;16]> {
+                                              -> Result<[u8;BLKSZ]> {
     let (key, iv) = try!(write_cbc_prefix(&mut dst, master.dir_key()));
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
@@ -455,7 +456,7 @@ pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
 /// `key` is the session key returned by `encrypt_whole_dir()` or
 /// `decrypt_whole_dir()`. `iv` is the append-IV returned by `dir_append_iv()`.
 pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
-                                               key: &[u8;16], iv: &[u8;16])
+                                               key: &[u8;BLKSZ], iv: &[u8;BLKSZ])
                                                -> Result<()> {
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, key, iv, blockmodes::NoPadding));
@@ -467,7 +468,7 @@ pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
 /// `encrypt_append_dir()`.
 pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
                                               master: &MasterKey)
-                                              -> Result<[u8;16]> {
+                                              -> Result<[u8;BLKSZ]> {
     let (key, iv) = try!(read_cbc_prefix(&mut src, master.dir_key()));
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
@@ -476,18 +477,19 @@ pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
     Ok(key)
 }
 
-/// Given a suffix of the full content of a directory `data`, return the IV to
-/// pass to `encrypt_append_dir` to append more data to that directory.
-pub fn dir_append_iv(data: &[u8]) -> [u8;16] {
-    let mut iv = [0u8;16];
-    iv.copy_from_slice(&data[data.len() - 16..]);
+/// Given a suffix of the full ciphertext content of a directory `data`, return
+/// the IV to pass to `encrypt_append_dir` to append more data to that
+/// directory.
+pub fn dir_append_iv(data: &[u8]) -> [u8;BLKSZ] {
+    let mut iv = [0u8;BLKSZ];
+    iv.copy_from_slice(&data[data.len() - BLKSZ..]);
     iv
 }
 
-fn dir_ver_iv(dir: &HashId) -> [u8;16] {
-    let mut iv = [0u8;16];
+fn dir_ver_iv(dir: &HashId) -> [u8;BLKSZ] {
+    let mut iv = [0u8;BLKSZ];
     for ix in 0..8 {
-        iv[ix] = dir[ix] ^ dir[ix+16];
+        iv[ix] = dir[ix] ^ dir[ix+BLKSZ];
     }
     iv
 }

@@ -143,6 +143,10 @@ pub mod rpc {
         ///
         /// Response: One `Done` | `Fail` | `Error`
         Commit(Tx),
+        /// `Storage::abort`
+        ///
+        /// Response: One `Done` | `Error`
+        Abort(Tx),
         /// `Storage::mkdir`
         ///
         /// No response.
@@ -233,7 +237,7 @@ pub mod rpc {
 }
 
 pub mod crypt {
-    pub use super::rpc::H as H;
+    pub use super::rpc::H;
 
     /// Stored in cleartext CBOR as directory `[0u8;32]`.
     ///
@@ -262,5 +266,60 @@ pub mod crypt {
         /// The pairwise XOR of the master key with this derived key, allowing
         /// the master key to be derived once this derived key is known.
         pub master_diff: H,
+    }
+}
+
+pub mod dir {
+    pub use super::rpc::H;
+
+    /// Stored in the first chunk of directory contents to describe the
+    /// directory.
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Header {
+        /// The id of this directory.
+        ///
+        /// This provides explicit protection against a directory file being
+        /// replaced.
+        pub dir_id: H,
+        /// The numeric version of these contents.
+        ///
+        /// This must match what was decoded from the directory metadata. It
+        /// prevents being able to roll a directory file back to an older
+        /// version.
+        ///
+        /// This also perturbs the directory content from the very first block.
+        pub ver: u64,
+        /// The binary format for the rest of the directory. Each version
+        /// corresponds to one of the `v*` submodules.
+        pub fmt: u32,
+    }
+
+    pub mod v0 {
+        use serde::bytes::ByteBuf;
+
+        use super::H;
+        use defs::*;
+
+        /// Describes the content of a single file.
+        #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+        pub enum Entry {
+            /// A subdirectory with the given mode, as with
+            /// `FileData::Directory`, but also includes the id of that
+            /// subdirectory.
+            D(FileMode, H),
+            /// A regular file. Mostly as with `FileData::Regular`, but also
+            /// includes a list of object ids comprising the file.
+            R(FileMode, FileSize, FileTime, H, Vec<H>),
+            /// A symlink, as per `FileData::Symlink`.
+            S(ByteBuf),
+            /// A deleted file.
+            X,
+        }
+
+        /// Describes an edit for the given filename to the given content.
+        ///
+        /// Each chunk of a v0 directory (other than the first) is a sequence
+        /// of `EntryPair`s.
+        pub type EntryPair = (ByteBuf, Entry);
     }
 }
