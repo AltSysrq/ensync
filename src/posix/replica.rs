@@ -654,10 +654,11 @@ impl PosixReplica {
             // Errors are silently mapped into `UNKNOWN_HASH` so that we clear
             // the problematic cache entry.
             let actual_hash =
-                fs::File::open(&srcname).and_then(
-                    |src| stream_to_blocks(src, block_size,
-                                           &self.config.hmac_secret[..],
-                                           |_, data| dst.write_all(data)))
+                fs::File::open(&srcname).map_err(Error::from).and_then(
+                    |src| stream_to_blocks(
+                        src, block_size,
+                        &self.config.hmac_secret[..],
+                        |_, data| Ok(dst.write_all(data)?)))
                 .map(|bl| bl.total)
                 .unwrap_or(UNKNOWN_HASH);
 

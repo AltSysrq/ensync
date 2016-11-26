@@ -117,10 +117,10 @@ pub fn hash_block(secret: &[u8], block: &[u8]) -> HashId {
 /// coherently even in the presence of concurrent modification, a `Read`
 /// implementation could be based on that, and then this function would
 /// transitively provide a coherence guarantee as well.
-pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> io::Result<()>,
+pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> Result<()>,
                         R : io::Read>
     (mut input: R, block_size: usize, secret: &[u8],
-     mut block_out: F) -> io::Result<BlockList>
+     mut block_out: F) -> Result<BlockList>
 {
     let mut blocks = Vec::new();
     let mut hash = [0u8;32];

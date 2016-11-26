@@ -174,8 +174,14 @@ thread_local! {
         OsRng::new().expect("Failed to create OsRng"));
 }
 
-fn rand(buf: &mut [u8]) {
+pub fn rand(buf: &mut [u8]) {
     RANDOM.with(|r| r.borrow_mut().fill_bytes(buf))
+}
+
+pub fn rand_hashid() -> HashId {
+    let mut h = HashId::default();
+    rand(&mut h);
+    h
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]
@@ -569,7 +575,6 @@ mod fast_test {
     use defs::HashId;
 
     use super::*;
-    use super::rand;
 
     fn test_crypt_obj(data: &[u8]) {
         let master = MasterKey::generate_new();

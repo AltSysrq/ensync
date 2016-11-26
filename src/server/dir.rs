@@ -92,8 +92,9 @@ use serde::{Deserialize, Serialize};
 use serde::bytes::Bytes;
 use serde_cbor;
 
-use defs::{HashId, UNKNOWN_HASH};
+use defs::*;
 use errors::*;
+use block_xfer::*;
 use replica::ReplicaDirectory;
 use sql::{SendConnection, StatementEx};
 use serde_types::dir::*;
@@ -123,6 +124,7 @@ pub struct Dir<S : Storage> {
     key: Arc<MasterKey>,
     storage: Arc<S>,
     tx_ctr: Arc<AtomicUsize>,
+    block_size: usize,
 
     // Lock hierarchy: Lock may not be acquired while lock on `db` is held.
     content: Mutex<DirContent>,
@@ -159,7 +161,7 @@ impl<S : Storage> ReplicaDirectory for Dir<S> {
 impl<S : Storage> Dir<S> {
     /// Initialises the pseudo-root directory.
     pub fn root(db: Arc<Mutex<SendConnection>>, key: Arc<MasterKey>,
-                storage: Arc<S>) -> Result<Self> {
+                storage: Arc<S>, block_size: usize) -> Result<Self> {
         let this = Dir {
             id: DIRID_PROOT,
             parent: None,
@@ -168,6 +170,7 @@ impl<S : Storage> Dir<S> {
             key: key,
             storage: storage,
             tx_ctr: Arc::new(AtomicUsize::new(1)),
+            block_size: block_size,
             content: Mutex::new(DirContent::default()),
         };
         Ok(this)
@@ -189,6 +192,7 @@ impl<S : Storage> Dir<S> {
             key: parent.key.clone(),
             storage: parent.storage.clone(),
             tx_ctr: parent.tx_ctr.clone(),
+            block_size: parent.block_size,
             content: Mutex::new(DirContent::default()),
             parent: Some(parent),
         })
@@ -214,7 +218,7 @@ impl<S : Storage> Dir<S> {
     /// `false`. If `test` fails for any directory, abort and return that
     /// error. Otherwise, remove the first so matched directory from this
     /// directory and return `true`.
-    pub fn remove_subdir<F : Fn (&OsStr, &v0::Entry) -> Result<bool>>(
+    pub fn remove_subdir<F : Fn (&OsStr, FileMode, &HashId) -> Result<bool>>(
         &self, test: F) -> Result<bool>
     {
         let mut content = self.content.lock().unwrap();
@@ -226,7 +230,7 @@ impl<S : Storage> Dir<S> {
             let mut child_id = None;
             for (name, entry) in &content.files { match entry {
                 &v0::Entry::D(mode, H(id))
-                if test(&name, &v0::Entry::D(mode, H(id)))? => {
+                if test(&name, mode, &id)? => {
                     child_name = Some(name.to_owned());
                     child_id = Some(id);
                     break;
@@ -245,6 +249,7 @@ impl<S : Storage> Dir<S> {
                     key: self.key.clone(),
                     storage: self.storage.clone(),
                     tx_ctr: self.tx_ctr.clone(),
+                    block_size: self.block_size,
                     content: Mutex::new(DirContent::default()),
                 };
                 // Fetch the child directory's data as necessary so we know its
@@ -281,10 +286,134 @@ impl<S : Storage> Dir<S> {
         Ok(child_id.is_some())
     }
 
+    /// Edit the directory to edit `name` to be bound to `new`.
+    ///
+    /// `test` is called with whatever content is currently bound to that name.
+    /// If it returns `Ok`, the edit proceeds.
+    ///
+    /// If `new` is a regular file, `xfer` is traversed to ensure all data for
+    /// the file is present on the server.
+    ///
+    /// If `new` is a directory, `name` must either be currently non-existent
+    /// or already be a directory. To remove a directory, use
+    /// `remove_subdir()`.
+    pub fn edit<F : Fn (Option<&FileData>) -> Result<()>>
+        (&self, name: &OsStr, test: F, new: Option<&FileData>,
+         mut xfer: Option<Box<StreamSource>>) -> Result<()>
+    {
+        let mut content = self.content.lock().unwrap();
+        self.do_tx(&mut content, |tx, content| {
+            let mut subdir_id = None;
+
+            // Prepare to remove the file and ensure that it is what the caller
+            // expects it to be.
+            test(match self.lookup_opt(content, name)? {
+                Some(&v0::Entry::X) => panic!("Entry::X in content.files"),
+                Some(&v0::Entry::D(mode, H(id))) => {
+                    // Save the id of this subdirectory so we know what to
+                    // write if `new` is also a subdirectory.
+                    subdir_id = Some(id);
+                    Some(FileData::Directory(mode))
+                },
+                Some(&v0::Entry::S(ref target)) =>
+                    Some(FileData::Symlink(OsString::from_vec(
+                        target.to_vec()))),
+                Some(&v0::Entry::R(mode, size, time, H(id), ref parts)) => {
+                    // Prepare to replace this file by unlinking its
+                    // constituents
+                    for i in 0..parts.len() / 2 {
+                        let H(ref id) = parts[i*2];
+                        let H(ref linkid) = parts[i*2 + 1];
+                        self.storage.unlinkobj(tx, id, linkid)?;
+                    }
+
+                    Some(FileData::Regular(mode, size, time, id))
+                },
+                None => None,
+            }.as_ref())?;
+
+            // `test` must have rejected the operation if the current file is a
+            // directory but `new` is not. Sanity check for this since we could
+            // silently corrupt the replica if not.
+            match (subdir_id, new) {
+                // Replace directory with directory is OK
+                (Some(_), Some(&FileData::Directory(..))) => { },
+                // Replace directory with non-directory is not OK
+                (Some(_), _) =>
+                    panic!("Attempt to edit directory into non-directory"),
+                // Replace non-directory with anything is OK
+                (None, _) => { },
+            }
+
+            // Determine what the new entry is and prepare to write it.
+            let new_entry = match new {
+                None => v0::Entry::X,
+                Some(&FileData::Special) =>
+                    panic!("Attempt to create special file on server"),
+                Some(&FileData::Directory(mode)) => {
+                    // Need to create an empty directory
+                    let id = if let Some(subdir_id) = subdir_id {
+                        subdir_id
+                    } else {
+                        self.create_directory(tx)?
+                    };
+                    v0::Entry::D(mode, H(id))
+                },
+                Some(&FileData::Symlink(ref target)) =>
+                    v0::Entry::S(target.clone().into_vec().into()),
+                Some(&FileData::Regular(mode, size, time, id)) => {
+                    let mut xfer = xfer.as_mut().ok_or(ErrorKind::MissingXfer)?;
+                    xfer.reset()?;
+                    let mut blocks = Vec::new();
+                    let blocklist = stream_to_blocks(
+                        &mut xfer, self.block_size, self.key.hmac_secret(),
+                        |blockid, block_data| {
+                            let linkid = rand_hashid();
+                            blocks.push(H(*blockid));
+                            blocks.push(H(linkid));
+
+                            if !self.storage.linkobj(tx, &blockid, &linkid)? {
+                                self.storage.putobj(
+                                    tx, &blockid, &linkid, block_data)?;
+                            }
+                            Ok(())
+                        })?;
+                    xfer.finish(&blocklist)?;
+                    v0::Entry::R(mode, size, time, H(id), blocks)
+                },
+            };
+
+            self.add_entry(tx, content, name.to_owned(), new_entry)?;
+            Ok(Some(()))
+        }).map(|_| ())
+    }
+
+    /// Renames whatever file is at `old` to be at `new`, provided `old` exists
+    /// and `new` does not.
+    pub fn rename(&self, old: &OsStr, new: &OsStr) -> Result<()> {
+        let mut content = self.content.lock().unwrap();
+        self.do_tx(&mut content, |tx, content| {
+            if self.lookup_opt(content, new)?.is_some() {
+                return Err(ErrorKind::RenameDestExists.into());
+            }
+            let entry = self.lookup_opt(content, old)?
+                .ok_or(ErrorKind::NotFound)?.clone();
+
+            self.add_entry(tx, content, old.to_owned(), v0::Entry::X)?;
+            self.add_entry(tx, content, new.to_owned(), entry)?;
+            Ok(Some(()))
+        }).map(|_| ())
+    }
+
+    fn lookup_opt<'a>(&self, content: &'a mut DirContent, name: &OsStr)
+                      -> Result<Option<&'a v0::Entry>> {
+        self.refresh_if_needed(content)?;
+        Ok(content.files.get(name))
+    }
+
     fn lookup<'a>(&self, content: &'a mut DirContent, name: &OsStr)
                   -> Result<&'a v0::Entry> {
-        self.refresh_if_needed(content)?;
-        match content.files.get(name) {
+        match self.lookup_opt(content, name)? {
             Some(e) => Ok(e),
             None => Err(ErrorKind::NotFound.into()),
         }
@@ -497,7 +626,7 @@ impl<S : Storage> Dir<S> {
                  -> Result<()> {
         if content.rewrite_instead_of_append() {
             content.apply_entry((name.into_vec().into(), entry));
-            self.rewrite(tx, content)?;
+            self.rewrite(tx, content, true)?;
         } else {
             self.append_entry(tx, content, &name, &entry)?;
             content.apply_entry((name.into_vec().into(), entry));
@@ -506,9 +635,18 @@ impl<S : Storage> Dir<S> {
         Ok(())
     }
 
-    fn rewrite(&self, tx: Tx, content: &mut DirContent) -> Result<()> {
-        self.storage.rmdir(tx, &self.id,
-                           &content.cipher_version, content.length)?;
+    /// Completely rewrite this directory using its current content (but
+    /// incrementing the version number first).
+    ///
+    /// If `rmdir` is `true`, first send an `rmdir` command on `tx` to allow
+    /// rewriting an existing directory. If `rmdir` is `false`, the directory
+    /// must not already exist.
+    fn rewrite(&self, tx: Tx, content: &mut DirContent, rmdir: bool)
+               -> Result<()> {
+        if rmdir {
+            self.storage.rmdir(tx, &self.id,
+                               &content.cipher_version, content.length)?;
+        }
 
         content.version += 1;
         content.cipher_version = encrypt_dir_ver(
@@ -587,6 +725,22 @@ impl<S : Storage> Dir<S> {
         kc.update(self.key.hmac_secret());
         kc.finalize(&mut dst[start .. start + UNKNOWN_HASH.len()]);
         prev_hmac.copy_from_slice(&dst[start .. start + UNKNOWN_HASH.len()]);
+    }
+
+    fn create_directory(&self, tx: Tx) -> Result<HashId> {
+        let child = Dir {
+            id: rand_hashid(),
+            parent: None, // Not needed
+            path: OsString::new(), // Not needed
+            db: self.db.clone(),
+            key: self.key.clone(),
+            storage: self.storage.clone(),
+            tx_ctr: self.tx_ctr.clone(),
+            block_size: self.block_size,
+            content: Mutex::new(DirContent::default()),
+        };
+        child.rewrite(tx, &mut child.content.lock().unwrap(), false)?;
+        Ok(child.id)
     }
 }
 
