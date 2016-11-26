@@ -373,8 +373,11 @@ impl<S : Storage> Dir<S> {
                             blocks.push(H(linkid));
 
                             if !self.storage.linkobj(tx, &blockid, &linkid)? {
+                                let mut ciphertext = Vec::<u8>::new();
+                                encrypt_obj(&mut ciphertext, block_data,
+                                            &self.key)?;
                                 self.storage.putobj(
-                                    tx, &blockid, &linkid, block_data)?;
+                                    tx, &blockid, &linkid, &ciphertext)?;
                             }
                             Ok(())
                         })?;
