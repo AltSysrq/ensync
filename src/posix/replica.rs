@@ -683,7 +683,7 @@ impl PosixReplica {
     /// memory and returned. Otherwise, `fetch` is used to stream the data from
     /// the other replica.
     fn xfer_block(&self, hash: &HashId, fetch: &BlockFetch)
-                  -> io::Result<Box<io::Read>> {
+                  -> Result<Box<io::Read>> {
         if let Some(data) = self.fetch_block_local(hash) {
             Ok(Box::new(io::Cursor::new(data)))
         } else {
@@ -862,6 +862,7 @@ mod test {
 
     use defs::*;
     use defs::test_helpers::*;
+    use errors::*;
     use replica::*;
     use block_xfer;
     use super::*;
@@ -906,7 +907,7 @@ mod test {
     }
 
     impl block_xfer::BlockFetch for MemoryBlockFetch {
-        fn fetch(&self, block: &HashId) -> io::Result<Box<Read>> {
+        fn fetch(&self, block: &HashId) -> Result<Box<Read>> {
             Ok(Box::new(io::Cursor::new(
                 self.blocks.get(block).expect("Unexpected block fetched")
                     .clone())))

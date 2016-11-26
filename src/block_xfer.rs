@@ -180,7 +180,7 @@ pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> Result<()>,
 /// If this returns an error, the data written to `output` must be considered
 /// corrupt; no guarantees are made about it in this case.
 pub fn blocks_to_stream<R : io::Read,
-                        F : FnMut (&HashId) -> io::Result<R>,
+                        F : FnMut (&HashId) -> Result<R>,
                         W : io::Write>
     (input: &BlockList, mut output: W, secret: &[u8],
      mut block_fetch: F) -> Result<()>
@@ -257,7 +257,7 @@ pub struct ContentAddressableSource {
 pub trait BlockFetch {
     /// Fetches the block identified by `block`, returning a stream that can be
     /// used to obtain the data within.
-    fn fetch(&self, block: &HashId) -> io::Result<Box<io::Read>>;
+    fn fetch(&self, block: &HashId) -> Result<Box<io::Read>>;
 }
 
 #[cfg(test)]
