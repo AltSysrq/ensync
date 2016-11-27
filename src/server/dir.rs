@@ -150,6 +150,13 @@ struct DirContent {
     session_key: [u8;BLKSZ],
     /// The IV to pass to `encrypt_append_dir`
     iv: [u8;BLKSZ],
+    /// If `Some`, the directory is currently an unmaterialised synthetic
+    /// directory.
+    ///
+    /// Note that since we need to pre-determine the id to use, we can't fully
+    /// handle the condition where two clients concurrently try to create the
+    /// same synthetic directory; one of them will fail.
+    synth: Option<(OsString, FileMode)>,
 }
 
 impl<S : Storage> ReplicaDirectory for Dir<S> {
@@ -195,6 +202,27 @@ impl<S : Storage> Dir<S> {
             block_size: parent.block_size,
             content: Mutex::new(DirContent::default()),
             parent: Some(parent),
+        })
+    }
+
+    /// Like `Replica::synthdir`.
+    pub fn synthdir(parent: Arc<Self>, name: &OsStr, mode: FileMode) -> Self {
+        // Use `subdir` when possible, since we can't change our mind once we
+        // choose a new id. If anything fails, fall back to an actually
+        // synthetic directory.
+        Dir::subdir(parent.clone(), name).unwrap_or_else(|_| Dir {
+            id: rand_hashid(),
+            path: parent.subdir_path(name),
+            db: parent.db.clone(),
+            key: parent.key.clone(),
+            storage: parent.storage.clone(),
+            tx_ctr: parent.tx_ctr.clone(),
+            block_size: parent.block_size,
+            content: Mutex::new(DirContent {
+                synth: Some((name.to_owned(), mode)),
+                .. DirContent::default()
+            }),
+            parent: Some(parent)
         })
     }
 
@@ -302,6 +330,8 @@ impl<S : Storage> Dir<S> {
          mut xfer: Option<Box<StreamSource>>) -> Result<()>
     {
         let mut content = self.content.lock().unwrap();
+        self.materialise(&mut content)?;
+
         self.do_tx(&mut content, |tx, content| {
             let mut subdir_id = None;
 
@@ -431,6 +461,12 @@ impl<S : Storage> Dir<S> {
     }
 
     fn refresh(&self, content: &mut DirContent) -> Result<()> {
+        // If this directory is synthetic, its contents are always empty.
+        if content.synth.is_some() {
+            debug_assert!(content.files.is_empty());
+            return Ok(());
+        }
+
         let db = self.db.lock().unwrap();
 
         let (cipher_version, cipher_data) = self.storage.getdir(&self.id)?
@@ -497,6 +533,7 @@ impl<S : Storage> Dir<S> {
             physical_entries: 0,
             session_key: session_key,
             iv: dir_append_iv(&cipher_data),
+            synth: None,
         };
 
         while let Some(entries) = self.read_v0_chunk::<Vec<v0::EntryPair>>(
@@ -744,6 +781,39 @@ impl<S : Storage> Dir<S> {
         };
         child.rewrite(tx, &mut child.content.lock().unwrap(), false)?;
         Ok(child.id)
+    }
+
+    /// If this directory is currently synthetic, materialise it.
+    ///
+    /// This may recurse to the parent to materialise it as well if needed.
+    fn materialise(&self, content: &mut DirContent) -> Result<()> {
+        if let Some((name, mode)) = content.synth.clone() {
+            let parent = self.parent.as_ref().expect("Synthetic root dir");
+            let mut parent_content = parent.content.lock().unwrap();
+            parent.materialise(&mut parent_content)?;
+            parent.do_tx(&mut parent_content, |tx, parent_content| {
+                // Make sure there isn't something else with this name meanwhile.
+                if parent_content.files.contains_key(&name) {
+                    return Err(ErrorKind::SynthConflict.into());
+                }
+
+                // Create the backing for this directory first.
+                //
+                // This _will_ mutate `content`, which will not get undone by
+                // `do_tx`, but the only thing permanently changed is `version`
+                // (and `cipher_version`), but it's OK if the version number
+                // doesn't start from 1.
+                self.rewrite(tx, content, false)?;
+                // Add this directory to the parent
+                parent.add_entry(tx, parent_content, name.clone(),
+                                 v0::Entry::D(mode, H(self.id)))?;
+                Ok(Some(()))
+            })?;
+            content.synth = None;
+            Ok(())
+        } else {
+            Ok(())
+        }
     }
 }
 

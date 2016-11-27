@@ -189,6 +189,10 @@ error_chain! {
             description("Directory missing")
             display("Directory missing")
         }
+        SynthConflict {
+            description("Conflict creating on-demand directory")
+            display("Conflict creating on-demand directory")
+        }
     }
 }
 
