@@ -239,6 +239,30 @@ impl<S : Storage> Dir<S> {
         *self.content.lock().unwrap() = DirContent::default();
     }
 
+    fn v0_entry_to_filedata(&self, e: &v0::Entry) -> Option<FileData> {
+        match *e {
+            v0::Entry::D(mode, _) =>
+                Some(FileData::Directory(mode)),
+            v0::Entry::R(mode, size, time, H(hash), _) =>
+                Some(FileData::Regular(mode, size, time, hash)),
+            v0::Entry::S(ref target) =>
+                Some(FileData::Symlink(OsString::from_vec(
+                    target.to_vec()))),
+            v0::Entry::X => None,
+        }
+    }
+
+    /// Like `Replica::list()`
+    pub fn list(&self) -> Result<Vec<(OsString, FileData)>> {
+        let mut content = self.content.lock().unwrap();
+        self.refresh_if_needed(&mut content)?;
+        Ok(content.files.iter().map(
+            |(name, value)| (
+                name.to_owned(),
+                self.v0_entry_to_filedata(value)
+                    .expect("Entry::X in content.files"))).collect())
+    }
+
     /// Remove a subdirectory of this directory for which `test` returns
     /// `true`.
     ///
@@ -326,8 +350,9 @@ impl<S : Storage> Dir<S> {
     /// or already be a directory. To remove a directory, use
     /// `remove_subdir()`.
     pub fn edit<F : Fn (Option<&FileData>) -> Result<()>>
-        (&self, name: &OsStr, test: F, new: Option<&FileData>,
-         mut xfer: Option<Box<StreamSource>>) -> Result<()>
+        (&self, name: &OsStr, new: Option<&FileData>,
+         mut xfer: Option<Box<StreamSource>>, test: F)
+         -> Result<Option<FileData>>
     {
         let mut content = self.content.lock().unwrap();
         self.materialise(&mut content)?;
@@ -416,9 +441,10 @@ impl<S : Storage> Dir<S> {
                 },
             };
 
+            let ret = self.v0_entry_to_filedata(&new_entry);
             self.add_entry(tx, content, name.to_owned(), new_entry)?;
-            Ok(Some(()))
-        }).map(|_| ())
+            Ok(Some(ret))
+        }).map(|r| r.expect("edit() transaction aborted?"))
     }
 
     /// Renames whatever file is at `old` to be at `new`, provided `old` exists
