@@ -181,7 +181,7 @@ fn replace_replica<DST : Replica,
             log.log(log::EDIT, &Log::Update(side, dir_name, name,
                                             oldfd, newfd));
             match dst.update(dst_dir, name, oldfd, newfd,
-                             src.transfer(src_dir, File(name, newfd))) {
+                             src.transfer(src_dir, File(name, newfd))?) {
                 Ok(r) => {
                     // We need to insert r, not newfd, because newfd may be
                     // out-of-date.
@@ -201,7 +201,7 @@ fn replace_replica<DST : Replica,
             // Insertion.
             log.log(log::EDIT, &Log::Create(side, dir_name, name, newfd));
             match dst.create(dst_dir, File(name, newfd),
-                             src.transfer(src_dir, File(name, newfd))) {
+                             src.transfer(src_dir, File(name, newfd))?) {
                 Ok(r) => {
                     // We need to insert r, not newfd, because newfd may be
                     // out-of-date.

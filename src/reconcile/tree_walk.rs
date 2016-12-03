@@ -540,12 +540,12 @@ mod test {
                         replica.create(
                             dir, File(&name, &FileData::Regular(
                                 mode, 0, 0, [hash;32])),
-                            Ok([hash;32])).unwrap();
+                            Some([hash;32])).unwrap();
                     },
                     Dir(mode) => {
                         replica.create(
                             dir, File(&name, &FileData::Directory(mode)),
-                            Ok([0;32])).unwrap();
+                            Some([0;32])).unwrap();
 
                         let mut subdir = replica.chdir(dir, &name).unwrap();
                         populate_dir(replica, &mut subdir, &en.4, slot);

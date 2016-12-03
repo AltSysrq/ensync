@@ -164,8 +164,8 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
         }
     }
 
-    // TODO This really should return a Result<Self::TransferOut>.
-    fn transfer(&self, _dir: &Arc<Dir<S>>, _file: File) -> Self::TransferOut {
+    fn transfer(&self, _dir: &Arc<Dir<S>>, _file: File)
+                -> Result<Self::TransferOut> {
         unimplemented!()
     }
 

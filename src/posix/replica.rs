@@ -19,7 +19,6 @@
 use std::ffi::{OsStr,OsString};
 use std::fs;
 use std::io::{self,Read,Seek,Write};
-use std::mem;
 use std::os::unix;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::prelude::*;
@@ -349,11 +348,11 @@ impl Replica for PosixReplica {
     }
 
     fn transfer(&self, dir: &DirHandle, file: File)
-                -> Option<Box<StreamSource>> {
-        match *file.1 {
+                -> Result<Option<Box<StreamSource>>> {
+        Ok(match *file.1 {
             FileData::Regular(mode, _, _, expected_hash) => Some(Box::new(
                 FileStreamSource {
-                    file: fs::File::open(dir.child(file.0)),
+                    file: fs::File::open(dir.child(file.0))?,
                     dir: dir.clone(),
                     name: file.0.to_owned(),
                     mode: mode,
@@ -363,7 +362,7 @@ impl Replica for PosixReplica {
                 }
             )),
             _ => None,
-        }
+        })
     }
 
     fn prepare(&self) -> Result<()> {
@@ -776,9 +775,8 @@ impl PosixReplica {
 
 /// The `TransferOut` used for the POSIX replica.
 struct FileStreamSource {
-    /// A read handle to the file, or `Err` if the file was not able to be
-    /// opened. Errors are reflected from `io::Read::read()`.
-    file: io::Result<fs::File>,
+    /// A read handle to the file.
+    file: fs::File,
     /// Shared handle to the directory containing this file.
     dir: DirHandle,
     /// The name of the file being read.
@@ -796,31 +794,14 @@ struct FileStreamSource {
 
 impl io::Read for FileStreamSource {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.file {
-            Ok(ref mut file) => file.read(buf),
-            Err(ref mut err) => {
-                let kind = err.kind();
-                Err(mem::replace(
-                    err, io::Error::new(kind, "Error already reported")))
-            },
-        }
+        self.file.read(buf)
     }
 }
 
 impl StreamSource for FileStreamSource {
     fn reset(&mut self) -> Result<()> {
-        match self.file {
-            Ok(ref mut file) => {
-                file.seek(io::SeekFrom::Start(0))?;
-                Ok(())
-            },
-            Err(ref mut err) => {
-                let kind = err.kind();
-                Err(mem::replace(
-                    err, io::Error::new(kind, "Error already reported"))
-                    .into())
-            },
-        }
+        self.file.seek(io::SeekFrom::Start(0))?;
+        Ok(())
     }
 
     fn finish(&mut self, blocks: &BlockList) -> Result<()> {
@@ -966,7 +947,8 @@ mod test {
                 |_, _| Ok(())).unwrap().total, hash);
 
             let mut data = Vec::new();
-            replica.transfer(&dir, File(&list[0].0, &list[0].1)).unwrap()
+            replica.transfer(&dir, File(&list[0].0, &list[0].1))
+                .unwrap().unwrap()
                 .read_to_end(&mut data).unwrap();
             assert_eq!("hello world".as_bytes(), &data[..]);
         } else {
@@ -1768,7 +1750,8 @@ mod test {
             // Concurrent modification
             spit(subdir.join("foo"), "plugh");
 
-            let mut ss = replica.transfer(&cdir, File(&fname, &fdata)).unwrap();
+            let mut ss = replica.transfer(&cdir, File(&fname, &fdata))
+                .unwrap().unwrap();
             let bl = block_xfer::stream_to_blocks(&mut ss, BLOCK_SZ,
                                                   SECRET.as_bytes(),
                                                   |_, _| Ok(()))

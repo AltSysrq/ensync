@@ -384,8 +384,8 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn transfer(&self, _: &DirHandle, _: File) -> () {
-        ()
+    fn transfer(&self, _: &DirHandle, _: File) -> Result<()> {
+        Ok(())
     }
 }
 

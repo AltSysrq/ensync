@@ -138,11 +138,11 @@ impl<'a> From<&'a mut Entry> for FileData {
 }
 
 impl Entry {
-    fn from_file_data(fd: &FileData, xfer: Result<HashId>) -> Result<Entry> {
+    fn from_file_data(fd: &FileData, xfer: Option<HashId>) -> Result<Entry> {
         match fd {
             &FileData::Directory(mode) => Ok(Entry::Directory(mode)),
             &FileData::Regular(mode, size, modified, _) => {
-                let hash = try!(xfer);
+                let hash = xfer.ok_or(ErrorKind::MissingXfer)?;
                 Ok(Entry::Regular(Regular {
                     mode: mode, size: size, modified: modified,
                     hash: hash, content: hash,
@@ -284,8 +284,8 @@ impl MemoryReplica {
 
 impl Replica for MemoryReplica {
     type Directory = DirHandle;
-    type TransferIn = Result<HashId>;
-    type TransferOut = Result<HashId>;
+    type TransferIn = Option<HashId>;
+    type TransferOut = Option<HashId>;
 
     fn is_dir_dirty(&self, dir: &DirHandle) -> bool {
         self.data().dirs.get(&dir.path).map_or(false, |d| !d.clean)
@@ -448,7 +448,7 @@ impl Replica for MemoryReplica {
         Ok(())
     }
 
-    fn create(&self, dir: &mut DirHandle, source: File, xfer: Result<HashId>)
+    fn create(&self, dir: &mut DirHandle, source: File, xfer: Option<HashId>)
               -> Result<FileData> {
         use std::collections::hash_map::Entry::*;
 
@@ -499,7 +499,7 @@ impl Replica for MemoryReplica {
 
     fn update(&self, dir: &mut DirHandle, name: &OsStr,
               old: &FileData, new: &FileData,
-              xfer: Result<HashId>) -> Result<FileData> {
+              xfer: Option<HashId>) -> Result<FileData> {
         {
             let mut d = self.data();
             try!(d.test_op(&Op::Update(dir.path.clone(), name.to_owned())));
@@ -603,7 +603,8 @@ impl Replica for MemoryReplica {
         self.remove(&mut parent, File(&name, &parent_data))
     }
 
-    fn transfer(&self, dir: &DirHandle, file: File) -> Result<HashId> {
+    fn transfer(&self, dir: &DirHandle, file: File)
+                -> Result<Option<HashId>> {
         let mut d = self.data();
         try!(d.test_op(&Op::Transfer(dir.path.clone(), file.0.to_owned())));
 
@@ -611,21 +612,21 @@ impl Replica for MemoryReplica {
             if let Some(&Entry::Regular(Regular { content, .. })) =
                 contents.contents.get(file.0)
             {
-                Ok(content)
+                Ok(Some(content))
             } else {
-                simple_error()
+                Ok(None)
             }
         } else {
-            simple_error()
+            Err(ErrorKind::NotFound.into())
         }
     }
 }
 
 impl NullTransfer for MemoryReplica {
-    fn null_transfer(file: &FileData) -> Result<HashId> {
+    fn null_transfer(file: &FileData) -> Option<HashId> {
         match file {
-            &FileData::Regular(_,_,_,h) => Ok(h),
-            _ => simple_error(),
+            &FileData::Regular(_,_,_,h) => Some(h),
+            _ => None,
         }
     }
 }
@@ -678,7 +679,7 @@ mod test {
             &mut root, File(&oss("foo"), &FileData::Special)).is_err());
         assert!(replica.update(&mut root, &oss("foo"),
                                &FileData::Special, &FileData::Directory(0o666),
-                               Ok(UNKNOWN_HASH)).is_err());
+                               Some(UNKNOWN_HASH)).is_err());
     }
 
     #[test]
@@ -718,7 +719,7 @@ mod test {
              name: &str, mode: FileMode) -> Result<FileData> {
         let hash = replica.gen_hash();
         replica.create(dir, File(&oss(name), &FileData::Regular(
-            mode, 1, 0, UNKNOWN_HASH)), Ok(hash))
+            mode, 1, 0, UNKNOWN_HASH)), Some(hash))
     }
 
     #[test]
@@ -743,7 +744,7 @@ mod test {
     fn mksym(replica: &MemoryReplica, dir: &mut DirHandle,
              name: &str, target: &str) -> Result<FileData> {
         replica.create(dir, File(&oss(name), &FileData::Symlink(
-            oss(target))), simple_error())
+            oss(target))), None)
     }
 
     #[test]
@@ -767,7 +768,7 @@ mod test {
 
     fn mkspec(replica: &MemoryReplica, dir: &mut DirHandle,
               name: &str) -> Result<FileData> {
-        replica.create(dir, File(&oss(name), &FileData::Special), simple_error())
+        replica.create(dir, File(&oss(name), &FileData::Special), None)
     }
 
     #[test]
@@ -795,7 +796,7 @@ mod test {
     fn mkdir(replica: &MemoryReplica, dir: &mut DirHandle,
              name: &str, mode: FileMode) -> Result<FileData> {
         replica.create(dir, File(&oss(name), &FileData::Directory(mode)),
-                       simple_error())
+                       None)
     }
 
     #[test]
@@ -1045,7 +1046,7 @@ mod test {
         replica.update(&mut root, &oss("foo"),
                        &FileData::Symlink(oss("xyzzy")),
                        &FileData::Symlink(oss("plugh")),
-                       simple_error()).unwrap();
+                       None).unwrap();
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1059,7 +1060,7 @@ mod test {
         assert!(replica.update(&mut root, &oss("foo"),
                                &FileData::Symlink(oss("xyzzy")),
                                &FileData::Symlink(oss("plugh")),
-                               simple_error()).is_err());
+                               None).is_err());
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1076,7 +1077,7 @@ mod test {
         replica.update(&mut root, &oss("foo"),
                        &FileData::Directory(0o777),
                        &FileData::Directory(0o700),
-                       simple_error()).unwrap();
+                       None).unwrap();
 
         replica.list(&mut subdir).unwrap();
 
@@ -1095,7 +1096,7 @@ mod test {
         assert!(replica.update(&mut root, &oss("foo"),
                                &FileData::Directory(0o666),
                                &FileData::Directory(0o700),
-                               simple_error()).is_err());
+                               None).is_err());
 
         replica.list(&mut subdir).unwrap();
 
@@ -1113,12 +1114,12 @@ mod test {
         replica.create(
             &mut root, File(
                 &oss("foo"), &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH)),
-            Ok(old_hash)).unwrap();
+            Some(old_hash)).unwrap();
         let returned = replica.update(
             &mut root, &oss("foo"),
             &FileData::Regular(0o666, 0, 0, old_hash),
             &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
-            Ok(new_hash)).unwrap();
+            Some(new_hash)).unwrap();
 
         assert_eq!(FileData::Regular(0o777, 0, 0, new_hash), returned);
     }
@@ -1133,12 +1134,12 @@ mod test {
         replica.create(
             &mut root, File(
                 &oss("foo"), &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH)),
-            Ok(other_hash)).unwrap();
+            Some(other_hash)).unwrap();
         assert!(replica.update(
             &mut root, &oss("foo"),
             &FileData::Regular(0o666, 0, 0, old_hash),
             &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
-            Ok(new_hash)).is_err());
+            Some(new_hash)).is_err());
     }
 
     #[test]
@@ -1150,12 +1151,12 @@ mod test {
         replica.create(
             &mut root, File(
                 &oss("foo"), &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH)),
-            Ok(old_hash)).unwrap();
+            Some(old_hash)).unwrap();
         assert!(replica.update(
             &mut root, &oss("foo"),
             &FileData::Regular(0o600, 0, 0, old_hash),
             &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
-            Ok(new_hash)).is_err());
+            Some(new_hash)).is_err());
     }
 
     #[test]
@@ -1165,7 +1166,7 @@ mod test {
         replica.update(&mut root, &oss("foo"),
                        &FileData::Special,
                        &FileData::Directory(0o777),
-                       simple_error()).unwrap();
+                       None).unwrap();
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1183,7 +1184,7 @@ mod test {
         replica.update(&mut root, &oss("foo"),
                        &FileData::Directory(0o777),
                        &FileData::Special,
-                       simple_error()).unwrap();
+                       None).unwrap();
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1203,7 +1204,7 @@ mod test {
         assert!(replica.update(&mut root, &oss("foo"),
                                &FileData::Directory(0o777),
                                &FileData::Special,
-                               simple_error()).is_err());
+                               None).is_err());
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());

@@ -164,7 +164,7 @@ pub trait Replica {
     /// Returns an object which can be used to transfer `file` out of this
     /// replica.
     fn transfer(&self, &Self::Directory, file: File)
-                -> Self::TransferOut;
+                -> Result<Self::TransferOut>;
 
     /// Performs any initial setup of this replica.
     ///
