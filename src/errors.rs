@@ -193,6 +193,14 @@ error_chain! {
             description("Conflict creating on-demand directory")
             display("Conflict creating on-demand directory")
         }
+        ServerContentDeleted {
+            description("Content deleted on server")
+            display("Content deleted on server")
+        }
+        ServerContentUpdated {
+            description("Content changed on server")
+            display("Content changed on server")
+        }
     }
 }
 

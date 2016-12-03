@@ -16,10 +16,30 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-pub mod storage;
-pub mod local_storage;
-pub mod rpc;
-mod crypt;
-mod dir;
-mod replica;
-mod transfer;
+use std::io;
+use std::sync::Arc;
+
+use block_xfer::BlockFetch;
+use defs::HashId;
+use errors::*;
+use server::storage::Storage;
+
+pub struct ServerTransferOut<S : Storage> {
+    storage: Arc<S>,
+}
+
+impl<S : Storage> ServerTransferOut<S> {
+    pub fn new(storage: Arc<S>) -> Self {
+        ServerTransferOut {
+            storage: storage,
+        }
+    }
+}
+
+impl<S : Storage> BlockFetch for ServerTransferOut<S> {
+    fn fetch(&self, block: &HashId) -> Result<Box<io::Read>> {
+        Ok(Box::new(io::Cursor::new(
+            self.storage.getobj(block)?
+                .ok_or(ErrorKind::ServerContentDeleted)?)))
+    }
+}

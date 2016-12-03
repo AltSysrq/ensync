@@ -32,13 +32,13 @@ use super::crypt::MasterKey;
 use super::dir::*;
 use super::storage::*;
 
-impl<S : Storage> ReplicaDirectory for Arc<Dir<S>> {
+impl<S : Storage + 'static> ReplicaDirectory for Arc<Dir<S>> {
     fn full_path(&self) -> &OsStr {
         (**self).full_path()
     }
 }
 
-pub struct ServerReplica<S : Storage> {
+pub struct ServerReplica<S : Storage + 'static> {
     db: Arc<Mutex<SendConnection>>,
     storage: Arc<S>,
     pseudo_root: Arc<Dir<S>>,
@@ -46,7 +46,7 @@ pub struct ServerReplica<S : Storage> {
     block_size: usize,
 }
 
-impl<S : Storage> ServerReplica<S> {
+impl<S : Storage + 'static> ServerReplica<S> {
     pub fn new(path: &str, key: Arc<MasterKey>,
                storage: Arc<S>, root_name: &str, block_size: usize)
                -> Result<Self> {
@@ -164,9 +164,13 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
         }
     }
 
-    fn transfer(&self, _dir: &Arc<Dir<S>>, _file: File)
+    fn transfer(&self, dir: &Arc<Dir<S>>, file: File)
                 -> Result<Self::TransferOut> {
-        unimplemented!()
+        match *file.1 {
+            FileData::Regular(_, _, _, ref content) =>
+                dir.transfer(file.0, content).map(Some),
+            _ => Ok(None),
+        }
     }
 
     fn prepare(&self) -> Result<()> {

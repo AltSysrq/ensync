@@ -308,9 +308,9 @@ pub mod dir {
             /// subdirectory.
             D(FileMode, H),
             /// A regular file. Mostly as with `FileData::Regular`, but also
-            /// includes a list of alternating object ids comprising the file
-            /// and their linkids.
-            R(FileMode, FileSize, FileTime, H, Vec<H>),
+            /// includes the block size and a list of alternating object ids
+            /// comprising the file and their linkids.
+            R(FileMode, FileSize, FileTime, H, u32, Vec<H>),
             /// A symlink, as per `FileData::Symlink`.
             S(ByteBuf),
             /// A deleted file.

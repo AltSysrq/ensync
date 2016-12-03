@@ -100,6 +100,7 @@ use sql::{SendConnection, StatementEx};
 use serde_types::dir::*;
 use server::crypt::*;
 use server::storage::*;
+use server::transfer::ServerTransferOut;
 
 /// The well-known directory id of the "directory" object which stores the key
 /// list.
@@ -115,7 +116,7 @@ pub const DIRID_PROOT: HashId = [255;32];
 /// semantics of `Storage`. However, the interface exposed is simply reads and
 /// unconditional updates; it is up to the replica to handle if-match and so
 /// forth, for example.
-pub struct Dir<S : Storage> {
+pub struct Dir<S : Storage + 'static> {
     pub id: HashId,
     pub parent: Option<Arc<Dir<S>>>,
     pub path: OsString,
@@ -159,13 +160,13 @@ struct DirContent {
     synth: Option<(OsString, FileMode)>,
 }
 
-impl<S : Storage> ReplicaDirectory for Dir<S> {
+impl<S : Storage + 'static> ReplicaDirectory for Dir<S> {
     fn full_path(&self) -> &OsStr {
         &self.path
     }
 }
 
-impl<S : Storage> Dir<S> {
+impl<S : Storage + 'static> Dir<S> {
     /// Initialises the pseudo-root directory.
     pub fn root(db: Arc<Mutex<SendConnection>>, key: Arc<MasterKey>,
                 storage: Arc<S>, block_size: usize) -> Result<Self> {
@@ -243,7 +244,7 @@ impl<S : Storage> Dir<S> {
         match *e {
             v0::Entry::D(mode, _) =>
                 Some(FileData::Directory(mode)),
-            v0::Entry::R(mode, size, time, H(hash), _) =>
+            v0::Entry::R(mode, size, time, H(hash), _, _) =>
                 Some(FileData::Regular(mode, size, time, hash)),
             v0::Entry::S(ref target) =>
                 Some(FileData::Symlink(OsString::from_vec(
@@ -373,7 +374,7 @@ impl<S : Storage> Dir<S> {
                 Some(&v0::Entry::S(ref target)) =>
                     Some(FileData::Symlink(OsString::from_vec(
                         target.to_vec()))),
-                Some(&v0::Entry::R(mode, size, time, H(id), ref parts)) => {
+                Some(&v0::Entry::R(mode, size, time, H(id), _, ref parts)) => {
                     // Prepare to replace this file by unlinking its
                     // constituents
                     for i in 0..parts.len() / 2 {
@@ -437,7 +438,8 @@ impl<S : Storage> Dir<S> {
                             Ok(())
                         })?;
                     xfer.finish(&blocklist)?;
-                    v0::Entry::R(mode, size, time, H(id), blocks)
+                    v0::Entry::R(mode, size, time, H(id),
+                                 self.block_size as u32, blocks)
                 },
             };
 
@@ -462,6 +464,33 @@ impl<S : Storage> Dir<S> {
             self.add_entry(tx, content, new.to_owned(), entry)?;
             Ok(Some(()))
         }).map(|_| ())
+    }
+
+    /// Create a outbound transfer for the given file, expecting it to be an
+    /// existing regular file with the given content hash.
+    pub fn transfer(&self, name: &OsStr, expected: &HashId)
+                    -> Result<ContentAddressableSource> {
+        let mut content = self.content.lock().unwrap();
+        match self.lookup_opt(&mut content, name)? {
+            None => Err(ErrorKind::ServerContentDeleted.into()),
+            Some(&v0::Entry::R(_, _, _, H(actual), bs, ref blocks)) => {
+                if *expected == actual {
+                    Ok(ContentAddressableSource {
+                        blocks: BlockList {
+                            total: actual,
+                            size: 0, // Not used
+                            blocks: blocks.iter().map(|&H(h)| h).collect(),
+                        },
+                        block_size: bs as usize,
+                        fetch: Arc::new(ServerTransferOut::new(
+                            self.storage.clone())),
+                    })
+                } else {
+                    Err(ErrorKind::ServerContentUpdated.into())
+                }
+            },
+            Some(_) => Err(ErrorKind::ServerContentUpdated.into()),
+        }
     }
 
     fn lookup_opt<'a>(&self, content: &'a mut DirContent, name: &OsStr)
