@@ -493,6 +493,11 @@ impl<S : Storage + 'static> Dir<S> {
         }
     }
 
+    pub fn ver_and_len(&self) -> (u64, u32) {
+        let content = self.content.lock().unwrap();
+        (content.version, content.length)
+    }
+
     fn lookup_opt<'a>(&self, content: &'a mut DirContent, name: &OsStr)
                       -> Result<Option<&'a v0::Entry>> {
         self.refresh_if_needed(content)?;

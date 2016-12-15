@@ -27,8 +27,8 @@ use block_xfer::*;
 use defs::*;
 use errors::*;
 use replica::*;
-use sql::SendConnection;
-use super::crypt::MasterKey;
+use sql::{SendConnection, StatementEx};
+use super::crypt::{MasterKey, decrypt_dir_ver};
 use super::dir::*;
 use super::storage::*;
 
@@ -40,6 +40,7 @@ impl<S : Storage + 'static> ReplicaDirectory for Arc<Dir<S>> {
 
 pub struct ServerReplica<S : Storage + 'static> {
     db: Arc<Mutex<SendConnection>>,
+    key: Arc<MasterKey>,
     storage: Arc<S>,
     pseudo_root: Arc<Dir<S>>,
     root_name: OsString,
@@ -59,6 +60,7 @@ impl<S : Storage + 'static> ServerReplica<S> {
 
         Ok(ServerReplica {
             db: db,
+            key: key.clone(),
             storage: storage,
             pseudo_root: pseudo_root,
             root_name: root_name.to_owned().into(),
@@ -72,12 +74,34 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
     type TransferIn = Option<Box<StreamSource>>;
     type TransferOut = Option<ContentAddressableSource>;
 
-    fn is_dir_dirty(&self, _dir: &Arc<Dir<S>>) -> bool {
-        unimplemented!()
+    fn is_dir_dirty(&self, dir: &Arc<Dir<S>>) -> bool {
+        let db = self.db.lock().unwrap();
+        let clean = db.prepare("SELECT 1 FROM `clean_dir` WHERE `id` = ?1")
+            .binding(1, &dir.id[..])
+            .exists().unwrap_or(false);
+        !clean
     }
 
-    fn set_dir_clean(&self, _dir: &Arc<Dir<S>>) -> Result<bool> {
-        unimplemented!()
+    fn set_dir_clean(&self, dir: &Arc<Dir<S>>) -> Result<bool> {
+        let (ver, len) = dir.ver_and_len();
+        let parent = if let Some(ref parent) = dir.parent {
+            sqlite::Value::Binary(parent.id.to_vec())
+        } else {
+            sqlite::Value::Null
+        };
+
+        let db = self.db.lock().unwrap();
+        db.prepare("INSERT OR REPLACE INTO `clean_dir` (\
+                       `id`, `parent`, `ver`, `len` \
+                     ) VALUES ( \
+                       ?1, ?2, ?3, ?4 \
+                     )")
+            .binding(1, &dir.id[..])
+            .binding(2, &parent)
+            .binding(3, ver as i64)
+            .binding(4, len as i64)
+            .run()?;
+        Ok(true)
     }
 
     fn root(&self) -> Result<Arc<Dir<S>>> {
@@ -174,10 +198,42 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
     }
 
     fn prepare(&self) -> Result<()> {
-        unimplemented!()
+        self.storage.for_dir(|id, crypt_ver, length| {
+            let ver = decrypt_dir_ver(id, crypt_ver, &self.key);
+
+            let db = self.db.lock().unwrap();
+            if !db.prepare("SELECT 1 FROM `clean_dir` \
+                            WHERE `id` = ?1 AND (\
+                              `ver` != ?2 OR `len` != ?3)")
+                .binding(1, &id[..])
+                .binding(2, ver as i64)
+                .binding(3, length as i64)
+                .exists()?
+            {
+                // Either the directory is still clean (ver and len match), or
+                // we don't have any entry for it at all.
+                return Ok(());
+            }
+
+            // Remove the clean entries for this directory and all its parents.
+            let mut next_target = Some(id.to_vec());
+            while let Some(target) = next_target {
+                next_target = db.prepare("SELECT `parent` FROM `clean_dir` \
+                                          WHERE `id` = ?1 AND `parent` IS NOT NULL")
+                    .binding(1, &target[..])
+                    .first(|s| s.read::<Vec<u8>>(0))?;
+
+                db.prepare("DELETE FROM `clean_dir` WHERE `id` = ?1")
+                    .binding(1, &target[..])
+                    .run()?;
+            }
+
+            Ok(())
+        })
     }
 
     fn clean_up(&self) -> Result<()> {
-        unimplemented!()
+        self.storage.clean_up();
+        Ok(())
     }
 }

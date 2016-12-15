@@ -36,3 +36,20 @@ CREATE TABLE IF NOT EXISTS latest_dir_ver (
   "ver"         INTEGER NOT NULL,
   "len"         INTEGER NOT NULL
 ) WITHOUT ROWID;
+
+-- Stores what directories are currently clean.
+--
+-- The presence of a directory in this table indicates that it and its children
+-- are marked clean; its absence indicates it is dirty. During preparation, we
+-- compare every directory returned by the storage with the version and length
+-- here (if any). If the directory is present here but has a different version
+-- and length, we delete the entry and its parents, recursively.
+--
+-- Note that this must be separate from `latest_dir_ver` since `latest_dir_ver`
+-- needs to keep the data for security.
+CREATE TABLE IF NOT EXISTS clean_dir (
+  "id"          BLOB PRIMARY KEY,
+  "parent"      BLOB, -- Nullable
+  "ver"         INTEGER NOT NULL,
+  "len"         INTEGER NOT NULL
+) WITHOUT ROWID;
