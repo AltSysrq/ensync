@@ -185,6 +185,10 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
     fn update(&self, dir: &mut Arc<Dir<S>>, name: &OsStr,
               old: &FileData, new: &FileData, xfer: Self::TransferIn)
               -> Result<FileData> {
+        if old.is_dir() && !new.is_dir() {
+            return Err(ErrorKind::NotADirectory.into());
+        }
+
         dir.edit(name, Some(new), xfer, |v| match v {
             None => Err(ErrorKind::ExpectationNotMatched.into()),
             Some(existing) => if old.matches(existing) {
@@ -267,12 +271,15 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
+    use std::io::Cursor;
     use std::sync::Arc;
 
     use tempdir::TempDir;
 
+    use block_xfer;
     use defs::*;
+    use defs::test_helpers::*;
+    use errors::*;
     use replica::*;
     use server::crypt::MasterKey;
     use server::local_storage::LocalStorage;
@@ -280,19 +287,146 @@ mod test {
 
     macro_rules! init {
         ($replica:ident, $root:ident) => {
+            init!($replica, $root, master_key);
+        };
+
+        ($replica:ident, $root:ident, $master_key:ident) => {
             let dir = TempDir::new("storage").unwrap();
             let storage = LocalStorage::open(dir.path()).unwrap();
+            let $master_key = Arc::new(MasterKey::generate_new());
             let $replica = ServerReplica::new(
-                ":memory:", Arc::new(MasterKey::generate_new()),
+                ":memory:", $master_key.clone(),
                 Arc::new(storage), "r00t", 1024).unwrap();
             $replica.create_root().unwrap();
             let mut $root = $replica.root().unwrap();
-        }
+        };
     }
 
     #[test]
     fn empty() {
         init!(replica, root);
         assert!(replica.list(&mut root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn create_subdir() {
+        init!(replica, root);
+
+        let created = replica.create(
+            &mut root, File(&oss("sub"), &FileData::Directory(0o770)),
+            None).unwrap();
+        assert_eq!(FileData::Directory(0o770), created);
+
+        let list = replica.list(&mut root).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(oss("sub"), list[0].0);
+        assert_eq!(FileData::Directory(0o770), list[0].1);
+
+        let mut root = replica.root().unwrap();
+        let list = replica.list(&mut root).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(oss("sub"), list[0].0);
+        assert_eq!(FileData::Directory(0o770), list[0].1);
+
+        let mut sub = replica.chdir(&root, &oss("sub")).unwrap();
+        assert!(replica.list(&mut sub).unwrap().is_empty());
+    }
+
+    #[test]
+    #[allow(unused_mut)]
+    fn nx_chdir() {
+        init!(replica, root);
+
+        match *replica.chdir(&root, &oss("sub")).err().unwrap().kind() {
+            ErrorKind::NotFound => { },
+            ref k => panic!("Wrong error kind: {:?}", k),
+        }
+    }
+
+    #[test]
+    fn create_symlink() {
+        init!(replica, root);
+
+        let sym = FileData::Symlink(oss("target"));
+        let created = replica.create(
+            &mut root, File(&oss("sym"), &sym), None).unwrap();
+        assert_eq!(sym, created);
+
+        let list = replica.list(&mut root).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(oss("sym"), list[0].0);
+        assert_eq!(sym, list[0].1);
+
+        let mut root = replica.root().unwrap();
+        let list = replica.list(&mut root).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(oss("sym"), list[0].0);
+        assert_eq!(sym, list[0].1);
+    }
+
+    /// Generates a file of the given length (at least 2).
+    ///
+    /// The content is simply the Fibonacci sequence modulo 256.
+    fn gen_file(len: usize) -> Vec<u8> {
+        use std::num::Wrapping;
+
+        let mut v = Vec::new();
+        v.push(0u8);
+        v.push(1u8);
+        while v.len() < len {
+            let fib = (Wrapping(v[v.len() - 2]) + Wrapping(v[v.len() - 1])).0;
+            v.push(fib);
+        }
+
+        v
+    }
+
+    impl block_xfer::StreamSource for Cursor<Vec<u8>> {
+        fn reset(&mut self) -> Result<()> {
+            self.set_position(0);
+            Ok(())
+        }
+
+        fn finish(&mut self, _: &block_xfer::BlockList) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn create_file() {
+        init!(replica, root, master_key);
+
+        let file_data = gen_file(65536);
+        let created = replica.create(&mut root, File(
+            &oss("fib"), &FileData::Regular(0o660, 65536, 0, UNKNOWN_HASH)),
+            Some(Box::new(Cursor::new(file_data.clone())))).unwrap();
+
+        match created {
+            FileData::Regular(0o660, 65536, 0, hash) =>
+                assert!(hash != UNKNOWN_HASH),
+
+            ref fd => panic!("Unexpected created result: {:?}", fd),
+        }
+
+        let list = replica.list(&mut root).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(oss("fib"), list[0].0);
+        assert_eq!(created, list[0].1);
+
+        let mut root = replica.root().unwrap();
+        let list = replica.list(&mut root).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(oss("fib"), list[0].0);
+        assert_eq!(created, list[0].1);
+
+        let xfer = replica.transfer(
+            &root, File(&oss("fib"), &created)).unwrap().unwrap();
+        let mut actual_data = Vec::<u8>::new();
+        block_xfer::blocks_to_stream(
+            &xfer.blocks, &mut actual_data,
+            master_key.hmac_secret(),
+            |h| xfer.fetch.fetch(h)).unwrap();
+
+        assert_eq!(file_data, actual_data);
     }
 }

@@ -198,7 +198,8 @@ pub fn blocks_to_stream<R : io::Read,
         kc.finalize(&mut hash);
 
         if hash != input.total {
-            return Err(ErrorKind::HmacMismatch.into());
+            return Err(ErrorKind::HmacMismatch(
+                "total", input.total, hash).into());
         }
     }
 
@@ -222,7 +223,8 @@ pub fn blocks_to_stream<R : io::Read,
 
         kc.finalize(&mut hash);
         if hash != *id {
-            return Err(ErrorKind::HmacMismatch.into());
+            return Err(ErrorKind::HmacMismatch(
+                "block", *id, hash).into());
         }
     }
 
@@ -311,7 +313,7 @@ mod test {
         match r {
             Ok(_) => panic!("HMAC didn't fail!"),
             Err(e) => match *e.kind() {
-                ErrorKind::HmacMismatch => (),
+                ErrorKind::HmacMismatch(..) => (),
                 _ => panic!("Unexpected error: {}", e),
             },
         }

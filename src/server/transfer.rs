@@ -22,24 +22,30 @@ use std::sync::Arc;
 use block_xfer::BlockFetch;
 use defs::HashId;
 use errors::*;
+use server::crypt::{MasterKey, decrypt_obj};
 use server::storage::Storage;
 
 pub struct ServerTransferOut<S : Storage> {
     storage: Arc<S>,
+    key: Arc<MasterKey>,
 }
 
 impl<S : Storage> ServerTransferOut<S> {
-    pub fn new(storage: Arc<S>) -> Self {
+    pub fn new(storage: Arc<S>, key: Arc<MasterKey>) -> Self {
         ServerTransferOut {
             storage: storage,
+            key: key,
         }
     }
 }
 
 impl<S : Storage> BlockFetch for ServerTransferOut<S> {
     fn fetch(&self, block: &HashId) -> Result<Box<io::Read>> {
-        Ok(Box::new(io::Cursor::new(
-            self.storage.getobj(block)?
-                .ok_or(ErrorKind::ServerContentDeleted)?)))
+        let ciphertext = self.storage.getobj(block)?
+            .ok_or(ErrorKind::ServerContentDeleted)?;
+        let mut cleartext = Vec::<u8>::new();
+        decrypt_obj(&mut cleartext, &ciphertext[..], &self.key)?;
+
+        Ok(Box::new(io::Cursor::new(cleartext)))
     }
 }

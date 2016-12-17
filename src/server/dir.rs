@@ -356,7 +356,10 @@ impl<S : Storage + 'static> Dir<S> {
     /// the file is present on the server.
     ///
     /// If `new` is a directory, `name` must either be currently non-existent
-    /// or already be a directory. To remove a directory, use
+    /// or already be a directory.
+    ///
+    /// If `name` refers to a directory, either `new` must be a directory or
+    /// `test` must reject the edit. To remove a directory, use
     /// `remove_subdir()`.
     pub fn edit<F : Fn (Option<&FileData>) -> Result<()>>
         (&self, name: &OsStr, new: Option<&FileData>,
@@ -425,7 +428,7 @@ impl<S : Storage + 'static> Dir<S> {
                 },
                 Some(&FileData::Symlink(ref target)) =>
                     v0::Entry::S(target.clone().into_vec().into()),
-                Some(&FileData::Regular(mode, size, time, id)) => {
+                Some(&FileData::Regular(mode, size, time, _)) => {
                     let mut xfer = xfer.as_mut().ok_or(ErrorKind::MissingXfer)?;
                     xfer.reset()?;
                     let mut blocks = Vec::new();
@@ -446,7 +449,7 @@ impl<S : Storage + 'static> Dir<S> {
                             Ok(())
                         })?;
                     xfer.finish(&blocklist)?;
-                    v0::Entry::R(mode, size, time, H(id),
+                    v0::Entry::R(mode, size, time, H(blocklist.total),
                                  self.block_size as u32, blocks)
                 },
             };
@@ -487,11 +490,14 @@ impl<S : Storage + 'static> Dir<S> {
                         blocks: BlockList {
                             total: actual,
                             size: 0, // Not used
-                            blocks: blocks.iter().map(|&H(h)| h).collect(),
+                            blocks: blocks
+                                .chunks(2)
+                                .map(|v| v[0].0)
+                                .collect(),
                         },
                         block_size: bs as usize,
                         fetch: Arc::new(ServerTransferOut::new(
-                            self.storage.clone())),
+                            self.storage.clone(), self.key.clone())),
                     })
                 } else {
                     Err(ErrorKind::ServerContentUpdated.into())

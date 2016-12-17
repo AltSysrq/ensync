@@ -25,6 +25,7 @@ use serde_cbor;
 use sqlite;
 use tempfile;
 
+use defs::HashId;
 use serde_types;
 
 error_chain! {
@@ -74,7 +75,7 @@ error_chain! {
             description("Invalid hash value in database")
             display("Invalid hash value in database")
         }
-        HmacMismatch {
+        HmacMismatch(context: &'static str, expected: HashId, actual: HashId) {
             description("HMAC does not match content")
             display("HMAC does not match content")
         }
