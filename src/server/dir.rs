@@ -85,7 +85,6 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use error_chain::ResultExt;
 use keccak;
 use serde::{Deserialize, Serialize};
 use serde::bytes::Bytes;

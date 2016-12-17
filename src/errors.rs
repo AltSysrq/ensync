@@ -30,16 +30,16 @@ use serde_types;
 
 error_chain! {
     types {
-        Error, ErrorKind, Result;
+        Error, ErrorKind, ResultExt, Result;
     }
 
     links { }
 
     foreign_links {
-        io::Error, Io;
-        sqlite::Error, Sqlite;
-        ffi::NulError, NullInstring;
-        serde_cbor::Error, SerdeCbor;
+        Io(io::Error);
+        Sqlite(sqlite::Error);
+        NullInString(ffi::NulError);
+        SerdeCbor(serde_cbor::Error);
     }
 
     errors {
