@@ -48,8 +48,7 @@
 //!
 //! - A SHA-3 HMAC (32 bytes)
 //! - A 4-byte little-endian integer indicating the length of the data in
-//! BLKSZ-byte blocks (including the one containing this integer, but not
-//! including the HMAC).
+//! bytes (including this integer, but not including the HMAC).
 //! - The content of the chunk in CBOR. For everything but the header, this is
 //! a `[v0::EntryPair]` as defined in `serde_types.in.rs`.
 //! - Arbitrary data padding the content to the declared number of BLKSZ-byte
@@ -181,6 +180,15 @@ impl<S : Storage + 'static> Dir<S> {
             block_size: block_size,
             content: Mutex::new(DirContent::default()),
         };
+
+        // Implicitly create the pseudo-root if it does not already exist.
+        while this.storage.getdir(&this.id)?.is_none() {
+            let tx = this.tx_ctr.fetch_add(1, Ordering::SeqCst) as Tx;
+            this.storage.start_tx(tx)?;
+            this.rewrite(tx, &mut this.content.lock().unwrap(), false)?;
+            this.storage.commit(tx)?;
+        }
+
         Ok(this)
     }
 
@@ -640,11 +648,12 @@ impl<S : Storage + 'static> Dir<S> {
         chunk_hmac.copy_from_slice(&data[0..UNKNOWN_HASH.len()]);
         *data = &data[chunk_hmac.len()..];
 
-        let len_blocks =
+        let len_bytes =
             ((data[0] as usize) <<  0) |
             ((data[1] as usize) <<  8) |
             ((data[2] as usize) << 16) |
             ((data[3] as usize) << 24);
+        let len_blocks = (len_bytes + BLKSZ - 1) / BLKSZ;
         if data.len() < len_blocks * BLKSZ {
             return Err(ErrorKind::ServerDirectoryCorrupt(
                 self.path.clone(),
@@ -653,7 +662,7 @@ impl<S : Storage + 'static> Dir<S> {
         }
 
         let hmac_data = &data[..len_blocks * BLKSZ];
-        let cbor_data = &hmac_data[4..];
+        let cbor_data = &hmac_data[4..len_bytes];
         *data = &data[len_blocks * BLKSZ ..];
 
         // Verify this chunk's HMAC
@@ -807,17 +816,19 @@ impl<S : Storage + 'static> Dir<S> {
         // Write the actual content
         serde_cbor::ser::to_writer(dst, &value)
             .expect("CBOR serialisation failed");
+
+        // Now we know enough to fill in the length
+        let mut length = dst.len() - start - UNKNOWN_HASH.len();
+        for byte in 0..4 {
+            dst[start + UNKNOWN_HASH.len() + byte] = (length & 0xFF) as u8;
+            length >>= 8;
+        }
+
         // Pad until a multiple of the AES block size
         while dst.len() % BLKSZ != 0 {
             dst.push(0);
         }
 
-        // Now we know enough to fill in the length
-        let mut length = (dst.len() - start - UNKNOWN_HASH.len()) / BLKSZ;
-        for byte in 0..4 {
-            dst[UNKNOWN_HASH.len() + byte] = (length & 0xFF) as u8;
-            length >>= 8;
-        }
         // And generate the HMAC
         let mut kc = keccak::Keccak::new_sha3_256();
         kc.update(&dst[start + UNKNOWN_HASH.len() ..]);

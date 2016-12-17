@@ -48,6 +48,20 @@ pub struct ServerReplica<S : Storage + 'static> {
 }
 
 impl<S : Storage + 'static> ServerReplica<S> {
+    /// Opens a `ServerReplica` on the given parameters.
+    ///
+    /// `path` indicates the path to use for the client-side SQLite database.
+    /// It is passed directly to SQLite, so things like `:memory:` work.
+    ///
+    /// `key` is the master key to use for all encryption.
+    ///
+    /// `storage` provides the underlying data store.
+    ///
+    /// `root_name` is the name of a directory under the pseudo-root directory
+    /// of the server which is used as the true root of the replica.
+    ///
+    /// `block_size` indicates the block size to use for all new file blocking
+    /// operations.
     pub fn new(path: &str, key: Arc<MasterKey>,
                storage: Arc<S>, root_name: &str, block_size: usize)
                -> Result<Self> {
@@ -66,6 +80,19 @@ impl<S : Storage + 'static> ServerReplica<S> {
             root_name: root_name.to_owned().into(),
             block_size: block_size,
         })
+    }
+
+    /// Create the logical root directory if it does not already exist.
+    pub fn create_root(&self) -> Result<()> {
+        self.pseudo_root.edit(&self.root_name, Some(&FileData::Directory(0)),
+                              None, |existing| {
+            match existing {
+                None => Ok(()),
+                Some(&FileData::Directory(_)) => Ok(()),
+                _ => Err(ErrorKind::NotADirectory.into()),
+            }
+        })?;
+        Ok(())
     }
 }
 
@@ -235,5 +262,37 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
     fn clean_up(&self) -> Result<()> {
         self.storage.clean_up();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use tempdir::TempDir;
+
+    use defs::*;
+    use replica::*;
+    use server::crypt::MasterKey;
+    use server::local_storage::LocalStorage;
+    use super::*;
+
+    macro_rules! init {
+        ($replica:ident, $root:ident) => {
+            let dir = TempDir::new("storage").unwrap();
+            let storage = LocalStorage::open(dir.path()).unwrap();
+            let $replica = ServerReplica::new(
+                ":memory:", Arc::new(MasterKey::generate_new()),
+                Arc::new(storage), "r00t", 1024).unwrap();
+            $replica.create_root().unwrap();
+            let mut $root = $replica.root().unwrap();
+        }
+    }
+
+    #[test]
+    fn empty() {
+        init!(replica, root);
+        assert!(replica.list(&mut root).unwrap().is_empty());
     }
 }
