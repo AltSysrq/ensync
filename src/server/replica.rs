@@ -190,7 +190,7 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
         }
 
         dir.edit(name, Some(new), xfer, |v| match v {
-            None => Err(ErrorKind::ExpectationNotMatched.into()),
+            None => Err(ErrorKind::NotFound.into()),
             Some(existing) => if old.matches(existing) {
                 Ok(())
             } else {
@@ -302,6 +302,38 @@ mod test {
         };
     }
 
+    macro_rules! assert_err {
+        ($kind:pat, $x:expr) => { match $x {
+            Ok(_) => panic!("Call did not fail"),
+            Err(Error($kind, _)) => { },
+            Err(Error(ref k, _)) =>
+                panic!("Unexpected error kind: {:?}", k),
+        } }
+    }
+
+    macro_rules! assert_list_one {
+        ($replica:expr, $root:expr, $name:expr, $fd:expr) => {
+            let list = $replica.list(&mut $root).unwrap();
+            assert_eq!(1, list.len());
+            assert_eq!(oss($name), list[0].0);
+            assert_eq!($fd, list[0].1);
+
+            let mut root = $replica.root().unwrap();
+            let list = $replica.list(&mut root).unwrap();
+            assert_eq!(1, list.len());
+            assert_eq!(oss($name), list[0].0);
+            assert_eq!($fd, list[0].1);
+        }
+    }
+
+    macro_rules! assert_list_none {
+        ($replica:expr, $root:expr) => {
+            assert!($replica.list(&mut $root).unwrap().is_empty());
+            assert!($replica.list(&mut $replica.root().unwrap())
+                    .unwrap().is_empty());
+        }
+    }
+
     #[test]
     fn empty() {
         init!(replica, root);
@@ -337,10 +369,8 @@ mod test {
     fn nx_chdir() {
         init!(replica, root);
 
-        match *replica.chdir(&root, &oss("sub")).err().unwrap().kind() {
-            ErrorKind::NotFound => { },
-            ref k => panic!("Wrong error kind: {:?}", k),
-        }
+        assert_err!(ErrorKind::NotFound,
+                    replica.chdir(&root, &oss("sub")));
     }
 
     #[test]
@@ -352,16 +382,7 @@ mod test {
             &mut root, File(&oss("sym"), &sym), None).unwrap();
         assert_eq!(sym, created);
 
-        let list = replica.list(&mut root).unwrap();
-        assert_eq!(1, list.len());
-        assert_eq!(oss("sym"), list[0].0);
-        assert_eq!(sym, list[0].1);
-
-        let mut root = replica.root().unwrap();
-        let list = replica.list(&mut root).unwrap();
-        assert_eq!(1, list.len());
-        assert_eq!(oss("sym"), list[0].0);
-        assert_eq!(sym, list[0].1);
+        assert_list_one!(replica, root, "sym", sym);
     }
 
     /// Generates a file of the given length (at least 2).
@@ -408,16 +429,7 @@ mod test {
             ref fd => panic!("Unexpected created result: {:?}", fd),
         }
 
-        let list = replica.list(&mut root).unwrap();
-        assert_eq!(1, list.len());
-        assert_eq!(oss("fib"), list[0].0);
-        assert_eq!(created, list[0].1);
-
-        let mut root = replica.root().unwrap();
-        let list = replica.list(&mut root).unwrap();
-        assert_eq!(1, list.len());
-        assert_eq!(oss("fib"), list[0].0);
-        assert_eq!(created, list[0].1);
+        assert_list_one!(replica, root, "fib", created);
 
         let xfer = replica.transfer(
             &root, File(&oss("fib"), &created)).unwrap().unwrap();
@@ -428,5 +440,378 @@ mod test {
             |h| xfer.fetch.fetch(h)).unwrap();
 
         assert_eq!(file_data, actual_data);
+    }
+
+    #[test]
+    fn create_already_exists() {
+        init!(replica, root);
+
+        // For conflicts here and below, we have 3 cases:
+        //
+        // - Conflict via the same directory handle we used to set the conflict
+        // up (i.e., up-to-date cache).
+        //
+        // - Conflict via a fresh directory handle (i.e., nothing cached).
+        //
+        // - Conflict via a directory handle which has already loaded data
+        // before the conflict was set up (i.e., out-of-date cache).
+        let mut root2 = replica.root().unwrap();
+        replica.list(&mut root2).unwrap();
+
+        let sym = FileData::Symlink(oss("target"));
+        let created = replica.create(
+            &mut root, File(&oss("sym"), &sym), None).unwrap();
+        assert_eq!(sym, created);
+
+        assert_err!(ErrorKind::CreateExists,
+                    replica.create(&mut root, File(&oss("sym"), &sym), None));
+
+        let mut root = replica.root().unwrap();
+        assert_err!(ErrorKind::CreateExists,
+                    replica.create(&mut root, File(&oss("sym"), &sym), None));
+
+        assert_err!(ErrorKind::CreateExists,
+                    replica.create(&mut root2, File(&oss("sym"), &sym), None));
+    }
+
+    #[test]
+    fn update_dir_chmod() {
+        init!(replica, root);
+
+        replica.create(
+            &mut root, File(&oss("subdir"), &FileData::Directory(0o700)),
+            None).unwrap();
+
+        let updated = replica.update(
+            &mut root, &oss("subdir"), &FileData::Directory(0o700),
+            &FileData::Directory(0o770), None).unwrap();
+        assert_eq!(FileData::Directory(0o770), updated);
+
+        assert_list_one!(replica, root, "subdir",
+                         FileData::Directory(0o770));
+    }
+
+    #[test]
+    fn update_dir_nx() {
+        init!(replica, root);
+
+        assert_err!(ErrorKind::NotFound,
+                    replica.update(
+                        &mut root, &oss("subdir"),
+                        &FileData::Directory(0o700),
+                        &FileData::Directory(0o770), None));
+    }
+
+    #[test]
+    fn update_dir_not_matched() {
+        init!(replica, root);
+
+        replica.create(
+            &mut root, File(&oss("subdir"), &FileData::Directory(0o700)),
+            None).unwrap();
+
+        let mut root2 = replica.root().unwrap();
+        replica.list(&mut root2).unwrap();
+
+        let updated = replica.update(
+            &mut root, &oss("subdir"), &FileData::Directory(0o700),
+            &FileData::Directory(0o770), None).unwrap();
+        assert_eq!(FileData::Directory(0o770), updated);
+
+        assert_err!(ErrorKind::ExpectationNotMatched,
+                    replica.update(
+                        &mut root, &oss("subdir"),
+                        &FileData::Directory(0o666),
+                        &FileData::Directory(0o777), None));
+
+        let mut root = replica.root().unwrap();
+        assert_err!(ErrorKind::ExpectationNotMatched,
+                    replica.update(
+                        &mut root, &oss("subdir"),
+                        &FileData::Directory(0o666),
+                        &FileData::Directory(0o777), None));
+
+        assert_err!(ErrorKind::ExpectationNotMatched,
+                    replica.update(
+                        &mut root2, &oss("subdir"),
+                        &FileData::Directory(0o666),
+                        &FileData::Directory(0o777), None));
+    }
+
+    #[test]
+    fn update_symlink() {
+        init!(replica, root);
+
+        replica.create(
+            &mut root, File(&oss("sym"), &FileData::Symlink(oss("target"))),
+            None).unwrap();
+
+        let updated = replica.update(
+            &mut root, &oss("sym"),
+            &FileData::Symlink(oss("target")),
+            &FileData::Symlink(oss("tegrat")), None).unwrap();
+        assert_eq!(FileData::Symlink(oss("tegrat")), updated);
+
+
+        assert_list_one!(replica, root, "sym",
+                         FileData::Symlink(oss("tegrat")));
+    }
+
+    #[test]
+    fn update_regular() {
+        init!(replica, root, master_key);
+
+        let file_data_a = gen_file(1024);
+        let created = replica.create(&mut root, File(
+            &oss("fib"), &FileData::Regular(0o660, 1024, 0, UNKNOWN_HASH)),
+            Some(Box::new(Cursor::new(file_data_a.clone())))).unwrap();
+
+        match created {
+            FileData::Regular(0o660, 1024, 0, hash) =>
+                assert!(hash != UNKNOWN_HASH),
+
+            ref fd => panic!("Unexpected created result: {:?}", fd),
+        }
+
+        let file_data_b = gen_file(2048);
+        let updated = replica.update(
+            &mut root, &oss("fib"),
+            &created, &FileData::Regular(0o666, 2048, 1, UNKNOWN_HASH),
+            Some(Box::new(Cursor::new(file_data_b.clone())))).unwrap();
+
+        match updated {
+            FileData::Regular(0o666, 2048, 1, hash) =>
+                assert!(hash != UNKNOWN_HASH),
+
+            ref fd => panic!("Unexpected updated result: {:?}", fd),
+        }
+
+        assert_list_one!(replica, root, "fib", updated);
+
+        // Clean up in case doing so causes the shared part of the file to be
+        // lost.
+        replica.clean_up().unwrap();
+
+        let xfer = replica.transfer(
+            &root, File(&oss("fib"), &updated)).unwrap().unwrap();
+        let mut actual_data = Vec::<u8>::new();
+        block_xfer::blocks_to_stream(
+            &xfer.blocks, &mut actual_data,
+            master_key.hmac_secret(),
+            |h| xfer.fetch.fetch(h)).unwrap();
+
+        assert_eq!(file_data_b, actual_data);
+    }
+
+    #[test]
+    fn remove_symlink() {
+        init!(replica, root);
+
+        replica.create(
+            &mut root, File(&oss("sym"), &FileData::Symlink(oss("target"))),
+            None).unwrap();
+
+        replica.remove(
+            &mut root, File(&oss("sym"), &FileData::Symlink(oss("target"))))
+            .unwrap();
+
+        assert_list_none!(replica, root);
+    }
+
+    #[test]
+    fn remove_symlink_not_matched() {
+        init!(replica, root);
+
+        replica.create(
+            &mut root, File(&oss("sym"), &FileData::Symlink(oss("target"))),
+            None).unwrap();
+
+        let mut root2 = replica.root().unwrap();
+        replica.list(&mut root2).unwrap();
+
+        assert_err!(
+            ErrorKind::ExpectationNotMatched,
+            replica.remove(&mut root,
+                           File(&oss("sym"), &FileData::Symlink(oss("x")))));
+
+        let mut root = replica.root().unwrap();
+        assert_err!(
+            ErrorKind::ExpectationNotMatched,
+            replica.remove(&mut root,
+                           File(&oss("sym"), &FileData::Symlink(oss("x")))));
+
+        assert_err!(
+            ErrorKind::ExpectationNotMatched,
+            replica.remove(&mut root2,
+                           File(&oss("sym"), &FileData::Symlink(oss("x")))));
+    }
+
+    #[test]
+    fn remove_symlink_nx() {
+        init!(replica, root);
+
+        assert_err!(
+            ErrorKind::NotFound,
+            replica.remove(&mut root,
+                           File(&oss("sym"), &FileData::Symlink(oss("x")))));
+    }
+
+    #[test]
+    fn remove_regular() {
+        init!(replica, root);
+
+        let file_data_a = gen_file(1024);
+        let created = replica.create(&mut root, File(
+            &oss("fib"), &FileData::Regular(0o660, 1024, 0, UNKNOWN_HASH)),
+            Some(Box::new(Cursor::new(file_data_a.clone())))).unwrap();
+
+        replica.remove(&mut root, File(&oss("fib"), &created)).unwrap();
+
+        assert_list_none!(replica, root);
+    }
+
+    #[test]
+    fn remove_subdirectory() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+
+        replica.remove(&mut root, File(&oss("sub"), &dir)).unwrap();
+        assert_list_none!(replica, root);
+
+        assert_err!(ErrorKind::DirectoryMissing, replica.list(&mut subdir));
+    }
+
+    #[test]
+    fn remove_subdirectory_not_empty() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        replica.create(&mut subdir, File(&oss("ss"), &dir), None).unwrap();
+
+        assert_err!(ErrorKind::DirNotEmpty,
+                    replica.remove(&mut root, File(&oss("sub"), &dir)));
+
+        // Make sure everything is still there
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        assert_eq!(1, replica.list(&mut subdir).unwrap().len());
+    }
+
+    #[test]
+    fn remove_subdirectory_not_matched() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        assert_err!(ErrorKind::ExpectationNotMatched,
+                    replica.remove(&mut root, File(
+                        &oss("sub"), &FileData::Directory(0o777))));
+
+        // Make sure everything is still there
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        assert_eq!(0, replica.list(&mut subdir).unwrap().len());
+    }
+
+    #[test]
+    fn remove_subdirectory_nx() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        assert_err!(ErrorKind::NotFound,
+                    replica.remove(&mut root, File(&oss("x"), &dir)));
+
+        // Make sure everything is still there
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        assert_eq!(0, replica.list(&mut subdir).unwrap().len());
+    }
+
+    #[test]
+    fn rmdir() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        replica.rmdir(&mut subdir).unwrap();
+
+        assert_list_none!(replica, root);
+    }
+
+    #[test]
+    fn rmdir_not_empty() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        let mut subdir2 = replica.chdir(&root, &oss("sub")).unwrap();
+        replica.create(&mut subdir, File(&oss("ss"), &dir), None).unwrap();
+
+        assert_err!(ErrorKind::DirNotEmpty, replica.rmdir(&mut subdir));
+        assert_err!(ErrorKind::DirNotEmpty, replica.rmdir(&mut subdir2));
+
+        assert_list_one!(replica, root, "sub", dir);
+    }
+
+    #[test]
+    fn rmdir_nx() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        let mut subdir2 = replica.chdir(&root, &oss("sub")).unwrap();
+        replica.rmdir(&mut subdir).unwrap();
+
+        assert_err!(ErrorKind::NotFound, replica.rmdir(&mut subdir));
+        assert_err!(ErrorKind::NotFound, replica.rmdir(&mut subdir2));
+
+        assert_list_none!(replica, root);
+    }
+
+    #[test]
+    fn rename() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+
+        replica.rename(&mut root, &oss("sub"), &oss("bus")).unwrap();
+
+        assert_list_one!(replica, root, "bus", dir);
+    }
+
+    #[test]
+    fn rename_nx() {
+        init!(replica, root);
+
+        assert_err!(ErrorKind::NotFound,
+                    replica.rename(&mut root, &oss("sub"), &oss("bus")));
+    }
+
+    #[test]
+    fn rename_exists() {
+        init!(replica, root);
+
+        let dir = FileData::Directory(0o700);
+        replica.create(&mut root, File(&oss("sub"), &dir), None).unwrap();
+        replica.create(&mut root, File(&oss("bus"), &dir), None).unwrap();
+
+        assert_err!(ErrorKind::RenameDestExists,
+                    replica.rename(&mut root, &oss("sub"), &oss("bus")));
+
+        assert_eq!(2, replica.list(&mut root).unwrap().len());
     }
 }
