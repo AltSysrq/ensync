@@ -506,9 +506,10 @@ impl<S : Storage + 'static> Dir<S> {
         }
     }
 
-    pub fn ver_and_len(&self) -> (u64, u32) {
-        let content = self.content.lock().unwrap();
-        (content.version, content.length)
+    pub fn ver_and_len(&self) -> Result<(u64, u32)> {
+        let mut content = self.content.lock().unwrap();
+        self.refresh_if_needed(&mut content)?;
+        Ok((content.version, content.length))
     }
 
     fn lookup_opt<'a>(&self, content: &'a mut DirContent, name: &OsStr)
@@ -620,14 +621,21 @@ impl<S : Storage + 'static> Dir<S> {
         // Read all content successfully; write back to the current content and
         // record this as the latest version we've ever seen.
         *content = new_content;
+        drop(db);
 
-        db.prepare("INSERT OR IGNORE INTO `latest_dir_ver` \
+        self.save_latest_dir_ver(content)?;
+
+        Ok(())
+    }
+
+    fn save_latest_dir_ver(&self, content: &mut DirContent) -> Result<()> {
+        let db = self.db.lock().unwrap();
+        db.prepare("INSERT OR REPLACE INTO `latest_dir_ver` \
                     (`id`, `ver`, `len`) VALUES (?1, ?2, ?3)")
             .binding(1, &self.id[..])
-            .binding(2, version as i64)
-            .binding(3, cipher_data.len() as u64 as i64)
+            .binding(2, content.version as i64)
+            .binding(3, content.length as u64 as i64)
             .run()?;
-
         Ok(())
     }
 
@@ -745,6 +753,7 @@ impl<S : Storage + 'static> Dir<S> {
             self.append_entry(tx, content, &name, &entry)?;
             content.apply_entry((name.into_vec().into(), entry));
         }
+        self.save_latest_dir_ver(content)?;
 
         Ok(())
     }

@@ -110,7 +110,7 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
     }
 
     fn set_dir_clean(&self, dir: &Arc<Dir<S>>) -> Result<bool> {
-        let (ver, len) = dir.ver_and_len();
+        let (ver, len) = dir.ver_and_len()?;
         let parent = if let Some(ref parent) = dir.parent {
             sqlite::Value::Binary(parent.id.to_vec())
         } else {
@@ -482,6 +482,13 @@ mod test {
             &mut root, File(&oss("subdir"), &FileData::Directory(0o700)),
             None).unwrap();
 
+        // Create something in the subdirectory to ensure that the
+        // implementation doesn't create another new directory when we edit it.
+        let mut subdir = replica.chdir(&root, &oss("subdir")).unwrap();
+        let subdir_file = FileData::Symlink(oss("target"));
+        replica.create(&mut subdir, File(&oss("sym"), &subdir_file), None)
+            .unwrap();
+
         let updated = replica.update(
             &mut root, &oss("subdir"), &FileData::Directory(0o700),
             &FileData::Directory(0o770), None).unwrap();
@@ -489,6 +496,11 @@ mod test {
 
         assert_list_one!(replica, root, "subdir",
                          FileData::Directory(0o770));
+
+        let mut subdir = replica.chdir(&root, &oss("subdir")).unwrap();
+        let list = replica.list(&mut subdir).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(subdir_file, list[0].1);
     }
 
     #[test]
@@ -813,5 +825,269 @@ mod test {
                     replica.rename(&mut root, &oss("sub"), &oss("bus")));
 
         assert_eq!(2, replica.list(&mut root).unwrap().len());
+    }
+
+    #[test]
+    fn directory_rewrite_works() {
+        init!(replica, root);
+
+        replica.create(
+            &mut root, File(&oss("sub"), &FileData::Directory(0o100)),
+            None).unwrap();
+
+        for mode in 0o101..0o1000 {
+            let dir = FileData::Directory(mode);
+            replica.update(
+                &mut root, &oss("sub"),
+                &FileData::Directory(mode - 1), &dir, None).unwrap();
+
+            assert_list_one!(replica, root, "sub", dir);
+        }
+    }
+
+    #[test]
+    fn synthdir_into_existing() {
+        init!(replica, root);
+
+        replica.create(
+            &mut root, File(&oss("sub"), &FileData::Directory(0o700)),
+            None).unwrap();
+
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        let subdir_file = FileData::Symlink(oss("target"));
+        replica.create(&mut subdir, File(&oss("sym"), &subdir_file), None)
+            .unwrap();
+
+        let mut root = replica.root().unwrap();
+        let mut subdir = replica.synthdir(&mut root, &oss("sub"), 0o600);
+
+        let list = replica.list(&mut subdir).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(subdir_file, list[0].1);
+
+        assert_list_one!(replica, root, "sub", FileData::Directory(0o700));
+    }
+
+    #[test]
+    fn synthdir_new_single() {
+        init!(replica, root);
+
+        let mut subdir = replica.synthdir(&mut root, &oss("sub"), 0o700);
+        let subdir_file = FileData::Symlink(oss("target"));
+        replica.create(&mut subdir, File(&oss("sym"), &subdir_file), None)
+            .unwrap();
+        replica.create(&mut subdir, File(&oss("mys"), &subdir_file), None)
+            .unwrap();
+
+        assert_list_one!(replica, root, "sub", FileData::Directory(0o700));
+        let mut subdir = replica.chdir(&root, &oss("sub")).unwrap();
+        let list = replica.list(&mut subdir).unwrap();
+        assert_eq!(2, list.len());
+        assert_eq!(subdir_file, list[0].1);
+        assert_eq!(subdir_file, list[1].1);
+    }
+
+    #[test]
+    fn synthdir_nested() {
+        init!(replica, root);
+
+        let mut subone = replica.synthdir(&mut root, &oss("one"), 0o700);
+        let mut subtwo = replica.synthdir(&mut subone, &oss("two"), 0o777);
+
+        let two_file = FileData::Symlink(oss("target"));
+        replica.create(&mut subtwo, File(&oss("sym"), &two_file), None)
+            .unwrap();
+        replica.create(&mut subtwo, File(&oss("mys"), &two_file), None)
+            .unwrap();
+
+        assert_list_one!(replica, root, "one", FileData::Directory(0o700));
+
+        let list = replica.list(&mut subone).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(FileData::Directory(0o777), list[0].1);
+
+        let mut subone = replica.chdir(&root, &oss("one")).unwrap();
+        let list = replica.list(&mut subone).unwrap();
+        assert_eq!(1, list.len());
+        assert_eq!(FileData::Directory(0o777), list[0].1);
+
+        let list = replica.list(&mut subtwo).unwrap();
+        assert_eq!(2, list.len());
+        assert_eq!(two_file, list[0].1);
+        assert_eq!(two_file, list[1].1);
+
+        let mut subtwo = replica.chdir(&subone, &oss("two")).unwrap();
+        let list = replica.list(&mut subtwo).unwrap();
+        assert_eq!(2, list.len());
+        assert_eq!(two_file, list[0].1);
+        assert_eq!(two_file, list[1].1);
+    }
+
+    #[test]
+    fn cleanup_removes_orphaned_blobs() {
+        init!(replica, root, master_key);
+
+        let file_data = gen_file(65536);
+        let file_uh = FileData::Regular(0o666, 65536, 0, UNKNOWN_HASH);
+
+        let created = replica.create(
+            &mut root, File(&oss("a"), &file_uh),
+            Some(Box::new(Cursor::new(file_data.clone())))).unwrap();
+
+        // Instead of inspecting the raw storage layer, we instead hold on to a
+        // transfer object even after running cleanup, and check whether we can
+        // still retrieve the underlying objects.
+        let xfer = replica.transfer(&root, File(&oss("a"), &created))
+            .unwrap().unwrap();
+
+        macro_rules! test {
+            ($master_key:expr, $xfer:expr, $which:ident) => { {
+                let mut actual_data: Vec<u8> = Vec::new();
+                assert!(block_xfer::blocks_to_stream(
+                    &xfer.blocks, &mut actual_data,
+                    master_key.hmac_secret(),
+                    |h| xfer.fetch.fetch(h)).$which());
+            } }
+        }
+
+        test!(master_key, xfer, is_ok);
+        replica.clean_up().unwrap();
+        test!(master_key, xfer, is_ok);
+
+        // Increase the link count to 2
+        replica.create(
+            &mut root, File(&oss("b"), &file_uh),
+            Some(Box::new(Cursor::new(file_data.clone())))).unwrap();
+        test!(master_key, xfer, is_ok);
+        replica.clean_up().unwrap();
+        test!(master_key, xfer, is_ok);
+
+        // Delete a, reducing the link count to 1 (and thus the transfer
+        // remains valid).
+        replica.remove(&mut root, File(&oss("a"), &created)).unwrap();
+        test!(master_key, xfer, is_ok);
+        replica.clean_up().unwrap();
+        test!(master_key, xfer, is_ok);
+
+        // Delete b, reducing the link count to 0. The object lingers until
+        // cleanup is run.
+        replica.remove(&mut root, File(&oss("b"), &created)).unwrap();
+        test!(master_key, xfer, is_ok);
+        replica.clean_up().unwrap();
+        test!(master_key, xfer, is_err);
+    }
+
+    #[test]
+    fn clean_dirty_tracking() {
+        let dir = TempDir::new("storage").unwrap();
+        let master_key = Arc::new(MasterKey::generate_new());
+
+        let storage1 = LocalStorage::open(dir.path()).unwrap();
+        let replica1 = ServerReplica::new(
+            ":memory:", master_key.clone(),
+            Arc::new(storage1), "r00t", 1024).unwrap();
+        replica1.create_root().unwrap();
+        let mut root1 = replica1.root().unwrap();
+
+        let storage2 = LocalStorage::open(dir.path()).unwrap();
+        let replica2 = ServerReplica::new(
+            ":memory:", master_key.clone(),
+            Arc::new(storage2), "r00t", 1024).unwrap();
+        let root2 = replica1.root().unwrap();
+
+        assert!(replica1.is_dir_dirty(&root1));
+        replica1.create(
+            &mut root1, File(&oss("sub"), &FileData::Directory(0o700)),
+            None).unwrap();
+        let mut subdir1 = replica1.chdir(&root1, &oss("sub")).unwrap();
+        assert!(replica1.is_dir_dirty(&subdir1));
+        replica1.create(
+            &mut subdir1, File(&oss("sym"), &FileData::Symlink(oss("target"))),
+            None).unwrap();
+
+        replica1.create(
+            &mut root1, File(&oss("other"), &FileData::Directory(0o700)),
+            None).unwrap();
+        let otherdir1 = replica1.chdir(&root1, &oss("other")).unwrap();
+
+        replica1.set_dir_clean(&root1).unwrap();
+        replica1.set_dir_clean(&subdir1).unwrap();
+        replica1.set_dir_clean(&otherdir1).unwrap();
+
+        assert!(!replica1.is_dir_dirty(&root1));
+        assert!(!replica1.is_dir_dirty(&subdir1));
+        assert!(!replica1.is_dir_dirty(&otherdir1));
+        replica1.prepare().unwrap();
+        assert!(!replica1.is_dir_dirty(&root1));
+        assert!(!replica1.is_dir_dirty(&subdir1));
+        assert!(!replica1.is_dir_dirty(&otherdir1));
+
+        assert!(replica2.is_dir_dirty(&root2));
+        let mut subdir2 = replica2.chdir(&root2, &oss("sub")).unwrap();
+        assert!(replica2.is_dir_dirty(&subdir2));
+        replica2.update(
+            &mut subdir2, &oss("sym"),
+            &FileData::Symlink(oss("target")),
+            &FileData::Symlink(oss("tegrat")), None).unwrap();
+
+        replica1.prepare().unwrap();
+        assert!(replica1.is_dir_dirty(&root1));
+        assert!(replica1.is_dir_dirty(&subdir1));
+        assert!(!replica1.is_dir_dirty(&otherdir1));
+    }
+
+    #[test]
+    fn directory_revert_detected() {
+        use std::process::Command;
+
+        let dir = TempDir::new("storage").unwrap();
+        // We need a real SQLite file so that we can close and reopen the
+        // server replica without losing state.
+        let sqlite_file = dir.path().join("state.sqlite");
+        let storage_dir = dir.path().join("storage");
+        let copy_dir = dir.path().join("copy");
+
+        let master_key = Arc::new(MasterKey::generate_new());
+
+        let sym1 = FileData::Symlink(oss("target"));
+        let sym2 = FileData::Symlink(oss("tegrat"));
+
+        {
+            let storage = LocalStorage::open(&storage_dir).unwrap();
+            let replica = ServerReplica::new(
+                sqlite_file.to_str().unwrap(), master_key.clone(),
+                Arc::new(storage), "r00t", 1024).unwrap();
+            replica.create_root().unwrap();
+            let mut root = replica.root().unwrap();
+
+            replica.create(&mut root, File(&oss("sym"), &sym1), None).unwrap();
+
+            // Copy the current state of the server to another location to
+            // mount the later attack.
+            // There doesn't seem to be any general-purpose "recursively copy
+            // directory" built in to Rust or as a crate. Instead of
+            // implementing one here, and since we don't work on non-UNIX right
+            // now anyway, just shell out to `cp` for the time being.
+            assert!(Command::new("cp").arg("-a")
+                    .arg(&storage_dir)
+                    .arg(&copy_dir)
+                    .status().unwrap().success());
+
+            replica.update(&mut root, &oss("sym"), &sym1, &sym2, None).unwrap();
+        }
+
+        {
+            // Now open the out-of-date copy we made and try to navigate it.
+            let storage = LocalStorage::open(&copy_dir).unwrap();
+            let replica = ServerReplica::new(
+                sqlite_file.to_str().unwrap(), master_key.clone(),
+                Arc::new(storage), "r00t", 1024).unwrap();
+
+            let mut root = replica.root().unwrap();
+            // When the out-of-date directory is seen, it fails instead of
+            // allowing the sync to continue.
+            assert_err!(ErrorKind::DirectoryVersionRecessed(..),
+                        replica.list(&mut root));
+        }
     }
 }
