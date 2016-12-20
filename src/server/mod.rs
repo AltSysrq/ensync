@@ -17,9 +17,15 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 pub mod storage;
-pub mod local_storage;
-pub mod rpc;
+mod local_storage;
+mod rpc;
 mod crypt;
 mod dir;
 mod replica;
 mod transfer;
+
+pub use self::replica::ServerReplica;
+pub use self::storage::Storage;
+pub use self::local_storage::LocalStorage;
+pub use self::rpc::RemoteStorage;
+pub use self::crypt::MasterKey;
