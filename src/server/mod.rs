@@ -23,6 +23,7 @@ mod crypt;
 mod dir;
 mod replica;
 mod transfer;
+pub mod keymgmt;
 
 pub use self::replica::ServerReplica;
 pub use self::storage::Storage;

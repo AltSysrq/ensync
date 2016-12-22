@@ -151,10 +151,12 @@
 //! Appending is done by using the last ciphertext block as the IV.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Write};
 use std::result::Result as StdResult;
 
+use chrono::{DateTime, UTC};
 use keccak;
 use rand::{Rng, OsRng};
 use rust_crypto::{aes, blockmodes, scrypt};
@@ -221,7 +223,13 @@ fn scrypt_18_8_1(passphrase: &[u8], salt: &[u8]) -> HashId {
     // Slides in http://www.tarsnap.com/scrypt/scrypt-slides.pdf suggest
     // n=2**20 for file encryption, but that requires 1GB of memory.
     // As a compromise, we use n=2**18, which needs "only" 256MB.
-    let sparms = scrypt::ScryptParams::new(18, 8, 1);
+    //
+    // For tests, we implicitly use weaker parameters because scrypt-18-8-1
+    // takes forever in debug builds, and it wouldn't make sense to have
+    // another algorithm option which exists only for tests to use.
+    #[cfg(not(test))] const N: u8  = 18; #[cfg(test)] const N: u8  = 12;
+    #[cfg(not(test))] const R: u32 = 8;  #[cfg(test)] const R: u32 = 4;
+    let sparms = scrypt::ScryptParams::new(N, R, 1);
     let mut derived: HashId = Default::default();
     scrypt::scrypt(passphrase, &salt, &sparms, &mut derived);
 
@@ -248,13 +256,22 @@ fn hixor(a: &HashId, b: &HashId) -> HashId {
 
 /// Creates a new key entry keyed off of the given passphrase which can be used
 /// to derive the master key.
-pub fn create_key(passphrase: &[u8], master: &MasterKey)
+///
+/// The caller must provide the logic for determining the various date-time
+/// fields itself.
+pub fn create_key(passphrase: &[u8], master: &MasterKey,
+                  created: DateTime<UTC>,
+                  updated: Option<DateTime<UTC>>,
+                  used: Option<DateTime<UTC>>)
                   -> KdfEntry {
     let mut salt = HashId::default();
     rand(&mut salt);
 
     let derived = scrypt_18_8_1(passphrase, &salt);
     KdfEntry {
+        created: created,
+        updated: updated,
+        used: used,
         algorithm: SCRYPT_18_8_1.to_owned(),
         salt: H(salt),
         hash: H(sha3(&derived)),
@@ -263,8 +280,9 @@ pub fn create_key(passphrase: &[u8], master: &MasterKey)
 }
 
 
-fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
-                         -> Option<MasterKey> {
+/// Attempts to derive the master key from the given single KDF entry.
+pub fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
+                             -> Option<MasterKey> {
     match entry.algorithm.as_str() {
         SCRYPT_18_8_1 => Some(scrypt_18_8_1(passphrase, &entry.salt.0)),
         _ => None,
@@ -280,11 +298,10 @@ fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
 /// Attempts to derive the master key from the given passphrase and key list.
 ///
 /// If successful, returns the derived master key. Otherwise, returns `None`.
-pub fn try_derive_key<'a, IT : IntoIterator<Item = &'a KdfEntry>>(
-    passphrase: &[u8], keys: IT) -> Option<MasterKey>
-{
-    keys.into_iter()
-        .filter_map(|k| try_derive_key_single(passphrase, k))
+pub fn try_derive_key(passphrase: &[u8], keys: &BTreeMap<String, KdfEntry>)
+                      -> Option<MasterKey> {
+    keys.iter()
+        .filter_map(|(_, k)| try_derive_key_single(passphrase, k))
         .next()
 }
 
@@ -554,14 +571,23 @@ pub fn decrypt_dir_ver(dir: &HashId, ciphertext: &HashId, master: &MasterKey)
 
 #[cfg(test)]
 mod test {
+    use chrono::UTC;
+
+    use std::collections::BTreeMap;
+
+    use serde_types::crypt::KdfEntry;
     use super::*;
 
     #[test]
     fn generate_and_derive_keys() {
+        fn ck(passphrase: &[u8], master: &MasterKey) -> KdfEntry {
+            create_key(passphrase, master, UTC::now(), None, None)
+        }
+
         let master = MasterKey::generate_new();
-        let mut keys = Vec::new();
-        keys.push(create_key(b"plugh", &master));
-        keys.push(create_key(b"xyzzy", &master));
+        let mut keys = BTreeMap::new();
+        keys.insert("a".to_owned(), ck(b"plugh", &master));
+        keys.insert("b".to_owned(), ck(b"xyzzy", &master));
 
         assert_eq!(Some(master), try_derive_key(b"plugh", &keys));
         assert_eq!(Some(master), try_derive_key(b"xyzzy", &keys));

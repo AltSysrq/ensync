@@ -202,6 +202,43 @@ error_chain! {
             description("Content changed on server")
             display("Content changed on server")
         }
+
+        // Errors related to setup/usage
+        KdfListAlreadyExists {
+            description("Key store already initialised \
+                         (use `add-key` if you want to add more keys)")
+        }
+        KdfListNotExists {
+            description("Key store not yet initialised \
+                         (use `init` to do that)")
+        }
+        KeyNotInKdfList(name: String) {
+            description("Key not found in key store")
+            display("Key {} not found in key store", name)
+        }
+        PassphraseNotInKdfList {
+            description("Passphrase not found in key store")
+        }
+        WouldRemoveLastKdfEntry {
+            description("There is only one key in the key store, \
+                         it cannot be removed")
+        }
+        AnonChangeKeyButMultipleKdfEntries {
+            description("`change-key` requires the name of the key \
+                         to change because there are multiple keys in \
+                         the key store")
+        }
+        ChangeKeyWithPassphraseMismatch {
+            description("The passphrase matches a key in the key store, \
+                         but not the one named on the command-line; \
+                         use `--force` if you really are sure you want \
+                         to change the named key")
+        }
+        KeyNameAlreadyInUse(name: String) {
+            description("Key name already in use")
+            display("Key name '{}' already in use \
+                     (use `change-key` if you want to edit it)", name)
+        }
     }
 }
 

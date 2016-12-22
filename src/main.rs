@@ -18,6 +18,7 @@
 
 #![recursion_limit = "1024"]
 
+extern crate chrono;
 // Not sure why the `rust_` prefix gets stripped by cargo
 extern crate crypto as rust_crypto;
 extern crate regex;

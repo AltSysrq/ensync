@@ -237,6 +237,10 @@ pub mod rpc {
 }
 
 pub mod crypt {
+    use std::collections::BTreeMap;
+
+    use chrono::{DateTime, UTC};
+
     pub use super::rpc::H;
 
     /// Stored in cleartext CBOR as directory `[0u8;32]`.
@@ -245,12 +249,18 @@ pub mod crypt {
     /// passphrase and how to move from a derived key to the master key.
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     pub struct KdfList {
-        pub keys: Vec<KdfEntry>,
+        pub keys: BTreeMap<String, KdfEntry>,
     }
 
     /// A single passphrase which may be used to derive the master key.
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     pub struct KdfEntry {
+        /// The time this (logical) entry was created.
+        pub created: DateTime<UTC>,
+        /// The time this (logical) entry was last updated.
+        pub updated: Option<DateTime<UTC>>,
+        /// The time this entry was last used to derive the master key.
+        pub used: Option<DateTime<UTC>>,
         /// The algorithm used.
         ///
         /// This includes the parameters used. Note that these are not parsed;
