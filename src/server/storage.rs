@@ -48,8 +48,8 @@ pub trait Storage : Send + Sync {
     /// Executes `f` on every `(directory,version,length)` triple currently
     /// known to the server, until `f` returns an error or an internal error
     /// occurs, or all directories have been inspected.
-    fn for_dir<F : FnMut (&HashId, &HashId, u32) -> Result<()>>(
-        &self, mut f: F) -> Result<()>;
+    fn for_dir<F : FnMut (&HashId, &HashId, u32) -> Result<()>>(&self, f: F)
+                                                                -> Result<()>;
 
     /// Begins a write transaction private to this session.
     ///
