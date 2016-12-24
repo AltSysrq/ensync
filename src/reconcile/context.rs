@@ -28,7 +28,7 @@ use replica::*;
 use log::Logger;
 use rules::DirRules;
 
-// This whole thing is basicall stable-man's-FnBox. We wrap an FnOnce in an
+// This whole thing is basically stable-man's-FnBox. We wrap an FnOnce in an
 // option and a box so we can make something approximating an FnMut (and which
 // thus can be invoked as a DST), while relegating the lifetime check to
 // runtime.
