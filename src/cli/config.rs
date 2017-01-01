@@ -55,10 +55,11 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerConfig {
     /// Use the given path on the local filesystem as the server.
-    Path(String),
+    Path(PathBuf),
     /// Invoke the given shell command to launch the server, using its stdin
-    /// and stdout as input and output for `RemoteStorage`.
-    Shell(String),
+    /// and stdout as input and output for `RemoteStorage`. If the second path
+    /// is present, the child process should be started in that directory.
+    Shell(String, Option<PathBuf>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,11 +71,11 @@ pub enum PassphraseConfig {
     String(String),
     /// Use the binary content, excluding any trailing LF or CR characters, of
     /// the named file as the passphrase. Fail if the file cannot be read.
-    File(String),
+    File(PathBuf),
     /// Invoke the given shell command and use its full binary output,
     /// excluding any trailing LF or CR characters, as the passphrase. Fail if
     /// the command does not exit successfully or emits no output.
-    Shell(String),
+    Shell(String, Option<PathBuf>),
 }
 
 impl Config {
@@ -120,7 +121,8 @@ impl Config {
     pub fn parse<P : AsRef<Path>>(filename: P, s: &str) -> Result<Self> {
         let filename = filename.as_ref();
         assert!(filename.ends_with(CONFIG_FILE_NAME));
-        assert!(filename.parent().is_some());
+        let parent = filename.parent().expect(
+            "Config path missing parent");
 
         let mut parser = toml::Parser::new(s);
         let table = parser.parse().ok_or_else(||  {
@@ -166,18 +168,21 @@ impl Config {
         let rules = extract!(table, "top level", [rules])?;
 
         Ok(Config {
-            client_root: extract!(general, "[general]", path, str)?
-                .to_owned().into(),
+            client_root: parent.join(
+                extract!(general, "[general]", path, str)?),
 
-            private_root: filename.parent().expect(
-                "filename has no parent").join(PRIVATE_DIR_NAME),
+            private_root: parent.join(PRIVATE_DIR_NAME),
 
             server: extract!(general, "[general]", server, str)?
-                .parse().map_err(|e| format!("{}: {}", filename.display(), e))?,
+                .parse::<ServerConfig>()
+                .map_err(|e| format!("{}: {}", filename.display(), e))?
+                .relativise(parent),
             server_root: extract!(general, "[general]", server_root, str)?
                 .to_owned(),
             passphrase: extract!(general, "[general]", passphrase, str)?
-                .parse().map_err(|e| format!("{}: {}", filename.display(), e))?,
+                .parse::<PassphraseConfig>()
+                .map_err(|e| format!("{}: {}", filename.display(), e))?
+                .relativise(parent),
             block_size: {
                 let bs = extract!(general, "[general]", block_size, i64)?;
                 // There is strictly speaking nothing preventing use of really
@@ -214,13 +219,29 @@ impl FromStr for ServerConfig {
         let value = &s[colon+1..];
 
         match typ {
-            "path" => Ok(ServerConfig::Path(value.to_owned())),
-            "shell" => Ok(ServerConfig::Shell(value.to_owned())),
+            "path" => Ok(ServerConfig::Path(value.to_owned().into())),
+            "shell" => Ok(ServerConfig::Shell(value.to_owned(), None)),
             _ => Err(format!("Invalid server config type '{}' \
                               (if `{}` is intended to be an scp-style path, \
                               write something like \
                               `shell:ssh {} ensync server '{}'` instead)",
                              typ, s, typ, value)),
+        }
+    }
+}
+
+impl ServerConfig {
+    /// Adjusts this `ServerConfig` such that relative filenames are resolved
+    /// against `parent`.
+    pub fn relativise<P : AsRef<Path>>(self, parent: P) -> Self {
+        let parent = parent.as_ref();
+
+        match self {
+            ServerConfig::Path(suffix) =>
+                ServerConfig::Path(parent.join(suffix)),
+
+            ServerConfig::Shell(command, _) =>
+                ServerConfig::Shell(command, Some(parent.to_owned())),
         }
     }
 }
@@ -242,8 +263,8 @@ impl FromStr for PassphraseConfig {
         let value = &s[colon+1..];
         match typ {
             "string" => Ok(PassphraseConfig::String(value.to_owned())),
-            "file" => Ok(PassphraseConfig::File(value.to_owned())),
-            "shell" => Ok(PassphraseConfig::Shell(value.to_owned())),
+            "file" => Ok(PassphraseConfig::File(value.to_owned().into())),
+            "shell" => Ok(PassphraseConfig::Shell(value.to_owned(), None)),
             _ => Err(format!("Invalid passphrase config type '{}'", typ)),
         }
     }
@@ -300,18 +321,23 @@ impl PassphraseConfig {
                     |mut file| file.read_to_end(&mut data))
                     .chain_err(
                         || format!("Failed to read passphrase from {}",
-                                   filename))?;
+                                   filename.display()))?;
                 Ok(data)
             },
 
-            PassphraseConfig::Shell(ref command) => {
+            PassphraseConfig::Shell(ref command, ref workdir) => {
                 // If we ever support Windows this will need to be updated.
-                let output = process::Command::new("/bin/sh")
+                let mut process = process::Command::new("/bin/sh");
+                process
                     .arg("-c")
                     .arg(command)
                     .stderr(process::Stdio::inherit())
-                    .stdin(process::Stdio::null())
-                    .output()
+                    .stdin(process::Stdio::null());
+                if let Some(ref workdir) = *workdir {
+                    process.current_dir(workdir);
+                }
+
+                let output = process.output()
                     .chain_err(
                         || format!("Failed to execute command `{}`", command))?;
                 if !output.status.success() {
@@ -321,6 +347,22 @@ impl PassphraseConfig {
 
                 Ok(output.stdout)
             },
+        }
+    }
+
+    /// Adjusts this configuration so that relative filenames are resolved
+    /// against the parent of `config`.
+    pub fn relativise<P : AsRef<Path>>(self, parent: P) -> Self {
+        let parent = parent.as_ref();
+        match self {
+            PassphraseConfig::Prompt |
+            PassphraseConfig::String(_) => self,
+
+            PassphraseConfig::File(basename) =>
+                PassphraseConfig::File(parent.join(basename)),
+
+            PassphraseConfig::Shell(command, _) =>
+                PassphraseConfig::Shell(command, Some(parent.to_owned())),
         }
     }
 }
@@ -345,11 +387,34 @@ block_size = 65536
 mode = "---/---"
 "#).unwrap();
         assert_eq!("/the/client/path", config.client_root.to_str().unwrap());
-        assert_eq!(ServerConfig::Path("/the/server/path".to_owned()),
+        assert_eq!(ServerConfig::Path("/the/server/path".to_owned().into()),
                    config.server);
         assert_eq!("r00t", &config.server_root);
         assert_eq!(PassphraseConfig::Prompt, config.passphrase);
         assert_eq!(65536, config.block_size);
+    }
+
+    #[test]
+    fn relative_filenames_in_config_relativised_against_config_parent() {
+        let config = Config::parse("/foo/bar/config.toml", r#"
+[general]
+path = "../sync/client"
+server = "path:../sync/server"
+server_root = "r00t"
+passphrase = "file:password"
+block_size = 65536
+
+[[rules.root.files]]
+mode = "---/---"
+"#).unwrap();
+        assert_eq!("/foo/bar/../sync/client",
+                   config.client_root.to_str().unwrap());
+        assert_eq!(ServerConfig::Path("/foo/bar/../sync/server"
+                                      .to_owned().into()),
+                   config.server);
+        assert_eq!(PassphraseConfig::File("/foo/bar/password"
+                                          .to_owned().into()),
+                   config.passphrase);
     }
 
     #[test]
@@ -359,7 +424,8 @@ mode = "---/---"
             .parse().unwrap();
 
         assert_eq!(ServerConfig::Shell(
-                       "ssh turist@host.example.org ensync ~/sync".to_owned()),
+                       "ssh turist@host.example.org ensync ~/sync".to_owned(),
+                       None),
                    sconf);
     }
 
@@ -390,5 +456,48 @@ mode = "---/---"
         let pconf: PassphraseConfig = "shell:printf 'hunter%d\r\n' 2"
             .parse().unwrap();
         assert_eq!(b"hunter2", &pconf.read_passphrase("", false).unwrap()[..]);
+    }
+
+    #[test]
+    fn relativise_prompt_password() {
+        assert_eq!(PassphraseConfig::Prompt,
+                   PassphraseConfig::Prompt.relativise("/foo"));
+    }
+
+    #[test]
+    fn relativise_string_password() {
+        assert_eq!(PassphraseConfig::String("hunter2".to_owned()),
+                   PassphraseConfig::String("hunter2".to_owned())
+                   .relativise("/foo"));
+    }
+
+    #[test]
+    fn relativise_file_password() {
+        assert_eq!(PassphraseConfig::File("/foo/password".to_owned().into()),
+                   PassphraseConfig::File("password".to_owned().into())
+                   .relativise("/foo"));
+    }
+
+    #[test]
+    fn relativise_shell_password() {
+        assert_eq!(PassphraseConfig::Shell("cat password".to_owned(),
+                                           Some("/foo".to_owned().into())),
+                   PassphraseConfig::Shell("cat password".to_owned(), None)
+                   .relativise("/foo"));
+    }
+
+    #[test]
+    fn relativise_path_server() {
+        assert_eq!(ServerConfig::Path("/foo/../bar".to_owned().into()),
+                   ServerConfig::Path("../bar".to_owned().into())
+                   .relativise("/foo"));
+    }
+
+    #[test]
+    fn relativise_shell_server() {
+        assert_eq!(ServerConfig::Shell("ensync foo".to_owned(),
+                                       Some("/foo".to_owned().into())),
+                   ServerConfig::Shell("ensync foo".to_owned(), None)
+                   .relativise("/foo"));
     }
 }
