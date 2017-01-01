@@ -22,6 +22,7 @@ extern crate chrono;
 // Not sure why the `rust_` prefix gets stripped by cargo
 extern crate crypto as rust_crypto;
 extern crate regex;
+extern crate rpassword;
 extern crate serde;
 extern crate serde_cbor;
 extern crate sqlite;
@@ -48,13 +49,13 @@ mod work_stack;
 mod rules;
 mod log;
 mod replica;
-#[cfg(test)]
-mod memory_replica;
+#[cfg(test)] mod memory_replica;
 mod reconcile;
 mod block_xfer;
 mod ancestor;
 mod posix;
 mod server;
+mod cli;
 
 fn main() {
     println!("hello world");

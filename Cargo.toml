@@ -12,6 +12,7 @@ chrono = { version = "0.2", features = ["serde"] }
 error-chain = "0.7.1"
 quick-error = "1.1.0"
 regex = "0.1.80"
+rpassword = "0.3.0"
 # Non-1.0 status shouldn't be much of an issue since we're just using AES and
 # Scrypt.
 rust-crypto = "0.2.36"

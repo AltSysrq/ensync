@@ -16,9 +16,7 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-// Needs to be pub to make the trait accessible for some reason, despite the
-// trait *being* accessible via the pub use below.
-pub mod defs;
-pub use self::defs::*;
+//! Various things supporting CLI usage of Ensync, such as subcommand
+//! implementations, interpretation of configuration, etc.
 
-pub mod engine;
+pub mod config;

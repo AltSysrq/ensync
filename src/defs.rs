@@ -28,7 +28,10 @@ pub type HashId = [u8;32];
 /// One does not compare hashes against this, since the hashes on files can be
 /// out-of-date anyway and must be computed when the file is uploaded in any
 /// case.
-pub const UNKNOWN_HASH : HashId = [0;32];
+pub const UNKNOWN_HASH: HashId = [0;32];
+/// The name of the directory which is a sibling to the configuration and which
+/// is the root of Ensync's private data.
+pub const PRIVATE_DIR_NAME: &'static str = "internal.ensync";
 
 // These were originally defined to `mode_t`, `off_t`, `time_t`, and `ino_t`
 // when we planned to use the POSIX API directly.
