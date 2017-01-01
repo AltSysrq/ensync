@@ -16,8 +16,10 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+use std::env;
 use std::fs;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::result::Result as StdResult;
 use std::str::FromStr;
@@ -30,15 +32,14 @@ use errors::*;
 use rules::engine::SyncRules;
 
 const CONFIG_FILE_NAME: &'static str = "config.toml";
-const CONFIG_FILE_SUFFIX: &'static str = "/config.toml";
 
 #[derive(Clone, Debug)]
 pub struct Config {
     /// The path in the local filesystem to use as the client root.
-    pub client_root: String,
+    pub client_root: PathBuf,
     /// The path in the local filesystem to use as the Ensync private
     /// directory. This is derived from the path to the configuration.
-    pub private_root: String,
+    pub private_root: PathBuf,
     /// Where or how to run the server.
     pub server: ServerConfig,
     /// The named root to use within the server storage.
@@ -77,8 +78,49 @@ pub enum PassphraseConfig {
 }
 
 impl Config {
-    pub fn parse(filename: &str, s: &str) -> Result<Self> {
-        assert!(filename.ends_with(CONFIG_FILE_SUFFIX));
+    /// Transform the given path (e.g., provided by the user) into the actual
+    /// path for the configuration file.
+    ///
+    /// The resulting path will always be absolute and will reference what
+    /// should be a regular file.
+    pub fn file_location<P : AsRef<Path>>(given: P) -> Result<PathBuf> {
+        let mut filename = given.as_ref().to_owned();
+        if !filename.ends_with(CONFIG_FILE_NAME) {
+            filename.push(CONFIG_FILE_NAME);
+        }
+
+        if filename.is_relative() {
+            let mut cwd = env::current_dir()
+                .chain_err(|| "Failed to determine current directory")?;
+            cwd.push(&filename);
+            filename = cwd;
+        }
+
+        Ok(filename)
+    }
+
+    /// Loads the configuration from the given path. The path is implicitly
+    /// passed through `file_location` so that this function can tolerate
+    /// relative paths and references to the whole directory instead of the
+    /// configuration itself.
+    pub fn read<P : AsRef<Path>>(filename: P) -> Result<Self> {
+        let filename = Self::file_location(filename)?;
+
+        let mut text = String::new();
+        fs::File::open(&filename).and_then(
+            |mut file| file.read_to_string(&mut text))
+            .map_err(|e| format!("{}: {}", filename.display(), e))?;
+
+        Self::parse(&filename, &text)
+    }
+
+    /// Parses the configuration in `s`. `filename` names the file from which
+    /// the text was loaded and must end with `CONFIG_FILE_NAME` and have a
+    /// parent.
+    pub fn parse<P : AsRef<Path>>(filename: P, s: &str) -> Result<Self> {
+        let filename = filename.as_ref();
+        assert!(filename.ends_with(CONFIG_FILE_NAME));
+        assert!(filename.parent().is_some());
 
         let mut parser = toml::Parser::new(s);
         let table = parser.parse().ok_or_else(||  {
@@ -87,7 +129,7 @@ impl Config {
 
 
             format!("{}: Syntax error in at line {}, column {}: {}",
-                    filename, line + 1, col, error.desc)
+                    filename.display(), line + 1, col, error.desc)
         })?;
 
         macro_rules! extract {
@@ -96,11 +138,12 @@ impl Config {
                 $from.get($key)
                     .ok_or_else(
                         || format!("{}: Missing {}{}{} under {}",
-                                   filename, $type_prefix, $key, $type_suffix,
-                                   $section))?
+                                   filename.display(), $type_prefix, $key,
+                                   $type_suffix, $section))?
                     .$convert().ok_or_else(
                         || format!("{}: Key '{}' under {} must be {}",
-                                   filename, $key, $section, $convert_name))
+                                   filename.display(), $key, $section,
+                                   $convert_name))
             };
 
             ($from:expr, $section:expr, [$key:ident]) => {
@@ -123,19 +166,18 @@ impl Config {
         let rules = extract!(table, "top level", [rules])?;
 
         Ok(Config {
-            client_root: extract!(general, "[general]", path, str)?.to_owned(),
+            client_root: extract!(general, "[general]", path, str)?
+                .to_owned().into(),
 
-            private_root: format!(
-                "{}/{}",
-                &filename[0..filename.len() - CONFIG_FILE_SUFFIX.len()],
-                PRIVATE_DIR_NAME),
+            private_root: filename.parent().expect(
+                "filename has no parent").join(PRIVATE_DIR_NAME),
 
             server: extract!(general, "[general]", server, str)?
-                .parse().map_err(|e| format!("{}: {}", filename, e))?,
+                .parse().map_err(|e| format!("{}: {}", filename.display(), e))?,
             server_root: extract!(general, "[general]", server_root, str)?
                 .to_owned(),
             passphrase: extract!(general, "[general]", passphrase, str)?
-                .parse().map_err(|e| format!("{}: {}", filename, e))?,
+                .parse().map_err(|e| format!("{}: {}", filename.display(), e))?,
             block_size: {
                 let bs = extract!(general, "[general]", block_size, i64)?;
                 // There is strictly speaking nothing preventing use of really
@@ -143,18 +185,18 @@ impl Config {
                 // enforce some mostly arbitrary bounds as a sanity check.
                 if bs < 256 {
                     bail!(format!("{}: Block size {} too small (minimum 256)",
-                                  filename, bs));
+                                  filename.display(), bs));
                 }
                 if bs > 1024*1024*1024 {
                     bail!(format!("{}: Block size {} too large (maximum 1GB)",
-                                  filename, bs));
+                                  filename.display(), bs));
                 }
                 bs as u32
             },
 
             sync_rules: SyncRules::parse(&rules, "rules")
                 .chain_err(|| format!("{}: Invalid sync rules configuration",
-                                      filename))?,
+                                      filename.display()))?,
         })
     }
 }
@@ -302,7 +344,7 @@ block_size = 65536
 [[rules.root.files]]
 mode = "---/---"
 "#).unwrap();
-        assert_eq!("/the/client/path", &config.client_root);
+        assert_eq!("/the/client/path", config.client_root.to_str().unwrap());
         assert_eq!(ServerConfig::Path("/the/server/path".to_owned()),
                    config.server);
         assert_eq!("r00t", &config.server_root);
