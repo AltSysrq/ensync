@@ -61,10 +61,14 @@ impl<'a> fmt::Display for PathDisplay<'a, &'a OsStr> {
 }
 impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, &'a OsStr)> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}/{}",
-               (self.1).0.as_path().strip_prefix(self.0)
-               .unwrap().display(),
-               (self.1).1.as_path().display())
+        let prefix = (self.1).0.as_path().strip_prefix(self.0).unwrap();
+        if prefix.components().next().is_some() {
+            write!(f, "{}/{}",
+                   prefix.display(),
+                   (self.1).1.as_path().display())
+        } else {
+            write!(f, "{}", (self.1).1.as_path().display())
+        }
     }
 }
 
