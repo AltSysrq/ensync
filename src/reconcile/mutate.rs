@@ -301,7 +301,7 @@ fn apply_use<DST : Replica,
         let old_anc = anc_files.get(name).cloned();
         if try_replace_ancestor(anc, anc_dir, anc_files, dir_name, name,
                                 old_anc.as_ref(), old_dst, log) {
-            Err(ApplyResult::RecursiveDelete(side.rev(), dir_mode(old_dst)))
+            Err(ApplyResult::RecursiveDelete(side, dir_mode(old_dst)))
         } else {
             Err(ApplyResult::Fail)
         }
@@ -374,7 +374,7 @@ pub fn apply_reconciliation(
                             &self.anc, &mut dir.anc.dir, &mut dir.anc.files,
                             &self.cli, &dir.cli.dir,
                             dir_name, name, old_srv, old_cli,
-                            &self.log, ReconciliationSide::Client) {
+                            &self.log, ReconciliationSide::Server) {
                 Ok(r) => r,
                 Err(r) => return r,
             },
@@ -383,7 +383,7 @@ pub fn apply_reconciliation(
                             &self.anc, &mut dir.anc.dir, &mut dir.anc.files,
                             &self.srv, &dir.srv.dir,
                             dir_name, name, old_cli, old_srv,
-                            &self.log, ReconciliationSide::Server) {
+                            &self.log, ReconciliationSide::Client) {
                 Ok(r) => r,
                 Err(r) => return r,
             },
