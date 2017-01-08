@@ -496,9 +496,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         || format!("Failed to create client replica private directory '{}'",
                    client_private_dir.display()))?;
     let client_replica = PosixReplica::new(
-        // TODO Rework to use paths instead of &str
-        config.client_root.to_str().unwrap(),
-        client_private_dir.to_str().unwrap(),
+        config.client_root.clone(), client_private_dir,
         master_key.hmac_secret(), config.block_size as usize)
         .chain_err(|| "Failed to set up client replica")?;
 

@@ -36,8 +36,8 @@ use super::dir::*;
 
 struct Config {
     hmac_secret: Vec<u8>,
-    root: OsString,
-    private_dir: OsString,
+    root: PathBuf,
+    private_dir: PathBuf,
     block_size: usize,
     cache_generation: i64,
     root_dev: u64,
@@ -54,7 +54,7 @@ pub struct PosixReplica {
     tmpix: AtomicUsize,
 }
 
-fn metadata_to_fd(path: &OsStr, md: &fs::Metadata,
+fn metadata_to_fd(path: &Path, md: &fs::Metadata,
                   dao: &Dao, calc_hash_if_unknown: bool,
                   config: &Config)
                   -> Result<FileData> {
@@ -79,11 +79,11 @@ fn metadata_to_fd(path: &OsStr, md: &fs::Metadata,
     }
 }
 
-fn get_or_compute_hash(path: &OsStr, dao: &Dao, stat: &InodeStatus,
+fn get_or_compute_hash(path: &Path, dao: &Dao, stat: &InodeStatus,
                        calc_hash_if_unknown: bool,
                        config: &Config) -> Result<HashId> {
     if let Some(cached) = try!(dao.cached_file_hash(
-        path, stat, config.cache_generation))
+        path.as_os_str(), stat, config.cache_generation))
     {
         return Ok(cached);
     }
@@ -96,7 +96,7 @@ fn get_or_compute_hash(path: &OsStr, dao: &Dao, stat: &InodeStatus,
         try!(fs::File::open(path)), config.block_size, &config.hmac_secret[..],
         |_,_| Ok(())));
     let _ = dao.cache_file_hashes(
-        path, &blocklist.total, &blocklist.blocks[..],
+        path.as_os_str(), &blocklist.total, &blocklist.blocks[..],
         config.block_size, stat, config.cache_generation);
     Ok(blocklist.total)
 }
@@ -109,6 +109,10 @@ fn get_or_compute_hash(path: &OsStr, dao: &Dao, stat: &InodeStatus,
 /// sync root by having ".." as a literal directory, for example.
 fn assert_sane_filename(name: &OsStr) -> Result<()> {
     if name == OsStr::new(".") || name == OsStr::new("..") {
+        return Err(ErrorKind::BadFilename(name.to_owned()).into());
+    }
+
+    if name.is_empty() {
         return Err(ErrorKind::BadFilename(name.to_owned()).into());
     }
 
@@ -126,13 +130,14 @@ impl Replica for PosixReplica {
     type TransferOut = Option<Box<StreamSource>>;
 
     fn is_dir_dirty(&self, dir: &DirHandle) -> bool {
-        return !self.dao.lock().unwrap().is_dir_clean(dir.full_path())
+        return !self.dao.lock().unwrap().is_dir_clean(
+            &dir.full_path_with_trailing_slash())
             .unwrap_or(true)
     }
 
     fn set_dir_clean(&self, dir: &DirHandle) -> Result<bool> {
         try!(self.dao.lock().unwrap().set_dir_clean(
-            dir.full_path(), &dir.hash()));
+            &dir.full_path_with_trailing_slash(), &dir.hash()));
         Ok(true)
     }
 
@@ -169,7 +174,7 @@ impl Replica for PosixReplica {
             }
 
             let fd = try!(metadata_to_fd(
-                entry.path().as_os_str(), &try!(entry.metadata()),
+                &entry.path(), &try!(entry.metadata()),
                 &*self.dao.lock().unwrap(), true, &*self.config));
             dir.toggle_file(File(&name, &fd));
             ret.push((name, fd));
@@ -218,7 +223,7 @@ impl Replica for PosixReplica {
 
         try!(self.remove_general(&path, target.1));
 
-        let _ = self.dao.lock().unwrap().delete_cache(&path);
+        let _ = self.dao.lock().unwrap().delete_cache(path.as_os_str());
         dir.toggle_file(target);
 
         Ok(())
@@ -338,8 +343,6 @@ impl Replica for PosixReplica {
 
     fn rmdir(&self, subdir: &mut DirHandle) -> Result<()> {
         let dir = try!(subdir.parent().cloned().ok_or(ErrorKind::RmdirRoot));
-        // Need to build the simple name (without the leading slash) so we can
-        // toggle it from the parent dir hash anyway.
         let path = dir.child(subdir.name());
         match fs::symlink_metadata(&path) {
             Ok(md) => {
@@ -348,8 +351,9 @@ impl Replica for PosixReplica {
                     Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
                     Err(e) => return Err(e.into()),
                 }
-                dir.toggle_file(File(&path, &FileData::Directory(
-                    md.mode() & 0o7777)));
+                dir.toggle_file(File(path.file_name().unwrap(),
+                                     &FileData::Directory(
+                                         md.mode() & 0o7777)));
             },
             Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
             Err(e) => return Err(e.into()),
@@ -384,7 +388,7 @@ impl Replica for PosixReplica {
         let dao = self.dao.lock().unwrap();
         for clean_dir in try!(dao.iter_clean_dirs()) {
             let (path, expected_hash) = try!(clean_dir);
-            let dir = DirHandle::root(path);
+            let dir = DirHandle::root(path.into());
 
             if let Ok(mut diriter) = fs::read_dir(dir.full_path()) {
                 while let Some(Ok(entry)) = diriter.next() {
@@ -396,14 +400,14 @@ impl Replica for PosixReplica {
                     }
 
                     let fd = try!(metadata_to_fd(
-                        entry.path().as_os_str(), &try!(entry.metadata()),
+                        &entry.path(), &try!(entry.metadata()),
                         &*dao, false, &*self.config));
                     dir.toggle_file(File(&name, &fd));
                 }
             }
 
             if expected_hash != dir.hash() {
-                try!(dao.set_dir_dirty(dir.full_path()));
+                try!(dao.set_dir_dirty(&dir.full_path_with_trailing_slash()));
             }
         }
 
@@ -413,7 +417,8 @@ impl Replica for PosixReplica {
     fn clean_up(&self) -> Result<()> {
         try!(self.clean_scratch());
         let _ = self.dao.lock().unwrap().prune_hash_cache(
-            &self.config.root, self.config.cache_generation);
+            &self.config.root.as_os_str(),
+            self.config.cache_generation);
         Ok(())
     }
 }
@@ -425,10 +430,19 @@ impl PosixReplica {
     /// already-existing directory created for use by the replica.
     /// `hmac_secret` and `block_size` specify the secret and size for block
     /// hashing.
-    pub fn new(root: &str, private_dir: &str,
-               hmac_secret: &[u8], block_size: usize)
-               -> Result<Self> {
-        let dao = try!(Dao::open(&format!("{}/db.sqlite", private_dir)));
+    pub fn new<P1 : AsRef<Path>, P2 : AsRef<Path>>
+        (root: P1, private_dir: P2,
+         hmac_secret: &[u8], block_size: usize)
+         -> Result<Self>
+    {
+        let root = root.as_ref();
+        let private_dir = private_dir.as_ref();
+
+        let dao = try!(Dao::open(
+            &private_dir.join("db.sqlite").to_str()
+                .ok_or_else(
+                    || format!("Path '{}' is not valid UTF-8",
+                               private_dir.display()))?));
         let cache_generation = try!(dao.next_generation());
         let root_dev = try!(fs::symlink_metadata(root)).dev();
         let private_dev = try!(fs::symlink_metadata(private_dir)).dev();
@@ -440,8 +454,8 @@ impl PosixReplica {
         Ok(PosixReplica {
             config: Arc::new(Config {
                 hmac_secret: hmac_secret.to_vec(),
-                root: root.into(),
-                private_dir: private_dir.into(),
+                root: root.to_owned(),
+                private_dir: private_dir.to_owned(),
                 block_size: block_size,
                 cache_generation: cache_generation,
                 root_dev: root_dev,
@@ -467,7 +481,7 @@ impl PosixReplica {
     /// prevent the user from running multiple ensync instances concurrently on
     /// the same private directory.
     fn scratch_file<T, F : FnMut (&Path) -> io::Result<T>>(
-        &self, mut create: F) -> io::Result<(T,OsString)>
+        &self, mut create: F) -> io::Result<(T,PathBuf)>
     {
         loop {
             let ix = self.tmpix.fetch_add(1, Ordering::SeqCst);
@@ -475,7 +489,7 @@ impl PosixReplica {
             path.push(format!("scratch-{}", ix));
 
             match create(&path) {
-                Ok(file) => return Ok((file, path.into_os_string())),
+                Ok(file) => return Ok((file, path)),
                 Err(ref err) if io::ErrorKind::AlreadyExists == err.kind() =>
                     continue,
                 Err(err) => return Err(err),
@@ -486,7 +500,7 @@ impl PosixReplica {
     /// Like `scratch_file`, but specifically creates a regular file with the
     /// given mode, returning an open read/write handle to that file.
     fn scratch_regular(&self, mode: FileMode)
-                       -> io::Result<(fs::File,OsString)> {
+                       -> io::Result<(fs::File,PathBuf)> {
         let mut opts = fs::OpenOptions::new();
         opts.read(true).write(true)
             .mode(mode)
@@ -502,19 +516,19 @@ impl PosixReplica {
     /// This renaming is distinct from what happens during reconciliation, as
     /// the renamed file is to be deleted immeiately after its replacement is
     /// established.
-    fn shunt_file(&self, old_path: &OsStr) -> Result<OsString> {
+    fn shunt_file(&self, old_path: &Path) -> Result<PathBuf> {
         // Less persistent here than the reconciler's renamer in case
         // symlink_metadata() consistently succeeds for some other reason.
         for sfx in 1..65536 {
-            let mut new_path = old_path.to_owned();
+            let mut new_path = old_path.as_os_str().to_owned();
             new_path.push(format!("!{}", sfx));
 
             if let Err(err) = fs::symlink_metadata(&new_path) {
                 if io::ErrorKind::NotFound == err.kind() {
                     try!(fs::rename(old_path, &new_path));
                     let _ = self.dao.lock().unwrap().rename_cache(
-                        &old_path, &new_path);
-                    return Ok(new_path);
+                        old_path.as_os_str(), &new_path);
+                    return Ok(new_path.into());
                 } else {
                     return Err(err.into());
                 }
@@ -594,7 +608,7 @@ impl PosixReplica {
     }
 
     /// Removes the file at `path` with data `fd` in the most appropriate way.
-    fn remove_general(&self, path: &OsStr, fd: &FileData) -> Result<()> {
+    fn remove_general(&self, path: &Path, fd: &FileData) -> Result<()> {
         match *fd {
             FileData::Regular(..) => self.hide_file(path),
             FileData::Directory(..) => Ok(try!(fs::remove_dir(path))),
@@ -605,11 +619,11 @@ impl PosixReplica {
     /// Moves the file at `old_path` to a scratch location, so that it will be
     /// absent from its current location and scheduled for deletion, while
     /// still available in the block cache for efficient renames.
-    fn hide_file(&self, old_path: &OsStr) -> Result<()> {
+    fn hide_file(&self, old_path: &Path) -> Result<()> {
         let (_, new_path) = try!(self.scratch_regular(0o600));
         try!(fs::rename(old_path, &new_path));
         let _ = self.dao.lock().unwrap().rename_cache(
-            &old_path, &new_path);
+            old_path.as_os_str(), new_path.as_os_str());
         Ok(())
     }
 
@@ -735,7 +749,7 @@ impl PosixReplica {
         }
     }
 
-    fn update_cache(&self, path: &OsStr, bl: &BlockList,
+    fn update_cache(&self, path: &Path, bl: &BlockList,
                     block_size: usize) -> Result<()> {
         let md = try!(fs::symlink_metadata(path));
         let mtime = md.mtime();
@@ -743,7 +757,7 @@ impl PosixReplica {
         let size = md.size();
 
         try!(self.dao.lock().unwrap().cache_file_hashes(
-            path, &bl.total, &bl.blocks[..], block_size,
+            path.as_os_str(), &bl.total, &bl.blocks[..], block_size,
             &InodeStatus { mtime: mtime, ino: ino, size: size },
             self.config.cache_generation));
         Ok(())
@@ -753,7 +767,7 @@ impl PosixReplica {
     ///
     /// If it matches, returns `Ok`. Otherwise, or if any error occurs, returns
     /// `Err`.
-    fn check_matches(&self, path: &OsStr, fd: &FileData)
+    fn check_matches(&self, path: &Path, fd: &FileData)
                      -> Result<()> {
         let dao = self.dao.lock().unwrap();
         let curr_fd = try!(metadata_to_fd(
@@ -822,7 +836,7 @@ impl StreamSource for FileStreamSource {
                 mtime: md.mtime(), ino: md.ino(), size: md.size(),
             };
             let _ = self.dao.lock().unwrap().cache_file_hashes(
-                &path, &blocks.total, &blocks.blocks[..],
+                path.as_os_str(), &blocks.total, &blocks.blocks[..],
                 self.config.block_size, &stat, self.config.cache_generation);
         }
 

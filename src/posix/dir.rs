@@ -23,15 +23,16 @@
 
 #![allow(dead_code)]
 
-use std::ffi::{OsStr,OsString};
+use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
-use std::sync::{Arc,Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use keccak::Keccak;
 
 use defs::*;
 use errors::*;
-use replica::{Replica,ReplicaDirectory};
+use replica::{Replica, ReplicaDirectory};
 
 #[derive(Debug,Clone)]
 struct DirContentMut {
@@ -53,8 +54,8 @@ struct DirContentMut {
 
 #[derive(Debug)]
 struct DirContent {
-    /// The fully-quallified path to this directory, including trailing slash.
-    path: OsString,
+    /// The fully-quallified path to this directory.
+    path: PathBuf,
     /// The name of this directory within its parent.
     name: OsString,
     /// If a parent directory handle exists, that parent. This is needed so
@@ -78,7 +79,7 @@ pub struct DirHandle(Arc<DirContent>);
 
 impl ReplicaDirectory for DirHandle {
     fn full_path(&self) -> &OsStr {
-        &self.0.path
+        &self.0.path.as_os_str()
     }
 }
 
@@ -92,12 +93,7 @@ static NUL: &'static [u8] = &[0u8];
 const INIT_HASH: HashId = [0;32];
 
 impl DirHandle {
-    pub fn root(mut path: OsString) -> Self {
-        // If not /-terminated, add a trailing slash
-        if path.as_bytes().last().map_or(true, |c| b'/' != *c) {
-            path.push("/");
-        }
-
+    pub fn root(path: PathBuf) -> Self {
         DirHandle(Arc::new(DirContent {
             path: path,
             name: OsString::new(),
@@ -111,10 +107,8 @@ impl DirHandle {
 
     pub fn subdir(&self, name: &OsStr, synth: Option<FileMode>)
                   -> DirHandle {
-        let mut path = self.child(name);
-        path.push("/");
         DirHandle(Arc::new(DirContent {
-            path: path,
+            path: self.child(name),
             name: name.to_owned(),
             parent: Some(self.clone()),
             mcontent: Mutex::new(DirContentMut {
@@ -137,21 +131,25 @@ impl DirHandle {
         self.0.mcontent.lock().unwrap().hash = INIT_HASH
     }
 
-    /// Returns the full path to the child file of the given name within this
-    /// directory.
-    pub fn child(&self, sub: &OsStr) -> OsString {
-        let mut ret = self.full_path().to_owned();
-        ret.push(sub);
-        ret
-    }
-
     pub fn parent(&self) -> Option<&DirHandle> {
         self.0.parent.as_ref()
+    }
+
+    pub fn child<P : AsRef<Path>>(&self, name: P) -> PathBuf {
+        self.0.path.join(name)
     }
 
     pub fn is_synth(&self) -> bool {
         let locked = self.0.mcontent.lock().unwrap();
         locked.synth_mode.is_some()
+    }
+
+    pub fn full_path_with_trailing_slash(&self) -> OsString {
+        let mut s = self.0.path.as_os_str().to_owned();
+        if OsStr::new("s") != &s {
+            s.push("/");
+        }
+        s
     }
 
     /// Updates the hash of this directory to account for the presence or
