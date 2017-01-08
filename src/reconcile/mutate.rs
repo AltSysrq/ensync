@@ -495,6 +495,7 @@ pub mod test {
     use std::collections::{BTreeMap,BinaryHeap};
     use std::ffi::{OsString,OsStr};
     use std::io::Write;
+    use std::mem;
 
     use defs::*;
     use defs::test_helpers::*;
@@ -534,8 +535,8 @@ pub mod test {
         fn build(self) -> Self { self }
     }
 
-    pub type TContext<'a, W> =
-        Context<'a, MemoryReplica, MemoryReplica, MemoryReplica,
+    pub type TContext<W> =
+        Context<MemoryReplica, MemoryReplica, MemoryReplica,
                 PrintlnLogger<W>, ConstantRules>;
 
     pub struct Fixture<W> {
@@ -557,16 +558,35 @@ pub mod test {
             }
         }
 
-        pub fn context(&self) -> TContext<W> {
+        pub fn context(self) -> TContext<W> {
             Context {
-                cli: &self.client,
-                anc: &self.ancestor,
-                srv: &self.server,
-                logger: &self.logger,
+                cli: self.client,
+                anc: self.ancestor,
+                srv: self.server,
+                logger: self.logger,
                 root_rules: ConstantRules(self.mode),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
             }
+        }
+
+        pub fn with_context<T, F : FnOnce (&TContext<W>) -> T>
+            (&mut self, f: F) -> T
+        {
+            let context = Context {
+                cli: mem::replace(&mut self.client, MemoryReplica::empty()),
+                anc: mem::replace(&mut self.ancestor, MemoryReplica::empty()),
+                srv: mem::replace(&mut self.server, MemoryReplica::empty()),
+                logger: self.logger.clone(),
+                root_rules: ConstantRules(self.mode),
+                work: WorkStack::new(),
+                tasks: UnqueuedTasks::new(),
+            };
+            let ret = f(&context);
+            self.client = context.cli;
+            self.ancestor = context.anc;
+            self.server = context.srv;
+            ret
         }
     }
 
@@ -1039,16 +1059,17 @@ pub mod test {
             memory_replica::Op::Create(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &fx.context(), &mut root,
+            &context, &mut root,
             &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
             Some(&cfd), None));
 
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
         assert_eq!(None, root.anc.files.get(&foo));
         assert_eq!(None, root.srv.files.get(&foo));
-        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
-        assert!(fx.server.list(&mut root.srv.dir).unwrap().is_empty());
+        assert!(context.anc.list(&mut root.anc.dir).unwrap().is_empty());
+        assert!(context.srv.list(&mut root.srv.dir).unwrap().is_empty());
     }
 
     #[test]
@@ -1064,16 +1085,17 @@ pub mod test {
             memory_replica::Op::Create(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &fx.context(), &mut root,
+            &context, &mut root,
             &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
             Some(&cfd), None));
 
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
         assert_eq!(None, root.anc.files.get(&foo));
         assert_eq!(Some(&cfd), root.srv.files.get(&foo));
-        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
-        assert_eq!(cfd, fx.server.list(&mut root.srv.dir).unwrap()[0].1);
+        assert!(context.anc.list(&mut root.anc.dir).unwrap().is_empty());
+        assert_eq!(cfd, context.srv.list(&mut root.srv.dir).unwrap()[0].1);
     }
 
     #[test]
@@ -1156,20 +1178,21 @@ pub mod test {
         let sfd = mkdir(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, 0o700);
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+            &context, &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
-        assert_eq!(&foo1, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &context.cli.list(&mut root.cli.dir).unwrap()[0].0);
         assert!(root.anc.files.is_empty());
-        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
+        assert!(context.anc.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.srv.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1186,20 +1209,21 @@ pub mod test {
         let sfd = mkdir(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, 0o700);
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+            &context, &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Server,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.cli.list(&mut root.cli.dir).unwrap()[0].0);
         assert!(root.anc.files.is_empty());
-        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
+        assert!(context.anc.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo1));
-        assert_eq!(&foo1, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &context.srv.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1219,20 +1243,21 @@ pub mod test {
             memory_replica::Op::Rename(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+            &context, &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.cli.list(&mut root.cli.dir).unwrap()[0].0);
         assert!(root.anc.files.is_empty());
-        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
+        assert!(context.anc.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.srv.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1252,18 +1277,19 @@ pub mod test {
             memory_replica::Op::Remove(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+            &context, &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.cli.list(&mut root.cli.dir).unwrap()[0].0);
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.srv.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1280,8 +1306,9 @@ pub mod test {
         let sfd = mkdir(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, 0o700);
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+            &context, &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Move),
             Some(&cfd), Some(&sfd)));
@@ -1289,14 +1316,14 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
-        assert_eq!(&foo1, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &context.cli.list(&mut root.cli.dir).unwrap()[0].0);
         assert_eq!(1, root.anc.files.len());
         assert_eq!(Some(&afd), root.anc.files.get(&foo1));
-        assert_eq!(1, fx.ancestor.list(&mut root.anc.dir).unwrap().len());
-        assert_eq!(&foo1, &fx.ancestor.list(&mut root.anc.dir).unwrap()[0].0);
+        assert_eq!(1, context.anc.list(&mut root.anc.dir).unwrap().len());
+        assert_eq!(&foo1, &context.anc.list(&mut root.anc.dir).unwrap()[0].0);
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.srv.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1316,8 +1343,9 @@ pub mod test {
             memory_replica::Op::Rename(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+            &context, &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Move),
             Some(&cfd), Some(&sfd)));
@@ -1325,14 +1353,14 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
-        assert_eq!(&foo, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.cli.list(&mut root.cli.dir).unwrap()[0].0);
         // root.anc.files will be out of date, but listing the ancestor will
         // effect the condemnation of the old name.
         assert_eq!(1, root.anc.files.len());
-        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
+        assert!(context.anc.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.srv.list(&mut root.srv.dir).unwrap()[0].0);
     }
 
     #[test]
@@ -1353,8 +1381,9 @@ pub mod test {
             memory_replica::Op::Rename(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
+        let context = fx.context();
         assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+            &context, &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Move),
             Some(&cfd), Some(&sfd)));
@@ -1362,13 +1391,13 @@ pub mod test {
 
         assert_eq!(1, root.cli.files.len());
         assert_eq!(Some(&cfd), root.cli.files.get(&foo1));
-        assert_eq!(&foo1, &fx.client.list(&mut root.cli.dir).unwrap()[0].0);
+        assert_eq!(&foo1, &context.cli.list(&mut root.cli.dir).unwrap()[0].0);
         // root.anc.files will be out of date, but listing the ancestor will
         // effect the condemnation of the old name.
         assert_eq!(1, root.anc.files.len());
-        assert!(fx.ancestor.list(&mut root.anc.dir).unwrap().is_empty());
+        assert!(context.anc.list(&mut root.anc.dir).unwrap().is_empty());
         assert_eq!(1, root.srv.files.len());
         assert_eq!(Some(&sfd), root.srv.files.get(&foo));
-        assert_eq!(&foo, &fx.server.list(&mut root.srv.dir).unwrap()[0].0);
+        assert_eq!(&foo, &context.srv.list(&mut root.srv.dir).unwrap()[0].0);
     }
 }

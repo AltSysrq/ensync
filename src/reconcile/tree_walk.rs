@@ -687,14 +687,15 @@ mod test {
         res
     }
 
-    fn run_once<W : Write>(fx: &Fixture<W>) -> DirState {
-        let context = fx.context();
-        let dsr = start_root(&context).unwrap();
-        context.run_work();
-        Arc::try_unwrap(dsr).ok().unwrap()
+    fn run_once<W : Write>(fx: &mut Fixture<W>) -> DirState {
+        fx.with_context(|context| {
+            let dsr = start_root(context).unwrap();
+            context.run_work();
+            Arc::try_unwrap(dsr).ok().unwrap()
+        })
     }
 
-    fn run_full<W : Write>(fx: &Fixture<W>) {
+    fn run_full<W : Write>(fx: &mut Fixture<W>) {
         let res = run_once(fx);
         if !res.success.load(SeqCst) {
             assert!(!fx.client.data().faults.is_empty() ||
@@ -716,7 +717,7 @@ mod test {
     fn test_single(input: &Vec<En>, mode: &str, output: &Vec<En>) {
         let mut fx = init(input, PrintWriter);
         fx.mode = mode.parse().unwrap();
-        run_full(&fx);
+        run_full(&mut fx);
         verify(&fx, output);
 
         let cli_sig_a = signature(&fx.client);
@@ -725,7 +726,7 @@ mod test {
 
         fx.client.mark_all_dirty();
         fx.server.mark_all_dirty();
-        run_full(&fx);
+        run_full(&mut fx);
 
         let cli_sig_b = signature(&fx.client);
         let anc_sig_b = signature(&fx.ancestor);
@@ -1106,7 +1107,7 @@ mod test {
             let mut fx = init(&fs, out);
             fx.mode = mode;
 
-            run_full(&fx);
+            run_full(&mut fx);
 
             let cli_sig_a = signature(&fx.client);
             let anc_sig_a = signature(&fx.ancestor);
@@ -1114,7 +1115,7 @@ mod test {
 
             fx.client.mark_all_dirty();
             fx.server.mark_all_dirty();
-            run_full(&fx);
+            run_full(&mut fx);
 
             let cli_sig_b = signature(&fx.client);
             let anc_sig_b = signature(&fx.ancestor);
@@ -1200,7 +1201,7 @@ mod test {
             fx.mode = mode;
 
             let (orig_files_max, orig_files_min) = files_in_fs(&fs);
-            run_full(&fx);
+            run_full(&mut fx);
 
             let (_, result_files) = files_in_fx(&fx);
 
@@ -1246,7 +1247,7 @@ mod test {
             let mut fx = init(&fs, out);
             fx.mode = mode;
 
-            run_full(&fx);
+            run_full(&mut fx);
 
             let new_cli_sig = signature(&fx.client);
             let srv_sig = signature(&fx.server);

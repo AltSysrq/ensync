@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -115,30 +115,28 @@ pub trait Interface : Sized {
     }
 }
 
-pub struct Context<'a,
-                   CLI : 'a + Replica,
-                   ANC : 'a + Replica + NullTransfer + Condemn,
-                   SRV : 'a + Replica<TransferIn = CLI::TransferOut,
-                                      TransferOut = CLI::TransferIn>,
-                   LOG : 'a + Logger,
+pub struct Context<CLI : Replica,
+                   ANC : Replica + NullTransfer + Condemn,
+                   SRV : Replica<TransferIn = CLI::TransferOut,
+                                 TransferOut = CLI::TransferIn>,
+                   LOG : Logger,
                    RULES : DirRules + 'static> {
-    pub cli: &'a CLI,
-    pub anc: &'a ANC,
-    pub srv: &'a SRV,
-    pub logger: &'a LOG,
+    pub cli: CLI,
+    pub anc: ANC,
+    pub srv: SRV,
+    pub logger: LOG,
     pub root_rules: <RULES as DirRules>::FileRules,
-    pub work: WorkStack<Task<Context<'a,CLI,ANC,SRV,LOG,RULES>>>,
-    pub tasks: UnqueuedTasks<Task<Context<'a,CLI,ANC,SRV,LOG,RULES>>>,
+    pub work: WorkStack<Task<Context<CLI,ANC,SRV,LOG,RULES>>>,
+    pub tasks: UnqueuedTasks<Task<Context<CLI,ANC,SRV,LOG,RULES>>>,
 }
 
-impl<'a,
-     CLI : 'a + Replica,
-     ANC : 'a + Replica + NullTransfer + Condemn,
-     SRV : 'a + Replica<TransferIn = CLI::TransferOut,
-                        TransferOut = CLI::TransferIn>,
-     LOG : 'a + Logger,
-     RULES : 'a + DirRules>
-Interface for Context<'a, CLI, ANC, SRV, LOG, RULES> {
+impl<CLI : Replica,
+     ANC : Replica + NullTransfer + Condemn,
+     SRV : Replica<TransferIn = CLI::TransferOut,
+                   TransferOut = CLI::TransferIn>,
+     LOG : Logger,
+     RULES : DirRules>
+Interface for Context<CLI, ANC, SRV, LOG, RULES> {
     type Cli = CLI;
     type CliDir = CLI::Directory;
     type Anc = ANC;
@@ -148,10 +146,10 @@ Interface for Context<'a, CLI, ANC, SRV, LOG, RULES> {
     type Log = LOG;
     type Rules = RULES;
 
-    fn cli(&self) -> &Self::Cli { self.cli }
-    fn anc(&self) -> &Self::Anc { self.anc }
-    fn srv(&self) -> &Self::Srv { self.srv }
-    fn log(&self) -> &Self::Log { self.logger }
+    fn cli(&self) -> &Self::Cli { &self.cli }
+    fn anc(&self) -> &Self::Anc { &self.anc }
+    fn srv(&self) -> &Self::Srv { &self.srv }
+    fn log(&self) -> &Self::Log { &self.logger }
     fn root_rules(&self) -> <RULES as DirRules>::FileRules { self.root_rules.clone() }
     fn work(&self) -> &WorkStack<Task<Self>> { &self.work }
     fn tasks(&self) -> &UnqueuedTasks<Task<Self>> { &self.tasks }

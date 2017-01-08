@@ -94,17 +94,23 @@ pub trait Logger {
 #[cfg(test)]
 mod println_logger {
     use std::io::{Result,Write};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
 
     /// Trivial implementation of `Logger` which simply dumps everything (in
     /// debug format) to the given writer.
-    pub struct PrintlnLogger<W>(Mutex<W>);
+    pub struct PrintlnLogger<W>(Arc<Mutex<W>>);
 
     impl<W> PrintlnLogger<W> {
         pub fn new(w: W) -> Self {
-            PrintlnLogger(Mutex::new(w))
+            PrintlnLogger(Arc::new(Mutex::new(w)))
+        }
+    }
+
+    impl<W> Clone for PrintlnLogger<W> {
+        fn clone(&self) -> Self {
+            PrintlnLogger(self.0.clone())
         }
     }
 
