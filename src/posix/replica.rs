@@ -341,9 +341,19 @@ impl Replica for PosixReplica {
         // Need to build the simple name (without the leading slash) so we can
         // toggle it from the parent dir hash anyway.
         let path = dir.child(subdir.name());
-        let md = try!(fs::symlink_metadata(&path));
-        try!(fs::remove_dir(&path));
-        dir.toggle_file(File(&path, &FileData::Directory(md.mode() & 0o7777)));
+        match fs::symlink_metadata(&path) {
+            Ok(md) => {
+                match fs::remove_dir(&path) {
+                    Ok(()) => { },
+                    Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
+                    Err(e) => return Err(e.into()),
+                }
+                dir.toggle_file(File(&path, &FileData::Directory(
+                    md.mode() & 0o7777)));
+            },
+            Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
+            Err(e) => return Err(e.into()),
+        }
         Ok(())
     }
 
@@ -376,20 +386,20 @@ impl Replica for PosixReplica {
             let (path, expected_hash) = try!(clean_dir);
             let dir = DirHandle::root(path);
 
-            for entry in try!(fs::read_dir(dir.full_path())) {
-                let entry = try!(entry);
+            if let Ok(mut diriter) = fs::read_dir(dir.full_path()) {
+                while let Some(Ok(entry)) = diriter.next() {
+                    let name = entry.file_name();
+                    if OsStr::new(".") == &name ||
+                        OsStr::new("..") == &name
+                    {
+                        continue;
+                    }
 
-                let name = entry.file_name();
-                if OsStr::new(".") == &name ||
-                    OsStr::new("..") == &name
-                {
-                    continue;
+                    let fd = try!(metadata_to_fd(
+                        entry.path().as_os_str(), &try!(entry.metadata()),
+                        &*dao, false, &*self.config));
+                    dir.toggle_file(File(&name, &fd));
                 }
-
-                let fd = try!(metadata_to_fd(
-                    entry.path().as_os_str(), &try!(entry.metadata()),
-                    &*dao, false, &*self.config));
-                dir.toggle_file(File(&name, &fd));
             }
 
             if expected_hash != dir.hash() {
@@ -1602,6 +1612,22 @@ mod test {
 
         let mut dir = replica.root().unwrap();
         let mut subdir = replica.chdir(&dir, &oss("child")).unwrap();
+        replica.rmdir(&mut subdir).unwrap();
+
+        assert_eq!(0, replica.list(&mut dir).unwrap().len());
+    }
+
+    #[test]
+    fn rmdir_nx() {
+        let (root, _private, replica) = new_simple();
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join("child")).unwrap();
+
+        replica.prepare().unwrap();
+
+        let mut dir = replica.root().unwrap();
+        let mut subdir = replica.chdir(&dir, &oss("child")).unwrap();
+        replica.rmdir(&mut subdir).unwrap();
         replica.rmdir(&mut subdir).unwrap();
 
         assert_eq!(0, replica.list(&mut dir).unwrap().len());
