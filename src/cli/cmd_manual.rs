@@ -48,9 +48,11 @@ fn ls_one<S : Storage + ?Sized, P : AsRef<Path>>
      -> Result<()>
 {
     let (mut dir, single) = navigate(replica, path, true)?;
-    let list = replica.list(&mut dir)
+    let mut list = replica.list(&mut dir)
         .chain_err(|| format!("Failed to list '{}'",
                               dir.full_path().to_string_lossy()))?;
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+
     for (name, fd) in list {
         if single.as_ref().map_or(false, |s| *s != name) { continue; }
 
@@ -63,7 +65,7 @@ fn ls_one<S : Storage + ?Sized, P : AsRef<Path>>
 
             FileData::Symlink(target) => {
                 let target = target.to_string_lossy().into_owned();
-                ('l', 0o6777, target.len() as u64, 0, Some(target))
+                ('l', 0o7777, target.len() as u64, 0, Some(target))
             },
 
             FileData::Special =>
@@ -103,10 +105,10 @@ fn ls_one<S : Storage + ?Sized, P : AsRef<Path>>
 
             format!("{:>4}{}", size, suffixes[index])
         } else {
-            format!("{:>16}", size)
+            format!("{:>12}", size)
         };
 
-        println!("{}{}{}{}{}{}{}{}{}{} {} {} {}{}{}",
+        println!("{}{}{}{}{}{}{}{}{}{}  {}  {}  {}{}{}",
                  typ,
                  bit(mode, 0o0400, 'r'),
                  bit(mode, 0o0200, 'w'),

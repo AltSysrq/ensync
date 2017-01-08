@@ -82,6 +82,8 @@ fn main() {
 }
 
 fn main_impl() -> Result<()> {
+    use std::fs;
+
     use clap::*;
 
     use cli::config::PassphraseConfig;
@@ -280,6 +282,9 @@ fn main_impl() -> Result<()> {
             set_up!($matches, $config);
             let $storage = cli::open_server::open_server_storage(
                 &$config.server)?;
+            fs::create_dir_all(&$config.private_root).chain_err(
+                || format!("Failed to create ensync private directory '{}'",
+                           $config.private_root.display()))?;
         };
 
         ($matches:ident, $config:ident, $storage:ident, $replica:ident) => {
@@ -377,6 +382,6 @@ fn main_impl() -> Result<()> {
 }
 
 fn parse_mode(s: &str) -> Result<defs::FileMode> {
-    u32::from_str_radix(s, 8).map(|m| m & 0o3777).map_err(
+    u32::from_str_radix(s, 8).map(|m| m & 0o7777).map_err(
         |_| format!("Invalid mode '{}'", s).into())
 }

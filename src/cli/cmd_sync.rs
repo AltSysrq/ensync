@@ -486,10 +486,6 @@ pub fn run(config: &Config, storage: Arc<Storage>,
     let master_key = Arc::new(
         keymgmt::derive_master_key(&*storage, &passphrase)?);
 
-    fs::create_dir_all(&config.private_root).chain_err(
-        || format!("Failed to create ensync private directory '{}'",
-                   config.private_root.display()))?;
-
     let server_replica = open_server_replica(
         config, storage.clone(), Some(master_key.clone()))?;
 
