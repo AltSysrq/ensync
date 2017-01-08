@@ -333,6 +333,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                 Ok(None)
             }
         })?;
+        self.save_latest_dir_ver(&mut*content)?;
 
         // Make a best effort to free the side data in the database
         if let Some(child_id) = child_id {
@@ -368,7 +369,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         let mut content = self.content.lock().unwrap();
         self.materialise(&mut content)?;
 
-        self.do_tx(&mut content, |tx, content| {
+        let ret = self.do_tx(&mut content, |tx, content| {
             let mut subdir_id = None;
 
             // Prepare to remove the file and ensure that it is what the caller
@@ -456,7 +457,9 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             let ret = self.v0_entry_to_filedata(&new_entry);
             self.add_entry(tx, content, name.to_owned(), new_entry)?;
             Ok(Some(ret))
-        }).map(|r| r.expect("edit() transaction aborted?"))
+        }).map(|r| r.expect("edit() transaction aborted?"))?;
+        self.save_latest_dir_ver(&mut*content)?;
+        Ok(ret)
     }
 
     /// Renames whatever file is at `old` to be at `new`, provided `old` exists
@@ -473,7 +476,9 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             self.add_entry(tx, content, old.to_owned(), v0::Entry::X)?;
             self.add_entry(tx, content, new.to_owned(), entry)?;
             Ok(Some(()))
-        }).map(|_| ())
+        }).map(|_| ())?;
+        self.save_latest_dir_ver(&mut*content)?;
+        Ok(())
     }
 
     /// Create a outbound transfer for the given file, expecting it to be an
@@ -623,7 +628,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         *content = new_content;
         drop(db);
 
-        self.save_latest_dir_ver(content)?;
+        self.save_latest_dir_ver(&mut*content)?;
 
         Ok(())
     }
@@ -753,7 +758,6 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             self.append_entry(tx, content, &name, &entry)?;
             content.apply_entry((name.into_vec().into(), entry));
         }
-        self.save_latest_dir_ver(content)?;
 
         Ok(())
     }
@@ -894,6 +898,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                                  v0::Entry::D(mode, H(self.id)))?;
                 Ok(Some(()))
             })?;
+            self.save_latest_dir_ver(content)?;
             content.synth = None;
             Ok(())
         } else {
