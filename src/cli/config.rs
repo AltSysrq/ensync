@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::result::Result as StdResult;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use rpassword;
 use toml;
@@ -49,7 +50,7 @@ pub struct Config {
     /// The block size to use for new transfers.
     pub block_size: u32,
     /// The sync rules to use for reconciliation.
-    pub sync_rules: SyncRules,
+    pub sync_rules: Arc<SyncRules>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -205,7 +206,7 @@ impl Config {
                 bs as u32
             },
 
-            sync_rules: SyncRules::parse(&rules, "rules")
+            sync_rules: SyncRules::parse(&rules, "rules").map(Arc::new)
                 .chain_err(|| format!("{}: Invalid sync rules configuration",
                                       filename.display()))?,
         })

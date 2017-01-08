@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -592,6 +592,16 @@ impl SyncRules {
 
         occurs[state_ix] = false;
         keep_going
+    }
+}
+
+impl DirEngine {
+    pub fn new(rules: Arc<SyncRules>) -> Self {
+        let init_state = rules.root_ix;
+        DirEngine {
+            rules: rules,
+            state: EngineState::new(init_state),
+        }
     }
 }
 

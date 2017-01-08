@@ -17,7 +17,7 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 mod context;
-pub use self::context::Context;
+pub use self::context::{Context, UnqueuedTasks};
 
 pub mod compute;
 pub mod mutate;

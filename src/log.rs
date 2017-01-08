@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -32,18 +32,18 @@ use errors::Error;
 
 pub type LogLevel = u8;
 /// Log level indicating an unrecoverable, non-localised error.
-pub const FATAL: LogLevel = 0;
+pub const FATAL: LogLevel = 1;
 /// Log level indicating a localised error.
-pub const ERROR: LogLevel = 1;
+pub const ERROR: LogLevel = 2;
 /// Log level indicating a somewhat surprising situation that can still be
 /// handled reasonably, such as edit/edit conflicts.
-pub const WARN: LogLevel = 2;
+pub const WARN: LogLevel = 3;
 /// Log level indicating the reconciler making changes to one of the real
 /// replicas.
-pub const EDIT: LogLevel = 3;
+pub const EDIT: LogLevel = 4;
 /// Log level for informational messages not indicative of problems or changes
 /// being made.
-pub const INFO: LogLevel = 4;
+pub const INFO: LogLevel = 5;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ReplicaSide {
