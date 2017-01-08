@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -113,6 +113,12 @@ impl Config {
             .map_err(|e| format!("{}: {}", filename.display(), e))?;
 
         Self::parse(&filename, &text)
+    }
+
+    /// Returns the path to the configuration file itself.
+    pub fn full_path(&self) -> PathBuf {
+        self.private_root.parent().expect("private root has no parent")
+            .join(CONFIG_FILE_NAME)
     }
 
     /// Parses the configuration in `s`. `filename` names the file from which

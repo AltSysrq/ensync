@@ -10,7 +10,9 @@ serde_codegen = "0.8"
 [dependencies]
 chrono = { version = "0.2", features = ["serde"] }
 error-chain = "0.7.1"
+libc = "0.2.18"
 quick-error = "1.1.0"
+rand = "0.3.15"
 regex = "0.1.80"
 rpassword = "0.3.0"
 # Non-1.0 status shouldn't be much of an issue since we're just using AES and
@@ -23,10 +25,12 @@ tempfile = "2.1.4"
 tiny-keccak = "1.1.1"
 toml = "0.2.1"
 
+[dependencies.clap]
+version = "2.20"
+default-features = false
+features = ["suggestions", "wrap_help"]
+
 [dev-dependencies]
 quickcheck = "0.4.1"
-rand = "0.3.15"
 tempdir = "0.3.5"
 os_pipe = "0.2.0"
-# Just for `mkfifo` right now...
-libc = "0.2.18"

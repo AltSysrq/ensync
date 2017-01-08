@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -114,7 +114,7 @@ pub const DIRID_PROOT: HashId = [255;32];
 /// semantics of `Storage`. However, the interface exposed is simply reads and
 /// unconditional updates; it is up to the replica to handle if-match and so
 /// forth, for example.
-pub struct Dir<S : Storage + 'static> {
+pub struct Dir<S : Storage + ?Sized + 'static> {
     pub id: HashId,
     pub parent: Option<Arc<Dir<S>>>,
     pub path: OsString,
@@ -158,13 +158,13 @@ struct DirContent {
     synth: Option<(OsString, FileMode)>,
 }
 
-impl<S : Storage + 'static> ReplicaDirectory for Dir<S> {
+impl<S : Storage + ?Sized + 'static> ReplicaDirectory for Dir<S> {
     fn full_path(&self) -> &OsStr {
         &self.path
     }
 }
 
-impl<S : Storage + 'static> Dir<S> {
+impl<S : Storage + ?Sized + 'static> Dir<S> {
     /// Initialises the pseudo-root directory.
     pub fn root(db: Arc<Mutex<SendConnection>>, key: Arc<MasterKey>,
                 storage: Arc<S>, block_size: usize) -> Result<Self> {

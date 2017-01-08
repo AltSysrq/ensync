@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -25,12 +25,12 @@ use errors::*;
 use server::crypt::{MasterKey, decrypt_obj};
 use server::storage::Storage;
 
-pub struct ServerTransferOut<S : Storage> {
+pub struct ServerTransferOut<S : Storage + ?Sized> {
     storage: Arc<S>,
     key: Arc<MasterKey>,
 }
 
-impl<S : Storage> ServerTransferOut<S> {
+impl<S : Storage + ?Sized> ServerTransferOut<S> {
     pub fn new(storage: Arc<S>, key: Arc<MasterKey>) -> Self {
         ServerTransferOut {
             storage: storage,
@@ -39,7 +39,7 @@ impl<S : Storage> ServerTransferOut<S> {
     }
 }
 
-impl<S : Storage> BlockFetch for ServerTransferOut<S> {
+impl<S : Storage + ?Sized> BlockFetch for ServerTransferOut<S> {
     fn fetch(&self, block: &HashId) -> Result<Box<io::Read>> {
         let ciphertext = self.storage.getobj(block)?
             .ok_or(ErrorKind::ServerContentDeleted)?;

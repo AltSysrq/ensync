@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -32,7 +32,7 @@ use server::storage::*;
 use server::dir::DIRID_KEYS;
 use serde_types::crypt::*;
 
-fn do_tx<S : Storage, R, F : FnMut (Tx) -> Result<R>>(
+fn do_tx<S : Storage + ?Sized, R, F : FnMut (Tx) -> Result<R>>(
     storage: &S, mut f: F) -> Result<R>
 {
     // For now just always use a constant since we don't run concurrently with
@@ -55,8 +55,9 @@ fn do_tx<S : Storage, R, F : FnMut (Tx) -> Result<R>>(
     Err(ErrorKind::TooManyTxRetries.into())
 }
 
-fn get_kdflist<S : Storage>(storage: &S)
-                            -> Result<Option<(KdfList, HashId, u32)>> {
+fn get_kdflist<S : Storage + ?Sized>(
+    storage: &S) -> Result<Option<(KdfList, HashId, u32)>>
+{
     if let Some((ver, data)) = storage.getdir(&DIRID_KEYS)? {
         Ok(Some((serde_cbor::from_slice(&data)?, ver, data.len() as u32)))
     } else {
@@ -64,9 +65,9 @@ fn get_kdflist<S : Storage>(storage: &S)
     }
 }
 
-fn put_kdflist<S : Storage>(storage: &S, kdf: &KdfList,
-                            tx: Tx, old: Option<(&HashId, u32)>)
-                            -> Result<(HashId, u32)> {
+fn put_kdflist<S : Storage + ?Sized>(storage: &S, kdf: &KdfList,
+                                     tx: Tx, old: Option<(&HashId, u32)>)
+                                     -> Result<(HashId, u32)> {
     let new_ver = rand_hashid();
     let new_data = serde_cbor::to_vec(kdf)?;
 
@@ -77,7 +78,7 @@ fn put_kdflist<S : Storage>(storage: &S, kdf: &KdfList,
     Ok((new_ver, new_data.len() as u32))
 }
 
-fn edit_kdflist<S : Storage, R, F : FnMut (&mut KdfList) -> Result<R>>
+fn edit_kdflist<S : Storage + ?Sized, R, F : FnMut (&mut KdfList) -> Result<R>>
     (storage: &S, mut f: F) -> Result<R>
 {
     do_tx(storage, |tx| {
@@ -90,8 +91,10 @@ fn edit_kdflist<S : Storage, R, F : FnMut (&mut KdfList) -> Result<R>>
 }
 
 /// Initialises the KDF List with a new master key and the given passphrase.
-pub fn init_keys<S : Storage>(storage: &S, passphrase: &[u8], key_name: &str)
-                              -> Result<()> {
+pub fn init_keys<S : Storage + ?Sized>(
+    storage: &S, passphrase: &[u8], key_name: &str)
+    -> Result<()>
+{
     do_tx(storage, |tx| {
         if get_kdflist(storage)?.is_some() {
             return Err(ErrorKind::KdfListAlreadyExists.into());
@@ -113,9 +116,9 @@ pub fn init_keys<S : Storage>(storage: &S, passphrase: &[u8], key_name: &str)
 
 /// Adds `new_passphrase` as a new key named `new_name` to the key store, using
 /// `old_passphrase` to derive the master key.
-pub fn add_key<S : Storage>(storage: &S, old_passphrase: &[u8],
-                            new_passphrase: &[u8], new_name: &str)
-                            -> Result<()> {
+pub fn add_key<S : Storage + ?Sized>(storage: &S, old_passphrase: &[u8],
+                                     new_passphrase: &[u8], new_name: &str)
+                                     -> Result<()> {
     edit_kdflist(storage, |kdflist| {
         let master_key = try_derive_key(old_passphrase, &kdflist.keys)
             .ok_or(ErrorKind::PassphraseNotInKdfList)?;
@@ -140,7 +143,7 @@ pub fn add_key<S : Storage>(storage: &S, old_passphrase: &[u8],
 ///
 /// This fails if `name` identifies the last key in the key store, since
 /// removing it would make it impossible to ever derive the master key again.
-pub fn del_key<S : Storage>(storage: &S, name: &str) -> Result<()> {
+pub fn del_key<S : Storage + ?Sized>(storage: &S, name: &str) -> Result<()> {
     edit_kdflist(storage, |kdflist| {
         kdflist.keys.remove(name).ok_or_else(
             || ErrorKind::KeyNotInKdfList(name.to_owned()))?;
@@ -161,10 +164,12 @@ pub fn del_key<S : Storage>(storage: &S, name: &str) -> Result<()> {
 /// `old_passphrase` is a valid passphrase in the key store but does not
 /// correspond to `name`. If true, `old_passphrase` does not need to correspond
 /// to `name`.
-pub fn change_key<S : Storage>(storage: &S, old_passphrase: &[u8],
-                               new_passphrase: &[u8], name: Option<&str>,
-                               allow_change_via_other_passphrase: bool)
-                               -> Result<()> {
+pub fn change_key<S : Storage + ?Sized>(
+    storage: &S, old_passphrase: &[u8],
+    new_passphrase: &[u8], name: Option<&str>,
+    allow_change_via_other_passphrase: bool)
+    -> Result<()>
+{
     edit_kdflist(storage, |kdflist| {
         let real_name = if let Some(name) = name {
             name.to_owned()
@@ -203,8 +208,8 @@ pub fn change_key<S : Storage>(storage: &S, old_passphrase: &[u8],
 /// Fetches the KDF list and uses `passphrase` to derive the master key.
 ///
 /// This will also update the last-used time of the matched entry.
-pub fn derive_master_key<S : Storage>(storage: &S, passphrase: &[u8])
-                                      -> Result<MasterKey> {
+pub fn derive_master_key<S : Storage + ?Sized>(storage: &S, passphrase: &[u8])
+                                               -> Result<MasterKey> {
     edit_kdflist(storage, |kdflist| {
         for (_, e) in &mut kdflist.keys {
             if let Some(master_key) = try_derive_key_single(passphrase, e) {
@@ -231,7 +236,7 @@ pub struct KeyInfo {
 /// Fetches the list of keys in the storage.
 ///
 /// If the key store has not been initialised, returns an empty vec.
-pub fn list_keys<S : Storage>(storage: &S) -> Result<Vec<KeyInfo>> {
+pub fn list_keys<S : Storage + ?Sized>(storage: &S) -> Result<Vec<KeyInfo>> {
     if let Some((kdflist, _, _)) = get_kdflist(storage)? {
         Ok(kdflist.keys.iter()
            .map(|(name, e)| KeyInfo {

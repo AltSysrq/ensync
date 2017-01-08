@@ -18,7 +18,7 @@
 
 pub mod storage;
 mod local_storage;
-mod rpc;
+pub mod rpc;
 mod crypt;
 mod dir;
 mod replica;

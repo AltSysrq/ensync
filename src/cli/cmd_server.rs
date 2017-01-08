@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -16,12 +16,24 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-//! Various things supporting CLI usage of Ensync, such as subcommand
-//! implementations, interpretation of configuration, etc.
+use std::io::{stdin, stdout};
+use std::path::Path;
+use libc::isatty;
 
-pub mod config;
-pub mod open_server;
-pub use self::open_server::*;
+use errors::*;
+use server::{LocalStorage, rpc};
 
-pub mod cmd_server;
-pub mod cmd_keymgmt;
+pub fn run<P : AsRef<Path>>(path: P) -> Result<()> {
+    if 1 == unsafe { isatty(0) } || 1 == unsafe { isatty(1) } {
+        return Err("The `server` subcommand is not for interactive use"
+                   .into());
+    }
+
+    let path = path.as_ref();
+
+    let storage = LocalStorage::open(path)
+        .chain_err(|| format!("Failed to set up storage at '{}'",
+                              path.display()))?;
+    rpc::run_server_rpc(storage, stdin(), stdout())
+        .chain_err(|| "Server-side RPC handler failed")
+}

@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -447,9 +447,8 @@ impl Storage for LocalStorage {
         }
     }
 
-    fn for_dir<F : FnMut (&HashId, &HashId, u32) -> Result<()>>(
-        &self, mut f: F) -> Result<()>
-    {
+    fn for_dir(&self, f: &mut FnMut (&HashId, &HashId, u32) -> Result<()>)
+               -> Result<()> {
         let db = self.db.lock().unwrap();
         let mut stmt = try!(db.prepare(
             "SELECT `id`, `ver`, `length` FROM dirs"));

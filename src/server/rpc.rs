@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -127,7 +127,7 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
             },
 
             Request::ForDir => {
-                match storage.for_dir(|id, v, len| {
+                match storage.for_dir(&mut |id, v, len| {
                     write_response(sout, Response::DirEntry(H(*id), H(*v), len))
                 }) {
                     Ok(()) => Some(Response::Done),
@@ -307,9 +307,8 @@ impl Storage for RemoteStorage {
         })
     }
 
-    fn for_dir<F : FnMut (&HashId, &HashId, u32) -> Result<()>>
-        (&self, mut f: F) -> Result<()>
-    {
+    fn for_dir(&self, f: &mut FnMut (&HashId, &HashId, u32) -> Result<()>)
+               -> Result<()> {
         self.send_sync_request(Request::ForDir, |mut sin| {
             let mut error = None;
             loop {

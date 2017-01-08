@@ -49,7 +49,7 @@ fn get_nx_obj_returns_none() {
 fn for_dir_on_empty_storage_does_nothing() {
     init!(dir, storage);
 
-    storage.for_dir(|_, _, _| panic!("for_dir emitted a value")).unwrap();
+    storage.for_dir(&mut |_, _, _| panic!("for_dir emitted a value")).unwrap();
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn for_dir_iterates_directories() {
 
     let mut seen_foo = false;
     let mut seen_bar = false;
-    storage.for_dir(|id, ver, len| {
+    storage.for_dir(&mut |id, ver, len| {
         if hashid(1) == *id {
             assert!(!seen_foo);
             seen_foo = true;

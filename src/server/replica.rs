@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -32,13 +32,13 @@ use super::crypt::{MasterKey, decrypt_dir_ver};
 use super::dir::*;
 use super::storage::*;
 
-impl<S : Storage + 'static> ReplicaDirectory for Arc<Dir<S>> {
+impl<S : Storage + ?Sized + 'static> ReplicaDirectory for Arc<Dir<S>> {
     fn full_path(&self) -> &OsStr {
         (**self).full_path()
     }
 }
 
-pub struct ServerReplica<S : Storage + 'static> {
+pub struct ServerReplica<S : Storage + ?Sized + 'static> {
     db: Arc<Mutex<SendConnection>>,
     key: Arc<MasterKey>,
     storage: Arc<S>,
@@ -47,7 +47,7 @@ pub struct ServerReplica<S : Storage + 'static> {
     block_size: usize,
 }
 
-impl<S : Storage + 'static> ServerReplica<S> {
+impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
     /// Opens a `ServerReplica` on the given parameters.
     ///
     /// `path` indicates the path to use for the client-side SQLite database.
@@ -96,7 +96,7 @@ impl<S : Storage + 'static> ServerReplica<S> {
     }
 }
 
-impl<S : Storage + 'static> Replica for ServerReplica<S> {
+impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     type Directory = Arc<Dir<S>>;
     type TransferIn = Option<Box<StreamSource>>;
     type TransferOut = Option<ContentAddressableSource>;
@@ -229,7 +229,7 @@ impl<S : Storage + 'static> Replica for ServerReplica<S> {
     }
 
     fn prepare(&self) -> Result<()> {
-        self.storage.for_dir(|id, crypt_ver, length| {
+        self.storage.for_dir(&mut |id, crypt_ver, length| {
             let ver = decrypt_dir_ver(id, crypt_ver, &self.key);
 
             let db = self.db.lock().unwrap();
