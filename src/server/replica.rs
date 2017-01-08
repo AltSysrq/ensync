@@ -212,13 +212,9 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     }
 
     fn rmdir(&self, dir: &mut Arc<Dir<S>>) -> Result<()> {
-        let removed = dir.parent.as_ref().expect("rmdir() on pseudo-root?")
+        dir.parent.as_ref().expect("rmdir() on pseudo-root?")
             .remove_subdir(|_, _, id| Ok(*id == dir.id))?;
-        if removed {
-            Ok(())
-        } else {
-            Err(ErrorKind::NotFound.into())
-        }
+        Ok(())
     }
 
     fn transfer(&self, dir: &Arc<Dir<S>>, file: File)
@@ -789,8 +785,8 @@ mod test {
         let mut subdir2 = replica.chdir(&root, &oss("sub")).unwrap();
         replica.rmdir(&mut subdir).unwrap();
 
-        assert_err!(ErrorKind::NotFound, replica.rmdir(&mut subdir));
-        assert_err!(ErrorKind::NotFound, replica.rmdir(&mut subdir2));
+        replica.rmdir(&mut subdir).unwrap();
+        replica.rmdir(&mut subdir2).unwrap();
 
         assert_list_none!(replica, root);
     }
