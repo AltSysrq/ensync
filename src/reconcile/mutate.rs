@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -24,7 +24,7 @@ use defs::*;
 use errors::*;
 use log;
 use log::{Logger,ReplicaSide,ErrorOperation,Log};
-use replica::{Replica,NullTransfer,Condemn};
+use replica::{Replica, NullTransfer};
 use super::compute::{Reconciliation,ReconciliationSide,gen_alternate_name};
 use super::compute::SplitAncestorState;
 use super::context::*;
@@ -322,14 +322,15 @@ fn apply_use<DST : Replica,
     }
 }
 
+def_context_impl! {
 /// Applies the determined reconciliation for one file.
 ///
 /// Returns whether recursion is necessary to process this file, and if so,
 /// what should happen afterwards.
 ///
 /// Errors are passed down the context's logger.
-pub fn apply_reconciliation<I : Interface>(
-    i: &I, dir: &mut DirContext<I>,
+pub fn apply_reconciliation(
+    &self, dir: &mut dir_ctx!(),
     dir_name: &OsStr, name: &OsStr,
     recon: Reconciliation,
     old_cli: Option<&FileData>, old_srv: Option<&FileData>)
@@ -369,20 +370,20 @@ pub fn apply_reconciliation<I : Interface>(
         // For the Use(x) cases, we propagate the change, and use the resulting
         // FileData for the ancestor.
         Use(ReconciliationSide::Client) =>
-            match apply_use(i.srv(), &mut dir.srv.dir, &mut dir.srv.files,
-                            i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-                            i.cli(), &dir.cli.dir,
+            match apply_use(&self.srv, &mut dir.srv.dir, &mut dir.srv.files,
+                            &self.anc, &mut dir.anc.dir, &mut dir.anc.files,
+                            &self.cli, &dir.cli.dir,
                             dir_name, name, old_srv, old_cli,
-                            i.log(), ReconciliationSide::Client) {
+                            &self.log, ReconciliationSide::Client) {
                 Ok(r) => r,
                 Err(r) => return r,
             },
         Use(ReconciliationSide::Server) =>
-            match apply_use(i.cli(), &mut dir.cli.dir, &mut dir.cli.files,
-                            i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-                            i.srv(), &dir.srv.dir,
+            match apply_use(&self.cli, &mut dir.cli.dir, &mut dir.cli.files,
+                            &self.anc, &mut dir.anc.dir, &mut dir.anc.files,
+                            &self.srv, &dir.srv.dir,
                             dir_name, name, old_cli, old_srv,
-                            i.log(), ReconciliationSide::Server) {
+                            &self.log, ReconciliationSide::Server) {
                 Ok(r) => r,
                 Err(r) => return r,
             },
@@ -418,24 +419,24 @@ pub fn apply_reconciliation<I : Interface>(
 
             let ok = match anc_state {
                 SplitAncestorState::Delete => try_replace_ancestor(
-                    i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-                    dir_name, name, old_ancestor.as_ref(), None, i.log()),
+                    &self.anc, &mut dir.anc.dir, &mut dir.anc.files,
+                    dir_name, name, old_ancestor.as_ref(), None, &self.log),
 
                 SplitAncestorState::Move =>
-                    i.anc().condemn(&mut dir.anc.dir, name).to_bool(
-                        |error|  i.log().log(log::ERROR, &Log::Error(
+                    self.anc.condemn(&mut dir.anc.dir, name).to_bool(
+                        |error|  self.log.log(log::ERROR, &Log::Error(
                             ReplicaSide::Ancestor, dir_name,
                             ErrorOperation::Access(name), &error))),
             }
 
             && match side {
                 ReconciliationSide::Client => try_rename_replica(
-                    i.cli(), &mut dir.cli.dir, &mut dir.cli.files,
-                    dir_name, name, &new_name, i.log(), ReplicaSide::Client),
+                    &self.cli, &mut dir.cli.dir, &mut dir.cli.files,
+                    dir_name, name, &new_name, &self.log, ReplicaSide::Client),
 
                 ReconciliationSide::Server => try_rename_replica(
-                    i.srv(), &mut dir.srv.dir, &mut dir.srv.files,
-                    dir_name, name, &new_name, i.log(), ReplicaSide::Server),
+                    &self.srv, &mut dir.srv.dir, &mut dir.srv.files,
+                    dir_name, name, &new_name, &self.log, ReplicaSide::Server),
             }
 
             && match anc_state {
@@ -444,12 +445,12 @@ pub fn apply_reconciliation<I : Interface>(
                 SplitAncestorState::Move => {
                     (!dir.anc.files.contains_key(name) ||
                      try_rename_replica(
-                         i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-                         dir_name, name, &new_name, i.log(),
+                         &self.anc, &mut dir.anc.dir, &mut dir.anc.files,
+                         dir_name, name, &new_name, &self.log,
                          ReplicaSide::Ancestor))
 
-                    && i.anc().uncondemn(&mut dir.anc.dir, name).to_bool(
-                        |error| i.log().log(log::ERROR, &Log::Error(
+                    && self.anc.uncondemn(&mut dir.anc.dir, name).to_bool(
+                        |error| self.log.log(log::ERROR, &Log::Error(
                             ReplicaSide::Ancestor, dir_name,
                             ErrorOperation::Access(name), &error)))
                 },
@@ -472,8 +473,8 @@ pub fn apply_reconciliation<I : Interface>(
         let old = dir.anc.files.get(name).cloned();
         // Try to update the ancestor.
         let ok = try_replace_ancestor(
-            i.anc(), &mut dir.anc.dir, &mut dir.anc.files,
-            dir_name, name, old.as_ref(), new_ancestor.as_ref(), i.log());
+            &self.anc, &mut dir.anc.dir, &mut dir.anc.files,
+            dir_name, name, old.as_ref(), new_ancestor.as_ref(), &self.log);
 
         // Only recurse if writing the ancestor succeeded and the ancestor is a
         // directory. Testing the ancestor is sufficient to know that all three
@@ -488,7 +489,7 @@ pub fn apply_reconciliation<I : Interface>(
         // Not syncing
         ApplyResult::Clean(false)
     }
-}
+} }
 
 #[cfg(test)]
 pub mod test {
@@ -538,6 +539,11 @@ pub mod test {
     pub type TContext<W> =
         Context<MemoryReplica, MemoryReplica, MemoryReplica,
                 PrintlnLogger<W>, ConstantRules>;
+    pub type TDirContext =
+        DirContext<<MemoryReplica as Replica>::Directory,
+                   <MemoryReplica as Replica>::Directory,
+                   <MemoryReplica as Replica>::Directory,
+                   ConstantRules>;
 
     pub struct Fixture<W> {
         pub client: MemoryReplica,
@@ -563,7 +569,7 @@ pub mod test {
                 cli: self.client,
                 anc: self.ancestor,
                 srv: self.server,
-                logger: self.logger,
+                log: self.logger,
                 root_rules: ConstantRules(self.mode),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
@@ -577,7 +583,7 @@ pub mod test {
                 cli: mem::replace(&mut self.client, MemoryReplica::empty()),
                 anc: mem::replace(&mut self.ancestor, MemoryReplica::empty()),
                 srv: mem::replace(&mut self.server, MemoryReplica::empty()),
-                logger: self.logger.clone(),
+                log: self.logger.clone(),
                 root_rules: ConstantRules(self.mode),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
@@ -597,8 +603,8 @@ pub mod test {
     }
 
     pub fn root_dir_context<W : Write>(fx: &Fixture<W>)
-                                       -> DirContext<TContext<W>> {
-        DirContextRaw {
+                                       -> TDirContext {
+        DirContext {
             cli: SingleDirContext {
                 dir: fx.client.root().unwrap(),
                 files: BTreeMap::new(),
@@ -925,9 +931,9 @@ pub mod test {
         let sfd = mkdir(&fx.server, &mut root.srv.dir, &mut root.srv.files,
                         &foo, 0o666);
 
-        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &fx.context(), &mut root,
-            &oss(""), &foo, Reconciliation::Unsync,
+        let c = fx.context();
+        assert_eq!(ApplyResult::Clean(false), c.apply_reconciliation(
+            &mut root, &oss(""), &foo, Reconciliation::Unsync,
             Some(&cfd), Some(&sfd)));
 
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
@@ -946,9 +952,9 @@ pub mod test {
         let sfd = mkspec(&fx.server, &mut root.srv.dir,
                          &mut root.srv.files, &foo);
 
-        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &fx.context(), &mut root,
-            &oss(""), &foo, Reconciliation::InSync,
+        let c = fx.context();
+        assert_eq!(ApplyResult::Clean(false), c.apply_reconciliation(
+            &mut root, &oss(""), &foo, Reconciliation::InSync,
             Some(&cfd), Some(&sfd)));
 
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
@@ -971,9 +977,9 @@ pub mod test {
             memory_replica::Op::Create(oss(""), foo.clone()),
             Box::new(|_| simple_error()));
 
-        assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &fx.context(), &mut root,
-            &oss(""), &foo, Reconciliation::InSync,
+        let c = fx.context();
+        assert_eq!(ApplyResult::Fail, c.apply_reconciliation(
+            &mut root, &oss(""), &foo, Reconciliation::InSync,
             Some(&cfd), Some(&sfd)));
 
         assert_eq!(Some(&cfd), root.cli.files.get(&foo));
@@ -994,9 +1000,9 @@ pub mod test {
         let sfd = mkdir(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, 0o777);
 
-        assert_eq!(ApplyResult::Clean(true), apply_reconciliation(
-            &fx.context(), &mut root,
-            &oss(""), &foo, Reconciliation::InSync,
+        let c = fx.context();
+        assert_eq!(ApplyResult::Clean(true), c.apply_reconciliation(
+            &mut root, &oss(""), &foo, Reconciliation::InSync,
             Some(&cfd), Some(&sfd)));
     }
 
@@ -1013,8 +1019,9 @@ pub mod test {
         let sfd = mksym(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, "server");
 
-        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &fx.context(), &mut root,
+        let c = fx.context();
+        assert_eq!(ApplyResult::Clean(false), c.apply_reconciliation(
+            &mut root,
             &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
             Some(&cfd), Some(&sfd)));
 
@@ -1036,8 +1043,9 @@ pub mod test {
         let sfd = mksym(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, "server");
 
-        assert_eq!(ApplyResult::Clean(true), apply_reconciliation(
-            &fx.context(), &mut root,
+        let c = fx.context();
+        assert_eq!(ApplyResult::Clean(true), c.apply_reconciliation(
+            &mut root,
             &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
             Some(&cfd), Some(&sfd)));
 
@@ -1060,8 +1068,8 @@ pub mod test {
             Box::new(|_| simple_error()));
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &context, &mut root,
+        assert_eq!(ApplyResult::Fail, context.apply_reconciliation(
+            &mut root,
             &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
             Some(&cfd), None));
 
@@ -1086,8 +1094,8 @@ pub mod test {
             Box::new(|_| simple_error()));
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &context, &mut root,
+        assert_eq!(ApplyResult::Fail, context.apply_reconciliation(
+            &mut root,
             &oss(""), &foo, Reconciliation::Use(ReconciliationSide::Client),
             Some(&cfd), None));
 
@@ -1111,8 +1119,8 @@ pub mod test {
 
         assert_eq!(ApplyResult::RecursiveDelete(ReconciliationSide::Server,
                                                 0o777),
-                   apply_reconciliation(
-                       &fx.context(), &mut root, &oss(""), &foo,
+                   fx.context().apply_reconciliation(
+                       &mut root, &oss(""), &foo,
                        Reconciliation::Use(ReconciliationSide::Client),
                        None, Some(&sfd)));
         assert_eq!(None, root.cli.files.get(&foo));
@@ -1136,8 +1144,8 @@ pub mod test {
             Box::new(|_| simple_error()));
 
         assert_eq!(ApplyResult::Fail,
-                   apply_reconciliation(
-                       &fx.context(), &mut root, &oss(""), &foo,
+                   fx.context().apply_reconciliation(
+                       &mut root, &oss(""), &foo,
                        Reconciliation::Use(ReconciliationSide::Client),
                        None, Some(&sfd)));
         assert_eq!(None, root.cli.files.get(&foo));
@@ -1154,8 +1162,9 @@ pub mod test {
         let sfd = mkdir(&fx.server, &mut root.srv.dir,
                         &mut root.srv.files, &foo, 0o777);
 
-        assert_eq!(ApplyResult::Clean(true), apply_reconciliation(
-            &fx.context(), &mut root, &oss(""), &foo,
+        let c = fx.context();
+        assert_eq!(ApplyResult::Clean(true), c.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Use(ReconciliationSide::Server),
             None, Some(&sfd)));
 
@@ -1179,8 +1188,8 @@ pub mod test {
                         &mut root.srv.files, &foo, 0o700);
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &context, &mut root, &oss(""), &foo,
+        assert_eq!(ApplyResult::Clean(false), context.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
@@ -1210,8 +1219,8 @@ pub mod test {
                         &mut root.srv.files, &foo, 0o700);
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &context, &mut root, &oss(""), &foo,
+        assert_eq!(ApplyResult::Clean(false), context.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Server,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
@@ -1244,8 +1253,8 @@ pub mod test {
             Box::new(|_| simple_error()));
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &context, &mut root, &oss(""), &foo,
+        assert_eq!(ApplyResult::Fail, context.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
@@ -1278,8 +1287,8 @@ pub mod test {
             Box::new(|_| simple_error()));
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &context, &mut root, &oss(""), &foo,
+        assert_eq!(ApplyResult::Fail, context.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Delete),
             Some(&cfd), Some(&sfd)));
@@ -1307,8 +1316,8 @@ pub mod test {
                         &mut root.srv.files, &foo, 0o700);
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Clean(false), apply_reconciliation(
-            &context, &mut root, &oss(""), &foo,
+        assert_eq!(ApplyResult::Clean(false), context.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Move),
             Some(&cfd), Some(&sfd)));
@@ -1344,8 +1353,8 @@ pub mod test {
             Box::new(|_| simple_error()));
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &context, &mut root, &oss(""), &foo,
+        assert_eq!(ApplyResult::Fail, context.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Move),
             Some(&cfd), Some(&sfd)));
@@ -1382,8 +1391,8 @@ pub mod test {
             Box::new(|_| simple_error()));
 
         let context = fx.context();
-        assert_eq!(ApplyResult::Fail, apply_reconciliation(
-            &context, &mut root, &oss(""), &foo,
+        assert_eq!(ApplyResult::Fail, context.apply_reconciliation(
+            &mut root, &oss(""), &foo,
             Reconciliation::Split(ReconciliationSide::Client,
                                   SplitAncestorState::Move),
             Some(&cfd), Some(&sfd)));

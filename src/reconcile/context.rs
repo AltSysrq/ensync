@@ -47,14 +47,6 @@ pub fn task<T, F : FnOnce(&T) + 'static>(f: F) -> Task<T> {
 }
 
 /// Maps integer ids to unqueued tasks.
-///
-/// An unfortunate side-effect of the `Interface` thing is that the lifetime of
-/// a `Task` is inextricably linked to that of the `Interface` that it will
-/// eventually be queued into, even though it does not (and, in fact, *can
-/// not*) contain a reference dependent on the lifetime of that `Interface`.
-///
-/// Thus we need to store tasks inside the interface itself; this provides the
-/// functionality to do so.
 struct UnqueuedTasksData<T> {
     tasks: HashMap<usize,T>,
     next_id: Wrapping<usize>,
@@ -85,36 +77,6 @@ impl<T> UnqueuedTasks<T> {
     }
 }
 
-/// A bundle of traits passed to the reconciler.
-///
-/// This is only intended to be implemented by `Context`. The true purpose of
-/// this trait is to essentially provide typedefs, since those are currently
-/// not allowed in inherent impls right now for whatever reason.
-pub trait Interface : Sized {
-    type CliDir : ReplicaDirectory + 'static;
-    type AncDir : ReplicaDirectory + 'static;
-    type SrvDir : ReplicaDirectory + 'static;
-    type Cli : Replica<Directory = Self::CliDir>;
-    type Anc : Replica<Directory = Self::AncDir> + NullTransfer + Condemn;
-    type Srv : Replica<Directory = Self::SrvDir,
-                            TransferIn = <Self::Cli as Replica>::TransferOut,
-                            TransferOut = <Self::Cli as Replica>::TransferIn>;
-    type Log : Logger;
-    type Rules : DirRules + 'static;
-
-    fn cli(&self) -> &Self::Cli;
-    fn anc(&self) -> &Self::Anc;
-    fn srv(&self) -> &Self::Srv;
-    fn log(&self) -> &Self::Log;
-    fn root_rules(&self) -> <Self::Rules as DirRules>::FileRules;
-    fn work(&self) -> &WorkStack<Task<Self>>;
-    fn tasks(&self) -> &UnqueuedTasks<Task<Self>>;
-
-    fn run_work(&self) {
-        self.work().run(|task| task.invoke(self));
-    }
-}
-
 pub struct Context<CLI : Replica,
                    ANC : Replica + NullTransfer + Condemn,
                    SRV : Replica<TransferIn = CLI::TransferOut,
@@ -124,37 +86,54 @@ pub struct Context<CLI : Replica,
     pub cli: CLI,
     pub anc: ANC,
     pub srv: SRV,
-    pub logger: LOG,
+    pub log: LOG,
     pub root_rules: <RULES as DirRules>::FileRules,
     pub work: WorkStack<Task<Context<CLI,ANC,SRV,LOG,RULES>>>,
     pub tasks: UnqueuedTasks<Task<Context<CLI,ANC,SRV,LOG,RULES>>>,
 }
 
-impl<CLI : Replica,
-     ANC : Replica + NullTransfer + Condemn,
-     SRV : Replica<TransferIn = CLI::TransferOut,
-                   TransferOut = CLI::TransferIn>,
-     LOG : Logger,
-     RULES : DirRules>
-Interface for Context<CLI, ANC, SRV, LOG, RULES> {
-    type Cli = CLI;
-    type CliDir = CLI::Directory;
-    type Anc = ANC;
-    type AncDir = ANC::Directory;
-    type Srv = SRV;
-    type SrvDir = SRV::Directory;
-    type Log = LOG;
-    type Rules = RULES;
-
-    fn cli(&self) -> &Self::Cli { &self.cli }
-    fn anc(&self) -> &Self::Anc { &self.anc }
-    fn srv(&self) -> &Self::Srv { &self.srv }
-    fn log(&self) -> &Self::Log { &self.logger }
-    fn root_rules(&self) -> <RULES as DirRules>::FileRules { self.root_rules.clone() }
-    fn work(&self) -> &WorkStack<Task<Self>> { &self.work }
-    fn tasks(&self) -> &UnqueuedTasks<Task<Self>> { &self.tasks }
+/// Define an `impl` block on `Context`.
+///
+/// Stylistically, we usually don't indent the body of this macro, since the
+/// methods inside aren't _really_ supposed to be members of `Context`.
+macro_rules! def_context_impl {
+    ($($t:tt)*) => {
+        impl<CLI : $crate::replica::Replica,
+             ANC : $crate::replica::Replica +
+                   $crate::replica::NullTransfer +
+                   $crate::replica::Condemn,
+             SRV : $crate::replica::Replica<
+                       TransferIn = CLI::TransferOut,
+                       TransferOut = CLI::TransferIn>,
+             LOG : $crate::log::Logger,
+             RULES : $crate::rules::DirRules + 'static>
+        $crate::reconcile::Context<CLI, ANC, SRV, LOG, RULES> {
+            $($t)*
+        }
+    }
 }
 
+def_context_impl! {
+    pub fn run_work(&self) {
+        self.work.run(|task| task.invoke(self));
+    }
+}
+
+/// Within `def_context_impl!`, expand to the type of the client-side
+/// directory.
+macro_rules! cli_dir { () => { <CLI as $crate::replica::Replica>::Directory } }
+/// Within `def_context_impl!`, expand to the type of the ancestor-side
+/// directory.
+macro_rules! anc_dir { () => { <ANC as $crate::replica::Replica>::Directory } }
+/// Within `def_context_impl!`, expand to the type of the server-side
+/// directory.
+macro_rules! srv_dir { () => { <SRV as $crate::replica::Replica>::Directory } }
+/// Within `def_context_impl!`, expand to the corresponding `DirContext`
+/// type.
+macro_rules! dir_ctx { () => {
+    $crate::reconcile::context::DirContext<cli_dir!(), anc_dir!(),
+                                           srv_dir!(), RULES>
+} }
 
 /// Directory-specific context information for a single replica.
 pub struct SingleDirContext<T> {
@@ -165,7 +144,7 @@ pub struct SingleDirContext<T> {
 }
 
 /// Directory-specific context information.
-pub struct DirContextRaw<CD,AD,SD,RU> {
+pub struct DirContext<CD,AD,SD,RU> {
     pub cli: SingleDirContext<CD>,
     pub anc: SingleDirContext<AD>,
     pub srv: SingleDirContext<SD>,
@@ -175,20 +154,8 @@ pub struct DirContextRaw<CD,AD,SD,RU> {
     pub todo: BinaryHeap<Reversed<OsString>>,
     pub rules: RU,
 }
-/// Convenience for `DirContextRaw` without needing to type everything out
-/// every time.
-///
-/// This currently produces a warning that the constraint is not checked (even
-/// though it is, by nature of actually using the type as such). This may cause
-/// problems down the road if enforcement includes the weird tendency to
-/// propagate lifetimes to nominally (but not physically)-referenced types.
-/// Hopefully, by the time that comes, it will finally be possible to define
-/// inherent types, and the `Interface` thing can go away altogether and this
-/// will just be a typedef inside `Context`.
-pub type DirContext<I : Interface> = DirContextRaw<
-        I::CliDir, I::AncDir, I::SrvDir, I::Rules>;
 
-impl<CD,AD,SD,RU> DirContextRaw<CD,AD,SD,RU> {
+impl<CD,AD,SD,RU> DirContext<CD,AD,SD,RU> {
     pub fn name_in_use(&self, name: &OsStr) -> bool {
         self.cli.files.contains_key(name) ||
             self.anc.files.contains_key(name) ||

@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -29,7 +29,7 @@ use replica::{Replica,ReplicaDirectory};
 use rules::*;
 use super::context::*;
 use super::compute::*;
-use super::mutate::{ApplyResult,apply_reconciliation};
+use super::mutate::ApplyResult;
 
 /// The state for processing a single directory.
 ///
@@ -77,6 +77,7 @@ impl Drop for DirState {
 
 pub type DirStateRef = Arc<DirState>;
 
+def_context_impl! {
 /// Processes a single file.
 ///
 /// That is, this reads the current file, decides what to do with it, then
@@ -86,9 +87,9 @@ pub type DirStateRef = Arc<DirState>;
 /// The `success` flag on `dirstate` is cleared if any operation fails. `empty`
 /// on `dirstate` is cleared if the result state is clean but the file still
 /// exists.
-fn process_file<I : Interface>(
-    i: &I,
-    dir: &mut DirContext<I>,
+fn process_file(
+    &self,
+    dir: &mut dir_ctx!(),
     dir_path: &OsStr, name: &OsStr,
     dirstate: &DirStateRef)
 {
@@ -102,12 +103,12 @@ fn process_file<I : Interface>(
         cli.as_ref(), anc.as_ref(), srv.as_ref(),
         rules.sync_mode());
 
-    i.log().log(
+    self.log.log(
         if conflict > Conflict::NoConflict { log::WARN } else { log::INFO },
         &Log::Inspect(dir_path, name, recon, conflict));
 
-    let res = apply_reconciliation(i, dir, dir_path, name, recon,
-                                   cli.as_ref(), srv.as_ref());
+    let res = self.apply_reconciliation(
+        dir, dir_path, name, recon, cli.as_ref(), srv.as_ref());
 
     match res {
         ApplyResult::Clean(false) => {
@@ -119,18 +120,18 @@ fn process_file<I : Interface>(
         ApplyResult::Fail => dirstate.fail("ApplyResult::Fail"),
         ApplyResult::Clean(true) => {
             dirstate.empty.store(false, SeqCst);
-            if i.cli().is_dir_dirty(&dir.cli.dir) ||
-                i.srv().is_dir_dirty(&dir.srv.dir)
+            if self.cli.is_dir_dirty(&dir.cli.dir) ||
+                self.srv.is_dir_dirty(&dir.srv.dir)
             {
-                recurse_into_dir(i, dir, dir_path, name, rules,
-                                 dirstate.clone());
+                self.recurse_into_dir(dir, dir_path, name, rules,
+                                      dirstate.clone());
             }
         },
         ApplyResult::RecursiveDelete(side, mode) =>
-            recursive_delete(i, dir, dir_path, name, rules,
-                             dirstate.clone(), side, mode),
+            self.recursive_delete(dir, dir_path, name, rules,
+                                  dirstate.clone(), side, mode),
     }
-}
+} }
 
 /// Reads a directory out of a replica and builds the initial name->data map.
 ///
@@ -157,6 +158,7 @@ fn read_dir_contents<R : Replica, RB : DirRulesBuilder, LOG : Logger>(
     Ok(ret)
 }
 
+def_context_impl! {
 /// Processes a directory.
 ///
 /// Reads the contents of all three replicas, constructs the directory context,
@@ -168,30 +170,29 @@ fn read_dir_contents<R : Replica, RB : DirRulesBuilder, LOG : Logger>(
 /// This may return Err if it was unable to set the context up at all. Any
 /// errors have already been logged; this is simply an artefact of using `try!`
 /// to simplify control flow.
-fn process_dir_impl<I : Interface,
-                    F : FnOnce(DirContext<I>,DirStateRef) -> Task<I>>(
-    i: &I,
-    mut cli_dir: I::CliDir,
-    mut anc_dir: I::AncDir,
-    mut srv_dir: I::SrvDir,
-    mut rules_builder: <I::Rules as DirRules>::Builder,
+fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
+    &self,
+    mut cli_dir: cli_dir!(),
+    mut anc_dir: anc_dir!(),
+    mut srv_dir: srv_dir!(),
+    mut rules_builder: <RULES as DirRules>::Builder,
     on_complete_supplier: F) -> Result<()>
 {
     let dir_path = cli_dir.full_path().to_owned();
 
     let cli_files = try!(read_dir_contents(
-        i.cli(), &mut cli_dir, &dir_path, Some(&mut rules_builder), i.log(),
-        log::ReplicaSide::Client));
+        &self.cli, &mut cli_dir, &dir_path, Some(&mut rules_builder),
+        &self.log, log::ReplicaSide::Client));
     let anc_files = try!(read_dir_contents(
-        i.anc(), &mut anc_dir, &dir_path,
-        None::<&mut <I::Rules as DirRules>::Builder>, i.log(),
+        &self.anc, &mut anc_dir, &dir_path,
+        None::<&mut <RULES as DirRules>::Builder>, &self.log,
         log::ReplicaSide::Ancestor));
     let srv_files = try!(read_dir_contents(
-        i.srv(), &mut srv_dir, &dir_path, Some(&mut rules_builder), i.log(),
-        log::ReplicaSide::Server));
+        &self.srv, &mut srv_dir, &dir_path, Some(&mut rules_builder),
+        &self.log, log::ReplicaSide::Server));
     let rules = rules_builder.build();
 
-    let mut dir = DirContext::<I> {
+    let mut dir = DirContext {
         cli: SingleDirContext { dir: cli_dir, files: cli_files },
         anc: SingleDirContext { dir: anc_dir, files: anc_files },
         srv: SingleDirContext { dir: srv_dir, files: srv_files },
@@ -224,28 +225,28 @@ fn process_dir_impl<I : Interface,
     }
 
     while let Some(Reversed(name)) = dir.todo.pop() {
-        process_file(i, &mut dir, &dir_path, &name, &dirstate);
+        self.process_file(&mut dir, &dir_path, &name, &dirstate);
     }
 
-    dirstate.on_complete.store(i.tasks().put(
+    dirstate.on_complete.store(self.tasks.put(
         on_complete_supplier(dir, dirstate.clone())), SeqCst);
-    finish_task_in_dir(i, &dirstate, &dirstate);
+    self.finish_task_in_dir(&dirstate, &dirstate);
     Ok(())
 }
 
 /// Wraps process_dir_impl() to return whether the result was successful or
 /// not.
-fn process_dir<I : Interface,
-               F : FnOnce (DirContext<I>, DirStateRef) -> Task<I>>(
-    i: &I,
-    cli_dir: I::CliDir,
-    anc_dir: I::AncDir,
-    srv_dir: I::SrvDir,
-    rules_builder: <I::Rules as DirRules>::Builder,
+fn process_dir<F : FnOnce (dir_ctx!(), DirStateRef) -> Task<Self>>(
+    &self,
+    cli_dir: cli_dir!(),
+    anc_dir: anc_dir!(),
+    srv_dir: srv_dir!(),
+    rules_builder: <RULES as DirRules>::Builder,
     on_complete_suppvier: F) -> bool
 {
-    process_dir_impl(i, cli_dir, anc_dir, srv_dir, rules_builder,
-                     on_complete_suppvier).is_ok()
+    self.process_dir_impl(cli_dir, anc_dir, srv_dir, rules_builder,
+                          on_complete_suppvier).is_ok()
+}
 }
 
 /// Calls `chdir()` on `r` and `parent` using `name`.
@@ -266,6 +267,7 @@ fn try_chdir<R : Replica, LOG : Logger>(r: &R, parent: &R::Directory,
     }
 }
 
+def_context_impl! {
 /// Queues a task to recurse into the given directory.
 ///
 /// When the subdirectory completes, it is marked clean if its `success` flag
@@ -274,22 +276,23 @@ fn try_chdir<R : Replica, LOG : Logger>(r: &R, parent: &R::Directory,
 /// If switching into the subdirectory fails, `state.success` is cleared and no
 /// task is enqueued. If `process_dir` returns false, `state.success` will be
 /// cleared.
-fn recurse_into_dir<I : Interface>(
-    i: &I,
-    dir: &mut DirContext<I>,
+fn recurse_into_dir(
+    &self,
+    dir: &mut dir_ctx!(),
     parent_name: &OsStr, name: &OsStr,
-    file_rules: <I::Rules as DirRules>::FileRules,
+    file_rules: <RULES as DirRules>::FileRules,
     state: DirStateRef)
 {
-    match (try_chdir(i.cli(), &dir.cli.dir, parent_name, name,
-                     i.log(), log::ReplicaSide::Client),
-           try_chdir(i.anc(), &dir.anc.dir, parent_name, name,
-                     i.log(), log::ReplicaSide::Ancestor),
-           try_chdir(i.srv(), &dir.srv.dir, parent_name, name,
-                     i.log(), log::ReplicaSide::Server)) {
+    match (try_chdir(&self.cli, &dir.cli.dir, parent_name, name,
+                     &self.log, log::ReplicaSide::Client),
+           try_chdir(&self.anc, &dir.anc.dir, parent_name, name,
+                     &self.log, log::ReplicaSide::Ancestor),
+           try_chdir(&self.srv, &dir.srv.dir, parent_name, name,
+                     &self.log, log::ReplicaSide::Server)) {
         (Some(cli_dir), Some(anc_dir), Some(srv_dir)) =>
-            recurse_and_then(i, cli_dir, anc_dir, srv_dir, file_rules, state,
-                             |i, dir, _| mark_both_clean(i, &dir)),
+            self.recurse_and_then(
+                cli_dir, anc_dir, srv_dir, file_rules, state,
+                |this, dir, _| this.mark_both_clean(&dir)),
 
         _ => state.fail("recurse_into_dir chdir failed"),
     }
@@ -305,47 +308,46 @@ fn recurse_into_dir<I : Interface>(
 /// function ANDed with the subdirectory's `success` flag. The flags of the
 /// subdirectory state are ANDed into `state`, and `state`'s completion queued
 /// if this was the last task.
-fn recurse_and_then<I : Interface,
-                    F : FnOnce (&I, DirContext<I>, &DirStateRef)
+fn recurse_and_then<F : FnOnce (&Self, dir_ctx!(), &DirStateRef)
                                 -> bool + 'static>(
-    i: &I, cli_dir: I::CliDir, anc_dir: I::AncDir, srv_dir: I::SrvDir,
-    file_rules: <I::Rules as DirRules>::FileRules,
+    &self, cli_dir: cli_dir!(), anc_dir: anc_dir!(), srv_dir: srv_dir!(),
+    file_rules: <RULES as DirRules>::FileRules,
     state: DirStateRef,
     on_success: F)
 {
     state.pending.fetch_add(1, SeqCst);
 
-    i.work().push(task(move |i| {
+    self.work.push(task(move |this| {
         let state2 = state.clone();
-        let success = process_dir(
-            i, cli_dir, anc_dir, srv_dir,
+        let success = Self::process_dir(
+            this, cli_dir, anc_dir, srv_dir,
             file_rules.subdir(),
-            |dir, subdirstate| task(move |i| {
+            |dir, subdirstate| task(move |this| {
                 if subdirstate.success.load(SeqCst) {
-                    if !on_success(i, dir, &subdirstate) {
+                    if !on_success(this, dir, &subdirstate) {
                         subdirstate.fail(
                             "recurse_and_then on_success failed");
                     }
                 }
-                finish_task_in_dir(i, &state, &subdirstate);
+                this.finish_task_in_dir(&state, &subdirstate);
             }));
         if !success {
             state2.fail("process_dir failed early");
             // process_dir() didn't create the task to decrement
             // `pending`, so we need to do that now.
-            finish_task_in_dir(i, &state2, &state2);
+            this.finish_task_in_dir(&state2, &state2);
         }
     }));
 }
 
-fn mark_both_clean<I : Interface>(i: &I, dir: &DirContext<I>)
-                                  -> bool {
+fn mark_both_clean(&self, dir: &dir_ctx!()) -> bool {
     let dir_path = dir.cli.dir.full_path();
 
-    mark_clean(i.cli(), &dir.cli.dir, i.log(),
+    mark_clean(&self.cli, &dir.cli.dir, &self.log,
                log::ReplicaSide::Client, dir_path) &&
-    mark_clean(i.srv(), &dir.srv.dir, i.log(),
+    mark_clean(&self.srv, &dir.srv.dir, &self.log,
                log::ReplicaSide::Server, dir_path)
+}
 }
 
 fn mark_clean<R : Replica, L : Logger>(
@@ -362,16 +364,17 @@ fn mark_clean<R : Replica, L : Logger>(
     }
 }
 
+def_context_impl! {
 /// Finishes a subtask of a directory.
 ///
 /// The flags of `state` are ANDed with those from `substate`. `state.pending`
 /// is decremented; if it reaches zero, the completion task is queued.
-fn finish_task_in_dir<I : Interface>(i: &I, state: &DirStateRef,
-                                     substate: &DirStateRef) {
+fn finish_task_in_dir(&self, state: &DirStateRef,
+                      substate: &DirStateRef) {
     state.success.fetch_and(substate.success.load(SeqCst), SeqCst);
     state.empty.fetch_and(substate.empty.load(SeqCst), SeqCst);
     if 1 == state.pending.fetch_sub(1, SeqCst) {
-        i.work().push(i.tasks().get(state.on_complete.load(SeqCst)));
+        self.work.push(self.tasks.get(state.on_complete.load(SeqCst)));
     }
 }
 
@@ -382,10 +385,10 @@ fn finish_task_in_dir<I : Interface>(i: &I, state: &DirStateRef,
 /// if necessary; on success, if all subtasks reported empty, the directories
 /// on all replicas are removed. Otherwise, on success, the directory is simply
 /// marked clean.
-fn recursive_delete<I : Interface>(
-    i: &I, dir: &mut DirContext<I>,
+fn recursive_delete(
+    &self, dir: &mut dir_ctx!(),
     parent_name: &OsStr, name: &OsStr,
-    file_rules: <I::Rules as DirRules>::FileRules,
+    file_rules: <RULES as DirRules>::FileRules,
     state: DirStateRef,
     side: ReconciliationSide, mode: FileMode)
 {
@@ -403,23 +406,25 @@ fn recursive_delete<I : Interface>(
         }
     }
 
-    let cli_dir = chdir_or_synth(i.cli(), &mut dir.cli.dir,
+    let cli_dir = chdir_or_synth(&self.cli, &mut dir.cli.dir,
                                  ReconciliationSide::Client, side,
-                                 i.log(), parent_name, name, mode);
-    let anc_dir = i.anc().chdir(&dir.anc.dir, name).ok().unwrap_or_else(
-        || i.anc().synthdir(&mut dir.anc.dir, name, mode));
-    let srv_dir = chdir_or_synth(i.srv(), &mut dir.srv.dir,
+                                 &self.log, parent_name, name, mode);
+    let anc_dir = self.anc.chdir(&dir.anc.dir, name).ok().unwrap_or_else(
+        || self.anc.synthdir(&mut dir.anc.dir, name, mode));
+    let srv_dir = chdir_or_synth(&self.srv, &mut dir.srv.dir,
                                  ReconciliationSide::Server, side,
-                                 i.log(), parent_name, name, mode);
+                                 &self.log, parent_name, name, mode);
 
     match (cli_dir, anc_dir, srv_dir) {
         (Some(cli_dir), anc_dir, Some(srv_dir)) =>
-            recurse_and_then(i, cli_dir, anc_dir, srv_dir, file_rules, state,
-                             |i, mut dir, substate| delete_or_mark_clean(
-                                 i, &mut dir, substate)),
+            self.recurse_and_then(
+                cli_dir, anc_dir, srv_dir, file_rules, state,
+                |this, mut dir, substate| this.delete_or_mark_clean(
+                    &mut dir, substate)),
 
         _ => state.fail("recursive_delete chdir failed"),
     }
+}
 }
 
 fn try_rmdir<R : Replica, LOG : Logger>(r: &R, dir: &mut R::Directory,
@@ -436,18 +441,19 @@ fn try_rmdir<R : Replica, LOG : Logger>(r: &R, dir: &mut R::Directory,
     }
 }
 
-fn delete_or_mark_clean<I : Interface>(i: &I, dir: &mut DirContext<I>,
-                                       state: &DirStateRef) -> bool {
+def_context_impl! {
+fn delete_or_mark_clean(&self, dir: &mut dir_ctx!(),
+                        state: &DirStateRef) -> bool {
     let dir_path = dir.cli.dir.full_path().to_owned();
     if state.empty.load(SeqCst) {
-        try_rmdir(i.anc(), &mut dir.anc.dir, i.log(), &dir_path,
+        try_rmdir(&self.anc, &mut dir.anc.dir, &self.log, &dir_path,
                   log::ReplicaSide::Ancestor) &&
-        try_rmdir(i.cli(), &mut dir.cli.dir, i.log(), &dir_path,
+        try_rmdir(&self.cli, &mut dir.cli.dir, &self.log, &dir_path,
                   log::ReplicaSide::Client) &&
-        try_rmdir(i.srv(), &mut dir.srv.dir, i.log(), &dir_path,
+        try_rmdir(&self.srv, &mut dir.srv.dir, &self.log, &dir_path,
                   log::ReplicaSide::Server)
     } else {
-        mark_both_clean(i, dir)
+        self.mark_both_clean(dir)
     }
 }
 
@@ -460,8 +466,7 @@ fn delete_or_mark_clean<I : Interface>(i: &I, dir: &mut DirContext<I>,
 /// will never reach 0.
 ///
 /// This does not itself cause anything to be executed.
-pub fn start_root<I : Interface>(i: &I)
-                                 -> Result<DirStateRef> {
+pub fn start_root(&self) -> Result<DirStateRef> {
     let root_state = Arc::new(DirState {
         success: AtomicBool::new(true),
         empty: AtomicBool::new(true),
@@ -470,12 +475,13 @@ pub fn start_root<I : Interface>(i: &I)
         on_complete: AtomicUsize::new(0),
         quiet: true,
     });
-    recurse_and_then(i, try!(i.cli().root()),
-                     try!(i.anc().root()),
-                     try!(i.srv().root()),
-                     i.root_rules(), root_state.clone(),
-                     |i, dir, _| mark_both_clean(i, &dir));
+    self.recurse_and_then(try!(self.cli.root()),
+                          try!(self.anc.root()),
+                          try!(self.srv.root()),
+                          self.root_rules.clone(), root_state.clone(),
+                          |this, dir, _| this.mark_both_clean(&dir));
     Ok(root_state)
+}
 }
 
 #[cfg(test)]
@@ -497,7 +503,6 @@ mod test {
     use memory_replica::*;
     use log::PrintWriter;
     use rules::{SyncModeSetting,HalfSyncMode,SyncMode};
-    use super::super::context::*;
     use super::super::mutate::test::*;
     use super::*;
 
@@ -689,7 +694,7 @@ mod test {
 
     fn run_once<W : Write>(fx: &mut Fixture<W>) -> DirState {
         fx.with_context(|context| {
-            let dsr = start_root(context).unwrap();
+            let dsr = context.start_root().unwrap();
             context.run_work();
             Arc::try_unwrap(dsr).ok().unwrap()
         })
