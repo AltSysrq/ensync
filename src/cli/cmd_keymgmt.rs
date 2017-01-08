@@ -40,7 +40,7 @@ pub fn add_key(storage: &Storage, old: &PassphraseConfig,
 pub fn list_keys(storage: &Storage) -> Result<()> {
     fn format_date(date: Option<&DateTime<UTC>>) -> String {
         if let Some(date) = date {
-            date.to_string()
+            super::format_date::format_date(date)
         } else {
             "never".to_owned()
         }

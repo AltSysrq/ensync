@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -16,15 +16,19 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-//! Various things supporting CLI usage of Ensync, such as subcommand
-//! implementations, interpretation of configuration, etc.
+use chrono::{DateTime, NaiveDateTime, UTC};
 
-pub mod config;
-pub mod open_server;
-pub mod format_date;
-pub use self::open_server::*;
+use defs::FileTime;
 
-pub mod cmd_server;
-pub mod cmd_keymgmt;
-pub mod cmd_sync;
-pub mod cmd_manual;
+#[allow(dead_code)]
+pub const ZERO:  &'static str = "1970-01-01 00:00Z";
+pub const EMPTY: &'static str = "                 ";
+
+pub fn format_timestamp(mtime: FileTime) -> String {
+    format_date(&DateTime::<UTC>::from_utc(
+        NaiveDateTime::from_timestamp(mtime, 0), UTC))
+}
+
+pub fn format_date(date: &DateTime<UTC>) -> String {
+    format!("{}", date.format("%Y-%m-%d %H:%MZ"))
+}

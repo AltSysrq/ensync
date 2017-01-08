@@ -217,6 +217,50 @@ fn main_impl() -> Result<()> {
                     .about("List the keys in the key store")
                     .setting(AppSettings::DontCollapseArgsInUsage)
                     .arg(&config_arg))
+        .subcommand(SubCommand::with_name("ls")
+                    .alias("dir")
+                    .about("List directory contents on server")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("path")
+                         .multiple(true)
+                         .required(true)
+                         .help("The path(s) to list"))
+                    .arg(Arg::with_name("human-readable")
+                         .required(false)
+                         .takes_value(false)
+                         .short("h")
+                         .help("Display sizes in human-readable format"))
+                    .after_help("List the content of each given directory \
+                                 (or individual file)."))
+        .subcommand(SubCommand::with_name("mkdir")
+                    .alias("md")
+                    .about("Directly create a directory on the server")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("mode")
+                         .long("mode")
+                         .short("m")
+                         .takes_value(true)
+                         .required(false)
+                         .default_value("0700")
+                         .help("UNIX permissions for the new directory"))
+                    .arg(Arg::with_name("path")
+                         .multiple(true)
+                         .required(true)
+                         .help("The path(s) to create")))
+        .subcommand(SubCommand::with_name("rmdir")
+                    .alias("rd")
+                    .about("Remove an empty directory on the server")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("path")
+                         .multiple(true)
+                         .required(true)
+                         .help("The path(s) to remove"))
+                    .after_help("Removes the listed directory(ies), which \
+                                 must be empty. To remove non-empty \
+                                 directories, use `rm` with the `-r` flag."))
         .subcommand(SubCommand::with_name("server")
                     .about("Run the server-side component")
                     .setting(AppSettings::DontCollapseArgsInUsage)
@@ -236,6 +280,12 @@ fn main_impl() -> Result<()> {
             set_up!($matches, $config);
             let $storage = cli::open_server::open_server_storage(
                 &$config.server)?;
+        };
+
+        ($matches:ident, $config:ident, $storage:ident, $replica:ident) => {
+            set_up!($matches, $config, $storage);
+            let $replica = cli::open_server::open_server_replica(
+                &$config, $storage.clone(), None)?;
         };
     }
 
@@ -309,7 +359,24 @@ fn main_impl() -> Result<()> {
                            matches.value_of("colour").unwrap(),
                            matches.is_present("include-ancestors"),
                            num_threads)
+    } else if let Some(matches) = matches.subcommand_matches("ls") {
+        set_up!(matches, config, storage, replica);
+        cli::cmd_manual::ls(&replica, matches.values_of("path").unwrap(),
+                            matches.occurrences_of("path") > 1,
+                            matches.is_present("human-readable"))
+    } else if let Some(matches) = matches.subcommand_matches("mkdir") {
+        set_up!(matches, config, storage, replica);
+        cli::cmd_manual::mkdir(&replica, matches.values_of("path").unwrap(),
+                               parse_mode(matches.value_of("mode").unwrap())?)
+    } else if let Some(matches) = matches.subcommand_matches("rmdir") {
+        set_up!(matches, config, storage, replica);
+        cli::cmd_manual::rmdir(&replica, matches.values_of("path").unwrap())
     } else {
         panic!("Unhandled subcommand: {}", matches.subcommand_name().unwrap());
     }
+}
+
+fn parse_mode(s: &str) -> Result<defs::FileMode> {
+    u32::from_str_radix(s, 8).map(|m| m & 0o3777).map_err(
+        |_| format!("Invalid mode '{}'", s).into())
 }

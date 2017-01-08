@@ -94,6 +94,12 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
         })?;
         Ok(())
     }
+
+    /// Returns the pseudo-root of this replica; i.e., the true root of the
+    /// storage system.
+    pub fn pseudo_root(&self) -> Arc<Dir<S>> {
+        self.pseudo_root.clone()
+    }
 }
 
 impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
@@ -212,7 +218,8 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     }
 
     fn rmdir(&self, dir: &mut Arc<Dir<S>>) -> Result<()> {
-        dir.parent.as_ref().expect("rmdir() on pseudo-root?")
+        dir.parent.as_ref()
+            .ok_or(ErrorKind::RmdirRoot)?
             .remove_subdir(|_, _, id| Ok(*id == dir.id))?;
         Ok(())
     }

@@ -492,8 +492,6 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
     let server_replica = open_server_replica(
         config, storage.clone(), Some(master_key.clone()))?;
-    // TODO This should be a manual step elsewhere
-    server_replica.create_root()?;
 
     let client_private_dir = config.private_root.join("client");
     fs::create_dir_all(&client_private_dir).chain_err(
