@@ -31,7 +31,7 @@ use sql::*;
 ///
 /// The DAO is oblivious to the specific semantics of most of the data fields;
 /// particularly, it assigns no meaning to file type, mode, or content.
-pub struct Dao(Connection);
+pub struct Dao(SendConnection);
 
 /// A single row in the ancestor store. This is used both as a result from
 /// reading from the database as well as an input for filtering and writing.
@@ -111,7 +111,7 @@ impl Dao {
         let cxn = try!(Connection::open(Path::new(path)));
         try!(cxn.execute(include_str!("schema.sql")));
 
-        Ok(Dao(cxn))
+        Ok(Dao(SendConnection(cxn)))
     }
 
     /// Retrieves a directory list.

@@ -155,6 +155,9 @@ impl Entry {
     }
 }
 
+pub trait Fault : Fn (&mut MemoryReplicaImpl) -> Result<()> + Send { }
+impl<T : Fn (&mut MemoryReplicaImpl) -> Result<()> + Send> Fault for T { }
+
 pub struct MemoryReplicaImpl {
     /// Allows tests to inject errors or concurrent modifications into the
     /// replica.
@@ -165,7 +168,7 @@ pub struct MemoryReplicaImpl {
     /// manipulate the key of the operation it matched. If the fault function
     /// returns Err, the operation does not take place and that error is
     /// returned from the method.
-    pub faults: HashMap<Op, Box<Fn (&mut MemoryReplicaImpl) -> Result<()>>>,
+    pub faults: HashMap<Op, Box<Fault<Output = Result<()>>>>,
     /// Tables for existing directories.
     ///
     /// The root directory is "". Subdirectories follow UNIX convention,

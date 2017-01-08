@@ -22,7 +22,7 @@ use defs::*;
 use errors::Result;
 
 /// Trait for the `Replica::Directory` type.
-pub trait ReplicaDirectory {
+pub trait ReplicaDirectory : Send {
     /// Returns the full path of this directory, suitable for display to the
     /// user.
     fn full_path(&self) -> &OsStr;
@@ -40,7 +40,7 @@ pub trait ReplicaDirectory {
 /// reference. This is a consequence of there currently being no way to express
 /// something like `fn chdir<'a>(&'a self, &OsStr) -> Self::Directory<'a>` to
 /// allow the mutable state to be moved into the directory objects instead.
-pub trait Replica {
+pub trait Replica : Sync + Send {
     /// Type representing an operating directory.
     type Directory : ReplicaDirectory + 'static;
     /// Type which this replica uses to transfer data in from the other

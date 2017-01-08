@@ -22,6 +22,7 @@ extern crate chrono;
 // Not sure why the `rust_` prefix gets stripped by cargo
 extern crate crypto as rust_crypto;
 extern crate libc;
+extern crate num_cpus;
 extern crate rand;
 extern crate regex;
 extern crate rpassword;
@@ -115,8 +116,56 @@ fn main_impl() -> Result<()> {
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .setting(AppSettings::UnifiedHelpMessage)
         .setting(AppSettings::VersionlessSubcommands)
-        .set_term_width(80)
         .max_term_width(160)
+        .subcommand(SubCommand::with_name("sync")
+                    .about("Sync files according to configuration")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("verbose")
+                         .short("v")
+                         .required(false)
+                         .multiple(true)
+                         .takes_value(false)
+                         .help("Be more verbose"))
+                    .arg(Arg::with_name("quiet")
+                         .short("q")
+                         .required(false)
+                         .multiple(true)
+                         .takes_value(false)
+                         .help("Be less verbose"))
+                    .arg(Arg::with_name("itemise")
+                         .long("itemise")
+                         .alias("itemize")
+                         .short("i")
+                         .required(false)
+                         .takes_value(false)
+                         .help("Output rsync-like itemisation to stdout"))
+                    .arg(Arg::with_name("itemise-unchanged")
+                         .long("itemise-unchanged")
+                         .alias("itemize-unchanged")
+                         .required(false)
+                         .takes_value(false)
+                         .help("With --itemise, also include unchanged items"))
+                    .arg(Arg::with_name("include-ancestors")
+                         .long("include-ancestors")
+                         .required(false)
+                         .takes_value(false)
+                         .help("Log happenings in the internal ancestor \
+                                replica as well"))
+                    .arg(Arg::with_name("threads")
+                         .long("threads")
+                         .required(false)
+                         .takes_value(true)
+                         .help("Specify the number of threads to use \
+                                [default: CPUs + 2]"))
+                    .arg(Arg::with_name("colour")
+                         .long("colour")
+                         .alias("color")
+                         .required(false)
+                         .takes_value(true)
+                         .default_value("auto")
+                         .possible_values(&["auto", "always", "never"])
+                         .help("Control colourisation of stderr log")))
         .subcommand(SubCommand::with_name("init-keys")
                     .about("Initialise the key store")
                     .setting(AppSettings::DontCollapseArgsInUsage)
@@ -235,6 +284,31 @@ fn main_impl() -> Result<()> {
         set_up!(matches, config, storage);
         cli::cmd_keymgmt::del_key(
             &*storage, matches.value_of("key-name").unwrap())
+    } else if let Some(matches) = matches.subcommand_matches("sync") {
+        set_up!(matches, config, storage);
+
+        let num_threads = if let Some(threads) = matches.value_of("threads") {
+            let nt = threads.parse::<u32>().chain_err(
+                || format!("Value '{}' for --threads is not an integer",
+                           threads))?;
+
+            if nt < 1 {
+                return Err("Thread count must be at least 1".into());
+            }
+
+            nt
+        } else {
+            num_cpus::get() as u32 + 2
+        };
+
+        cli::cmd_sync::run(&config, storage,
+                           matches.occurrences_of("verbose") as i32,
+                           matches.occurrences_of("quiet") as i32,
+                           matches.is_present("itemise"),
+                           matches.is_present("itemise-unchanged"),
+                           matches.value_of("colour").unwrap(),
+                           matches.is_present("include-ancestors"),
+                           num_threads)
     } else {
         panic!("Unhandled subcommand: {}", matches.subcommand_name().unwrap());
     }

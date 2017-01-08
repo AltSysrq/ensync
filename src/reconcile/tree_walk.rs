@@ -309,7 +309,7 @@ fn recurse_into_dir(
 /// subdirectory state are ANDed into `state`, and `state`'s completion queued
 /// if this was the last task.
 fn recurse_and_then<F : FnOnce (&Self, dir_ctx!(), &DirStateRef)
-                                -> bool + 'static>(
+                                -> bool + Send + 'static>(
     &self, cli_dir: cli_dir!(), anc_dir: anc_dir!(), srv_dir: srv_dir!(),
     file_rules: <RULES as DirRules>::FileRules,
     state: DirStateRef,

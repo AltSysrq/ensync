@@ -32,17 +32,17 @@ use rules::DirRules;
 // option and a box so we can make something approximating an FnMut (and which
 // thus can be invoked as a DST), while relegating the lifetime check to
 // runtime.
-struct TaskContainer<F>(Mutex<Option<F>>);
-pub trait TaskT<T> {
+struct TaskContainer<F : Send>(Mutex<Option<F>>);
+pub trait TaskT<T> : Send {
     fn invoke(&self, t: &T);
 }
-impl<T, F : FnOnce(&T)> TaskT<T> for TaskContainer<F> {
+impl<T, F : FnOnce(&T) + Send> TaskT<T> for TaskContainer<F> {
     fn invoke(&self, t: &T) {
         self.0.lock().unwrap().take().unwrap()(t)
     }
 }
 pub type Task<T> = Box<TaskT<T>>;
-pub fn task<T, F : FnOnce(&T) + 'static>(f: F) -> Task<T> {
+pub fn task<T, F : FnOnce(&T) + Send + 'static>(f: F) -> Task<T> {
     Box::new(TaskContainer(Mutex::new(Some(f))))
 }
 

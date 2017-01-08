@@ -133,6 +133,8 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
 
     fn root(&self) -> Result<Arc<Dir<S>>> {
         Dir::subdir(self.pseudo_root.clone(), &self.root_name).map(Arc::new)
+            .chain_err(|| format!("Accessing logical server root '{}'",
+                                  self.root_name.to_string_lossy()))
     }
 
     fn list(&self, dir: &mut Arc<Dir<S>>) -> Result<Vec<(OsString, FileData)>> {

@@ -173,7 +173,7 @@ impl FromStr for SyncMode {
 }
 
 /// Rules matching context corresponding to a fully-read directory.
-pub trait DirRules : Sized + Clone {
+pub trait DirRules : Sized + Clone + Send {
     type Builder : DirRulesBuilder<DirRules = Self>;
     type FileRules : FileRules<DirRules = Self>;
 
@@ -183,7 +183,7 @@ pub trait DirRules : Sized + Clone {
 }
 
 /// Rules matching context corresponding to a single file.
-pub trait FileRules : Sized + Clone {
+pub trait FileRules : Sized + Clone + Send {
     type DirRules : DirRules<FileRules = Self>;
 
     /// Returns the sync mode for this particular file.
@@ -196,7 +196,7 @@ pub trait FileRules : Sized + Clone {
 ///
 /// The builder must be told about each file within the directory, then
 /// `build()` called to construct the actual `DirRules`.
-pub trait DirRulesBuilder : Sized + Clone {
+pub trait DirRulesBuilder : Sized + Clone + Send {
     type DirRules : DirRules<Builder = Self>;
 
     /// Informs the builder that the directory contains the given file.

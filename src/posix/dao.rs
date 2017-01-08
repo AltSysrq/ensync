@@ -30,7 +30,7 @@ use sql::*;
 /// This is higher-level than the otherwise comparable ancestor DAO, in that it
 /// handles all the semantics of the underlying database rather than being a
 /// simple translation layer.
-pub struct Dao(Connection);
+pub struct Dao(SendConnection);
 
 /// Iterator over the directories defined in the `clean_dirs` table.
 pub struct CleanDirs<'a>(Statement<'a>);
@@ -86,7 +86,7 @@ impl Dao {
         let cxn = try!(Connection::open(Path::new(path)));
         try!(cxn.execute(include_str!("schema.sql")));
 
-        Ok(Dao(cxn))
+        Ok(Dao(SendConnection(cxn)))
     }
 
     /// Returns an iterator over the whole `clean_dirs` table.

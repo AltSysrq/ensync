@@ -595,16 +595,6 @@ impl SyncRules {
     }
 }
 
-impl DirEngine {
-    pub fn new(rules: Arc<SyncRules>) -> Self {
-        let init_state = rules.root_ix;
-        DirEngine {
-            rules: rules,
-            state: EngineState::new(init_state),
-        }
-    }
-}
-
 impl DirRules for DirEngine {
     type Builder = DirEngineBuilder;
     type FileRules = FileEngine;
@@ -631,10 +621,10 @@ impl DirRules for DirEngine {
 }
 
 impl FileEngine {
-    pub fn new(rules: SyncRules) -> Self {
+    pub fn new(rules: Arc<SyncRules>) -> Self {
         let init_state = rules.root_ix;
         FileEngine {
-            rules: Arc::new(rules),
+            rules: rules,
             state: EngineState::new(init_state),
         }
     }
@@ -961,7 +951,8 @@ switch = "a"
     }
 
     fn engine(text: &str) -> DirEngine {
-        FileEngine::new(parse_rules(text).unwrap()).subdir().build()
+        use std::sync::Arc;
+        FileEngine::new(Arc::new(parse_rules(text).unwrap())).subdir().build()
     }
 
     fn regular(de: &DirEngine, name: &str, mode: FileMode,

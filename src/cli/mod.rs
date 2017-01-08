@@ -25,3 +25,4 @@ pub use self::open_server::*;
 
 pub mod cmd_server;
 pub mod cmd_keymgmt;
+pub mod cmd_sync;
