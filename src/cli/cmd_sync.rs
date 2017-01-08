@@ -22,7 +22,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io::{Write, stdout, stderr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
 use std::thread;
@@ -52,22 +52,25 @@ impl AsPath for OsStr {
     }
 }
 
-struct PathDisplay<T>(T);
-impl<'a> fmt::Display for PathDisplay<&'a OsStr> {
+struct PathDisplay<'a, T>(&'a Path, T);
+impl<'a> fmt::Display for PathDisplay<'a, &'a OsStr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0.as_path().display())
+        write!(f, "{}", self.1.as_path().strip_prefix(self.0)
+               .unwrap().display())
     }
 }
-impl<'a> fmt::Display for PathDisplay<(&'a OsStr, &'a OsStr)> {
+impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, &'a OsStr)> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}/{}",
-               (self.0).0.as_path().display(),
-               (self.0).1.as_path().display())
+               (self.1).0.as_path().strip_prefix(self.0)
+               .unwrap().display(),
+               (self.1).1.as_path().display())
     }
 }
 
 #[derive(Debug)]
 struct LoggerImpl {
+    client_root: PathBuf,
     verbose_level: LogLevel,
     itemise_level: LogLevel,
     include_ancestors: bool,
@@ -160,7 +163,7 @@ impl LoggerImpl {
                             if self.colour { start_colour } else { "" },
                             level_name,
                             if self.colour { "\x1B[0m" } else { "" },
-                            side_name, PathDisplay($path)
+                            side_name, PathDisplay(&self.client_root, $path)
                             $(, $arg)*);
                 }
             }}
@@ -361,7 +364,7 @@ impl LoggerImpl {
         macro_rules! say {
             ($item:expr, $path:expr) => { {
                 let _ = writeln!(stdout_lock, "{:<11} {}",
-                                 $item, PathDisplay($path));
+                                 $item, PathDisplay(&self.client_root, $path));
             } }
         }
 
@@ -510,6 +513,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
     let level = max(FATAL as i32, min(255, nominal_log_level)) as LogLevel;
 
     let log = LoggerImpl {
+        client_root: config.client_root.to_owned(),
         verbose_level: level,
         itemise_level: if !itemise {
             0
