@@ -59,8 +59,6 @@
 //! This module does not handle encryption itself; the blocks it passes through
 //! are still in cleartext.
 
-#![allow(dead_code)]
-
 use std::io;
 use std::sync::Arc;
 

@@ -18,8 +18,6 @@
 
 //! Routines for performing high-level key management operations on the server.
 
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, UTC};

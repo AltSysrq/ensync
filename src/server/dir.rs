@@ -74,8 +74,6 @@
 //! rebuild does eventually happen, the explicit deleted entries are not
 //! preserved.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 // This is another place where we need to be able to convert between byte
@@ -239,12 +237,6 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         path.push("/");
         path.push(name);
         path
-    }
-
-    /// Drops the cached state of this directory, forcing the next operation to
-    /// re-read the directory content.
-    pub fn invalidate(&self) {
-        *self.content.lock().unwrap() = DirContent::default();
     }
 
     fn v0_entry_to_filedata(&self, e: &v0::Entry) -> Option<FileData> {

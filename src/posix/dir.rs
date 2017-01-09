@@ -21,8 +21,6 @@
 //! This specifically concerns the handling of synthetic directories and
 //! computing directory hashes.
 
-#![allow(dead_code)]
-
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};

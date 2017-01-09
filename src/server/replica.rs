@@ -16,8 +16,6 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-#![allow(dead_code)]
-
 use std::ffi::{OsStr, OsString};
 use std::sync::{Arc, Mutex};
 
@@ -44,7 +42,6 @@ pub struct ServerReplica<S : Storage + ?Sized + 'static> {
     storage: Arc<S>,
     pseudo_root: Arc<Dir<S>>,
     root_name: OsString,
-    block_size: usize,
 }
 
 impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
@@ -78,11 +75,11 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
             storage: storage,
             pseudo_root: pseudo_root,
             root_name: root_name.to_owned().into(),
-            block_size: block_size,
         })
     }
 
     /// Create the logical root directory if it does not already exist.
+    #[cfg(test)]
     pub fn create_root(&self) -> Result<()> {
         self.pseudo_root.edit(&self.root_name, Some(&FileData::Directory(0)),
                               None, |existing| {

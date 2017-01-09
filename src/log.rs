@@ -22,8 +22,6 @@
 //! providing useful output for tests, while also allowing eventual rsync-style
 //! itemised output.
 
-#![allow(dead_code)]
-
 use std::ffi::OsStr;
 use reconcile::compute::{Reconciliation,Conflict};
 
@@ -51,17 +49,6 @@ pub enum ReplicaSide {
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum EditDeleteConflictResolution {
-    Delete(ReplicaSide), Resurrect(ReplicaSide)
-}
-
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum EditEditConflictResolution<'a> {
-    Choose(ReplicaSide),
-    Rename(ReplicaSide, &'a OsStr),
-}
-
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ErrorOperation<'a> {
     List,
     MarkClean,
@@ -74,6 +61,9 @@ pub enum ErrorOperation<'a> {
     Access(&'a OsStr),
 }
 
+// TODO We need to either actually emit `EnterDirectory` and `LeaveDirectory`
+// or remove them.
+#[allow(dead_code)]
 #[derive(Clone,Copy,Debug)]
 pub enum Log<'a> {
     EnterDirectory(&'a OsStr),

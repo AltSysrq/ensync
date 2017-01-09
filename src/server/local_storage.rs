@@ -16,8 +16,6 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::collections::hash_map::Entry::*;
 use std::fs;
@@ -82,7 +80,6 @@ use server::storage::*;
 /// however, the separate-file approach was chosen as it is friendlier to
 /// various backup solutions.
 pub struct LocalStorage {
-    root: PathBuf,
     tmpdir: PathBuf,
     dirdir: PathBuf,
     objdir: PathBuf,
@@ -145,7 +142,6 @@ impl LocalStorage {
         try!(cxn.execute(include_str!("storage-schema.sql")));
 
         Ok(LocalStorage {
-            root: root,
             tmpdir: tmpdir,
             objdir: objdir,
             dirdir: dirdir,
