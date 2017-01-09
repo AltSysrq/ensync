@@ -100,6 +100,11 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
     pub fn pseudo_root(&self) -> Arc<Dir<S>> {
         self.pseudo_root.clone()
     }
+
+    /// Returns the master key being used by this replica.
+    pub fn master_key(&self) -> &Arc<MasterKey> {
+        &self.key
+    }
 }
 
 impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {

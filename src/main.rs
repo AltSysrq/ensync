@@ -108,6 +108,11 @@ fn main_impl() -> Result<()> {
         .help("Specify how to get the new passphrase, like \
                with the `passphrase` line in the config")
         .default_value("prompt");
+    let simple_verbose_arg = Arg::with_name("verbose")
+        .required(false)
+        .takes_value(false)
+        .short("v")
+        .help("Be verbose");
 
     let matches = App::new("ensync")
         .author(crate_authors!("\n"))
@@ -118,7 +123,7 @@ fn main_impl() -> Result<()> {
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .setting(AppSettings::UnifiedHelpMessage)
         .setting(AppSettings::VersionlessSubcommands)
-        .max_term_width(160)
+        .max_term_width(120)
         .subcommand(SubCommand::with_name("sync")
                     .about("Sync files according to configuration")
                     .setting(AppSettings::DontCollapseArgsInUsage)
@@ -204,6 +209,7 @@ fn main_impl() -> Result<()> {
                          .help("The name of the key to edit"))
                     .arg(Arg::with_name("force")
                          .long("force")
+                         .short("f")
                          .takes_value(false)
                          .required(false)
                          .help("Change <key-name> even if the old passphrase \
@@ -263,6 +269,83 @@ fn main_impl() -> Result<()> {
                     .after_help("Removes the listed directory(ies), which \
                                  must be empty. To remove non-empty \
                                  directories, use `rm` with the `-r` flag."))
+        .subcommand(SubCommand::with_name("cat")
+                    .alias("type")
+                    .alias("dump")
+                    .about("Dump file contents to standard output")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("path")
+                         .multiple(true)
+                         .required(true)
+                         .help("The path(s) to dump"))
+                    .after_help("Dumps the raw content of all listed files \
+                                 to standard output, without any other \
+                                 information. Every path must be a regular \
+                                 file (symlinks are not permitted)."))
+        .subcommand(SubCommand::with_name("get")
+                    .about("Directly fetch files from server")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("src")
+                         .required(true)
+                         .help("Path of the file to fetch from the server"))
+                    .arg(Arg::with_name("dst")
+                         .required(false)
+                         .default_value(".")
+                         .help("Location to which to copy the files"))
+                    .arg(Arg::with_name("force")
+                         .required(false)
+                         .takes_value(false)
+                         .short("f")
+                         .long("force")
+                         .help("Allow overwriting existing files"))
+                    .arg(&simple_verbose_arg)
+                    .after_help("This behaves roughly similarly to `cp -a`, \
+                                 in that it will copy files recursively with \
+                                 attributes, and doesn't treat symlinks \
+                                 specially."))
+        .subcommand(SubCommand::with_name("put")
+                    .about("Directly upload files to server")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("src")
+                         .required(true)
+                         .help("Path of the file to upload to the server"))
+                    .arg(Arg::with_name("dst")
+                         .required(false)
+                         .help("Path on the server to which to upload \
+                                the file. If omitted, upload to a file \
+                                of the same name in the logical root \
+                                named in the configuration."))
+                    .arg(Arg::with_name("force")
+                         .required(false)
+                         .takes_value(false)
+                         .short("f")
+                         .long("force")
+                         .help("Allow overwriting existing files"))
+                    .arg(&simple_verbose_arg)
+                    .after_help("This behaves roughly similarly to `cp -a`, \
+                                 in that it will copy files recursively with \
+                                 attributes, and doesn't treat symlinks \
+                                 specially."))
+        .subcommand(SubCommand::with_name("rm")
+                    .alias("del")
+                    .about("Directly delete files or directory trees \
+                            on the server")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("path")
+                         .required(true)
+                         .multiple(true)
+                         .help("The path(s) to delete"))
+                    .arg(Arg::with_name("recursive")
+                         .required(false)
+                         .takes_value(false)
+                         .short("r")
+                         .long("recursive")
+                         .help("Delete directories recursively"))
+                    .arg(&simple_verbose_arg))
         .subcommand(SubCommand::with_name("server")
                     .about("Run the server-side component")
                     .setting(AppSettings::DontCollapseArgsInUsage)
@@ -366,16 +449,37 @@ fn main_impl() -> Result<()> {
                            num_threads)
     } else if let Some(matches) = matches.subcommand_matches("ls") {
         set_up!(matches, config, storage, replica);
-        cli::cmd_manual::ls(&replica, matches.values_of("path").unwrap(),
+        cli::cmd_manual::ls(&replica, matches.values_of_os("path").unwrap(),
                             matches.occurrences_of("path") > 1,
                             matches.is_present("human-readable"))
     } else if let Some(matches) = matches.subcommand_matches("mkdir") {
         set_up!(matches, config, storage, replica);
-        cli::cmd_manual::mkdir(&replica, matches.values_of("path").unwrap(),
+        cli::cmd_manual::mkdir(&replica, matches.values_of_os("path").unwrap(),
                                parse_mode(matches.value_of("mode").unwrap())?)
     } else if let Some(matches) = matches.subcommand_matches("rmdir") {
         set_up!(matches, config, storage, replica);
-        cli::cmd_manual::rmdir(&replica, matches.values_of("path").unwrap())
+        cli::cmd_manual::rmdir(&replica, matches.values_of_os("path").unwrap())
+    } else if let Some(matches) = matches.subcommand_matches("cat") {
+        set_up!(matches, config, storage, replica);
+        cli::cmd_manual::cat(&replica, matches.values_of_os("path").unwrap())
+    } else if let Some(matches) = matches.subcommand_matches("get") {
+        set_up!(matches, config, storage, replica);
+        cli::cmd_manual::get(&replica, matches.value_of_os("src").unwrap(),
+                             matches.value_of_os("dst").unwrap(),
+                             matches.is_present("force"),
+                             matches.is_present("verbose"))
+    } else if let Some(matches) = matches.subcommand_matches("put") {
+        set_up!(matches, config, storage, replica);
+        cli::cmd_manual::put(&replica, matches.value_of_os("src").unwrap(),
+                             matches.value_of_os("dst").unwrap_or(
+                                 ::std::ffi::OsStr::new("")),
+                             matches.is_present("force"),
+                             matches.is_present("verbose"))
+    } else if let Some(matches) = matches.subcommand_matches("rm") {
+        set_up!(matches, config, storage, replica);
+        cli::cmd_manual::rm(&replica, matches.values_of_os("path").unwrap(),
+                            matches.is_present("recursive"),
+                            matches.is_present("verbose"))
     } else {
         panic!("Unhandled subcommand: {}", matches.subcommand_name().unwrap());
     }
