@@ -21,6 +21,7 @@
 extern crate chrono;
 // Not sure why the `rust_` prefix gets stripped by cargo
 extern crate crypto as rust_crypto;
+extern crate flate2;
 extern crate libc;
 extern crate num_cpus;
 extern crate rand;

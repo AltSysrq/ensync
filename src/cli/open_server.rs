@@ -111,6 +111,7 @@ pub fn open_server_replica(config: &Config, storage: Arc<Storage>,
         config.private_root.join("server-state.sqlite").to_str()
             .ok_or_else(|| format!("Path '{}' is not valid UTF-8",
                                    config.private_root.display()))?,
-        master_key, storage, &config.server_root, config.block_size as usize)
+        master_key, storage, &config.server_root, config.block_size as usize,
+        config.compression)
        .chain_err(|| "Failed to set up server replica")?)
 }

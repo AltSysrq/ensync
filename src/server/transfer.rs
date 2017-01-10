@@ -19,6 +19,8 @@
 use std::io;
 use std::sync::Arc;
 
+use flate2;
+
 use block_xfer::BlockFetch;
 use defs::HashId;
 use errors::*;
@@ -43,9 +45,11 @@ impl<S : Storage + ?Sized> BlockFetch for ServerTransferOut<S> {
     fn fetch(&self, block: &HashId) -> Result<Box<io::Read>> {
         let ciphertext = self.storage.getobj(block)?
             .ok_or(ErrorKind::ServerContentDeleted)?;
-        let mut cleartext = Vec::<u8>::new();
+        let mut cleartext = Vec::<u8>::with_capacity(
+            ciphertext.len() * 3 / 2);
         decrypt_obj(&mut cleartext, &ciphertext[..], &self.key)?;
 
-        Ok(Box::new(io::Cursor::new(cleartext)))
+        Ok(Box::new(flate2::read::GzDecoder::new(
+            io::Cursor::new(cleartext))?))
     }
 }

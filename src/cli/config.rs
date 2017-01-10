@@ -25,6 +25,7 @@ use std::result::Result as StdResult;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use flate2;
 use rpassword;
 use toml;
 
@@ -34,7 +35,7 @@ use rules::engine::SyncRules;
 
 const CONFIG_FILE_NAME: &'static str = "config.toml";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     /// The path in the local filesystem to use as the client root.
     pub client_root: PathBuf,
@@ -49,6 +50,8 @@ pub struct Config {
     pub passphrase: PassphraseConfig,
     /// The block size to use for new transfers.
     pub block_size: u32,
+    /// The compression level to use.
+    pub compression: flate2::Compression,
     /// The sync rules to use for reconciliation.
     pub sync_rules: Arc<SyncRules>,
 }
@@ -143,8 +146,9 @@ impl Config {
 
         macro_rules! extract {
             ($from:expr, $section:expr, $type_prefix:expr, $key:expr,
-             $type_suffix:expr, $convert:ident, $convert_name:expr) => {
-                $from.get($key)
+             $type_suffix:expr, $default:expr, $convert:ident,
+             $convert_name:expr) => {
+                $from.get($key).or($default)
                     .ok_or_else(
                         || format!("{}: Missing {}{}{} under {}",
                                    filename.display(), $type_prefix, $key,
@@ -157,17 +161,25 @@ impl Config {
 
             ($from:expr, $section:expr, [$key:ident]) => {
                 extract!($from, $section, "section [", stringify!($key),
-                         "]", as_table, "a table")
+                         "]", None, as_table, "a table")
+            };
+
+            ($from:expr, $section:expr, $key:ident, str = $default:expr) => {
+                extract!($from, $section, "key \"", stringify!($key),
+                         "\"", $default, as_str, "a string")
             };
 
             ($from:expr, $section:expr, $key:ident, str) => {
+                extract!($from, $section, $key, str = None)
+            };
+
+            ($from:expr, $section:expr, $key:ident, i64 = $default:expr) => {
                 extract!($from, $section, "key \"", stringify!($key),
-                         "\"", as_str, "a string")
+                         "\"", $default, as_integer, "an integer")
             };
 
             ($from:expr, $section:expr, $key:ident, i64) => {
-                extract!($from, $section, "key \"", stringify!($key),
-                         "\"", as_integer, "an integer")
+                extract!($from, $section, $key, i64 = None)
             };
         }
 
@@ -191,7 +203,14 @@ impl Config {
                 .map_err(|e| format!("{}: {}", filename.display(), e))?
                 .relativise(parent),
             block_size: {
-                let bs = extract!(general, "[general]", block_size, i64)?;
+                let bs = extract!(general, "[general]", block_size,
+                                  // Shave a bit off of 1MB to account for gzip
+                                  // headers, so if there are a lot of large
+                                  // uncompressible blocks, they do not just
+                                  // barely spill over into another allocation
+                                  // unit.
+                                  i64 = Some(&toml::Value::Integer(
+                                      1024*1024 - 512)))?;
                 // There is strictly speaking nothing preventing use of really
                 // tiny or really large blocks, but it is not useful either, so
                 // enforce some mostly arbitrary bounds as a sanity check.
@@ -206,11 +225,31 @@ impl Config {
                 bs as u32
             },
 
+            compression: {
+                let default = toml::Value::String("default".to_owned());
+                let name = extract!(general, "[general]", compression,
+                                    str = Some(&default))?;
+                parse_compression_name(filename, name)?
+            },
+
             sync_rules: SyncRules::parse(&rules, "rules").map(Arc::new)
                 .chain_err(|| format!("{}: Invalid sync rules configuration",
                                       filename.display()))?,
         })
     }
+}
+
+fn parse_compression_name(filename: &Path, name: &str)
+                          -> Result<flate2::Compression> {
+    Ok(match name {
+        "none" | "off" => flate2::Compression::None,
+        "default" | "on" => flate2::Compression::Default,
+        "best" => flate2::Compression::Best,
+        "fast" => flate2::Compression::Fast,
+        _ => bail!(format!(
+            "{}: Invalid compression type '{}'",
+            filename.display(), name)),
+    })
 }
 
 impl FromStr for ServerConfig {
@@ -376,12 +415,32 @@ impl PassphraseConfig {
 
 #[cfg(test)]
 mod test {
+    use std::path::Path;
+
+    use flate2;
     use tempfile::NamedTempFile;
 
     use super::*;
 
+    // Since `Compression` is neither Debug or PartialEq
+    macro_rules! assert_compression {
+        ($expected:ident, $actual:expr) => {
+            match (true, $actual) {
+                (true, flate2::Compression::$expected) => (),
+                (_, flate2::Compression::None) =>
+                    panic!("Unexpected `None` compression"),
+                (_, flate2::Compression::Default) =>
+                    panic!("Unexpected `Default` compression"),
+                (_, flate2::Compression::Best) =>
+                    panic!("Unexpected `Best` compression"),
+                (_, flate2::Compression::Fast) =>
+                    panic!("Unexpected `Fast` compression"),
+            }
+        }
+    }
+
     #[test]
-    fn parse_minimal() {
+    fn parse_full() {
         let config = Config::parse("/foo/bar/config.toml", r#"
 [general]
 path = "/the/client/path"
@@ -389,6 +448,7 @@ server = "path:/the/server/path"
 server_root = "r00t"
 passphrase = "prompt"
 block_size = 65536
+compression = "best"
 
 [[rules.root.files]]
 mode = "---/---"
@@ -399,6 +459,7 @@ mode = "---/---"
         assert_eq!("r00t", &config.server_root);
         assert_eq!(PassphraseConfig::Prompt, config.passphrase);
         assert_eq!(65536, config.block_size);
+        assert_compression!(Best, config.compression);
     }
 
     #[test]
@@ -409,7 +470,6 @@ path = "../sync/client"
 server = "path:../sync/server"
 server_root = "r00t"
 passphrase = "file:password"
-block_size = 65536
 
 [[rules.root.files]]
 mode = "---/---"
@@ -422,6 +482,24 @@ mode = "---/---"
         assert_eq!(PassphraseConfig::File("/foo/bar/password"
                                           .to_owned().into()),
                    config.passphrase);
+    }
+
+    #[test]
+    fn parse_compression_names() {
+        let path: &Path = "".as_ref();
+
+        assert_compression!(
+            None, super::parse_compression_name(&path, "off").unwrap());
+        assert_compression!(
+            None, super::parse_compression_name(&path, "none").unwrap());
+        assert_compression!(
+            Default,  super::parse_compression_name(&path, "default").unwrap());
+        assert_compression!(
+            Default, super::parse_compression_name(&path, "on").unwrap());
+        assert_compression!(
+            Fast, super::parse_compression_name(&path, "fast").unwrap());
+        assert_compression!(
+            Best, super::parse_compression_name(&path, "best").unwrap());
     }
 
     #[test]

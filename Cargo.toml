@@ -9,6 +9,7 @@ serde_codegen = "0.8"
 
 [dependencies]
 chrono = { version = "0.2", features = ["serde"] }
+flate2 = "0.2.14"
 error-chain = "0.7.1"
 libc = "0.2.18"
 num_cpus = "1.2.1"

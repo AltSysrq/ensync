@@ -19,6 +19,7 @@
 use std::ffi::{OsStr, OsString};
 use std::sync::{Arc, Mutex};
 
+use flate2;
 use sqlite;
 
 use block_xfer::*;
@@ -60,14 +61,16 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
     /// `block_size` indicates the block size to use for all new file blocking
     /// operations.
     pub fn new(path: &str, key: Arc<MasterKey>,
-               storage: Arc<S>, root_name: &str, block_size: usize)
+               storage: Arc<S>, root_name: &str,
+               block_size: usize, compression: flate2::Compression)
                -> Result<Self> {
         let db = sqlite::Connection::open(path)?;
         db.execute(include_str!("client-schema.sql"))?;
         let db = Arc::new(Mutex::new(SendConnection(db)));
 
         let pseudo_root = Arc::new(Dir::root(
-            db.clone(), key.clone(), storage.clone(), block_size)?);
+            db.clone(), key.clone(), storage.clone(),
+            block_size, compression)?);
 
         Ok(ServerReplica {
             db: db,
@@ -281,6 +284,7 @@ mod test {
     use std::io::Cursor;
     use std::sync::Arc;
 
+    use flate2;
     use tempdir::TempDir;
 
     use block_xfer;
@@ -303,7 +307,8 @@ mod test {
             let $master_key = Arc::new(MasterKey::generate_new());
             let $replica = ServerReplica::new(
                 ":memory:", $master_key.clone(),
-                Arc::new(storage), "r00t", 1024).unwrap();
+                Arc::new(storage), "r00t", 1024,
+                flate2::Compression::Fast).unwrap();
             $replica.create_root().unwrap();
             let mut $root = $replica.root().unwrap();
         };
@@ -992,14 +997,16 @@ mod test {
         let storage1 = LocalStorage::open(dir.path()).unwrap();
         let replica1 = ServerReplica::new(
             ":memory:", master_key.clone(),
-            Arc::new(storage1), "r00t", 1024).unwrap();
+            Arc::new(storage1), "r00t", 1024,
+            flate2::Compression::Fast).unwrap();
         replica1.create_root().unwrap();
         let mut root1 = replica1.root().unwrap();
 
         let storage2 = LocalStorage::open(dir.path()).unwrap();
         let replica2 = ServerReplica::new(
             ":memory:", master_key.clone(),
-            Arc::new(storage2), "r00t", 1024).unwrap();
+            Arc::new(storage2), "r00t", 1024,
+            flate2::Compression::Fast).unwrap();
         let root2 = replica1.root().unwrap();
 
         assert!(replica1.is_dir_dirty(&root1));
@@ -1063,7 +1070,8 @@ mod test {
             let storage = LocalStorage::open(&storage_dir).unwrap();
             let replica = ServerReplica::new(
                 sqlite_file.to_str().unwrap(), master_key.clone(),
-                Arc::new(storage), "r00t", 1024).unwrap();
+                Arc::new(storage), "r00t", 1024,
+                flate2::Compression::Fast).unwrap();
             replica.create_root().unwrap();
             let mut root = replica.root().unwrap();
 
@@ -1088,7 +1096,8 @@ mod test {
             let storage = LocalStorage::open(&copy_dir).unwrap();
             let replica = ServerReplica::new(
                 sqlite_file.to_str().unwrap(), master_key.clone(),
-                Arc::new(storage), "r00t", 1024).unwrap();
+                Arc::new(storage), "r00t", 1024,
+                flate2::Compression::Fast).unwrap();
 
             let mut root = replica.root().unwrap();
             // When the out-of-date directory is seen, it fails instead of

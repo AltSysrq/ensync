@@ -83,6 +83,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flate2;
 use keccak;
 use serde::{Deserialize, Serialize};
 use serde::bytes::Bytes;
@@ -122,6 +123,7 @@ pub struct Dir<S : Storage + ?Sized + 'static> {
     storage: Arc<S>,
     tx_ctr: Arc<AtomicUsize>,
     block_size: usize,
+    compression: flate2::Compression,
 
     // Lock hierarchy: Lock may not be acquired while lock on `db` is held.
     content: Mutex<DirContent>,
@@ -165,7 +167,8 @@ impl<S : Storage + ?Sized + 'static> ReplicaDirectory for Dir<S> {
 impl<S : Storage + ?Sized + 'static> Dir<S> {
     /// Initialises the pseudo-root directory.
     pub fn root(db: Arc<Mutex<SendConnection>>, key: Arc<MasterKey>,
-                storage: Arc<S>, block_size: usize) -> Result<Self> {
+                storage: Arc<S>, block_size: usize,
+                compression: flate2::Compression) -> Result<Self> {
         let this = Dir {
             id: DIRID_PROOT,
             parent: None,
@@ -175,6 +178,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             storage: storage,
             tx_ctr: Arc::new(AtomicUsize::new(1)),
             block_size: block_size,
+            compression: compression,
             content: Mutex::new(DirContent::default()),
         };
 
@@ -206,6 +210,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             storage: parent.storage.clone(),
             tx_ctr: parent.tx_ctr.clone(),
             block_size: parent.block_size,
+            compression: parent.compression,
             content: Mutex::new(DirContent::default()),
             parent: Some(parent),
         })
@@ -224,6 +229,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             storage: parent.storage.clone(),
             tx_ctr: parent.tx_ctr.clone(),
             block_size: parent.block_size,
+            compression: parent.compression,
             content: Mutex::new(DirContent {
                 synth: Some((name.to_owned(), mode)),
                 .. DirContent::default()
@@ -302,6 +308,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                     storage: self.storage.clone(),
                     tx_ctr: self.tx_ctr.clone(),
                     block_size: self.block_size,
+                    compression: self.compression,
                     content: Mutex::new(DirContent::default()),
                 };
                 // Fetch the child directory's data as necessary so we know its
@@ -432,11 +439,8 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                             blocks.push(H(linkid));
 
                             if !self.storage.linkobj(tx, &blockid, &linkid)? {
-                                let mut ciphertext = Vec::<u8>::new();
-                                encrypt_obj(&mut ciphertext, block_data,
-                                            &self.key)?;
-                                self.storage.putobj(
-                                    tx, &blockid, &linkid, &ciphertext)?;
+                                self.upload_object(tx, &blockid, &linkid,
+                                                   block_data)?;
                             }
                             Ok(())
                         })?;
@@ -452,6 +456,17 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         }).map(|r| r.expect("edit() transaction aborted?"))?;
         self.save_latest_dir_ver(&mut*content)?;
         Ok(ret)
+    }
+
+    fn upload_object(&self, tx: Tx, blockid: &HashId, linkid: &HashId,
+                     block_data: &[u8]) -> Result<()> {
+        let mut ciphertext = Vec::<u8>::with_capacity(block_data.len() + 256);
+        let compressor = flate2::read::GzEncoder::new(
+            block_data, self.compression);
+        encrypt_obj(&mut ciphertext, compressor, &self.key)?;
+        self.storage.putobj(
+            tx, &blockid, &linkid, &ciphertext[..])?;
+        Ok(())
     }
 
     /// Renames whatever file is at `old` to be at `new`, provided `old` exists
@@ -858,6 +873,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             storage: self.storage.clone(),
             tx_ctr: self.tx_ctr.clone(),
             block_size: self.block_size,
+            compression: self.compression,
             content: Mutex::new(DirContent::default()),
         };
         child.rewrite(tx, &mut child.content.lock().unwrap(), false)?;
