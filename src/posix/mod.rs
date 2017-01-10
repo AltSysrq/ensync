@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -47,6 +47,16 @@
 //! 32-bit platforms and requires separate 64-suffixed functions and types to
 //! deal with that was sufficient inconvenience to use the API provided by
 //! Rust.
+//!
+//! This top-level module also has some miscellaneous functions for working
+//! with POSIX filesystems.
+
+use std::fs;
+use std::io;
+use std::os::unix::io::AsRawFd;
+use libc::{futimes, timeval};
+
+use defs::FileTime;
 
 mod dao;
 mod dir;
@@ -54,3 +64,19 @@ mod replica;
 
 pub use self::dir::DirHandle;
 pub use self::replica::PosixReplica;
+
+/// Set the atime and mtime of the given file handle to the given time, in
+/// seconds.
+pub fn set_mtime(file: &fs::File, mtime: FileTime) -> io::Result<()> {
+    let access_modified = [ timeval { tv_sec: mtime, tv_usec: 0 },
+                            timeval { tv_sec: mtime, tv_usec: 0 } ];
+    let code = unsafe {
+        futimes(file.as_raw_fd(), &access_modified[0])
+    };
+
+    if 0 == code {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}

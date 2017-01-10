@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -31,8 +31,9 @@ use errors::*;
 use replica::*;
 use block_xfer::{BlockList,StreamSource,ContentAddressableSource,BlockFetch};
 use block_xfer::{blocks_to_stream,hash_block,stream_to_blocks};
-use super::dao::{Dao,InodeStatus};
-use super::dir::*;
+use posix;
+use posix::dao::{Dao,InodeStatus};
+use posix::dir::*;
 
 struct Config {
     hmac_secret: Vec<u8>,
@@ -578,7 +579,7 @@ impl PosixReplica {
                 Ok(source.1.clone())
             },
 
-            FileData::Regular(mode, _, _, _) => {
+            FileData::Regular(mode, _, time, _) => {
                 let (mut scratch_file, scratch_path) =
                     try!(self.scratch_regular(0o600));
                 if let Some(xfer) = xfer {
@@ -587,9 +588,11 @@ impl PosixReplica {
                     // Move anything out of the way as needed
                     try!(before_establish());
                     let new_path = dir.child(source.0);
-                    // Atomically put into place after setting the mode
+                    // Atomically put into place after setting the mode and
+                    // mtime
                     try!(fs::set_permissions(
                         &scratch_path, fs::Permissions::from_mode(mode)));
+                    try!(posix::set_mtime(&scratch_file, time));
                     try!(fs::rename(&scratch_path, &new_path));
                     // Cache the content of the file, assuming that nobody
                     // modified it between us renaming it there and `stat()`ing

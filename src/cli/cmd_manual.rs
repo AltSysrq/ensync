@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+// Lots of stuff in this module won't work on Windows as it is right now.
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -29,6 +31,7 @@ use block_xfer;
 use defs::*;
 use errors::*;
 use replica::{Replica, ReplicaDirectory};
+use posix;
 use server::{ServerReplica, Storage};
 
 pub fn ls<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
@@ -257,7 +260,7 @@ pub fn get<S : Storage + ?Sized, P1 : AsRef<Path>, P2 : AsRef<Path>>
             }
 
             match fd {
-                FileData::Regular(mode, _, _time, _) => {
+                FileData::Regular(mode, _, time, _) => {
                     let mut tmpfile = NamedTempFile::new_in(tmpdir)
                         .chain_err(|| format!("Failed to create \
                                                temporary file"))?;
@@ -285,13 +288,16 @@ pub fn get<S : Storage + ?Sized, P1 : AsRef<Path>, P2 : AsRef<Path>>
                         .chain_err(|| format!("Error transferring '{}'",
                                               sub_src.display()))?;
 
+                    posix::set_mtime(&tmpfile, time)
+                        .chain_err(|| format!("Failed to set mtime on '{}'",
+                                              sub_dst.display()))?;
+
                     if allow_overwrite {
                         tmpfile.persist(&sub_dst)
                     } else {
                         tmpfile.persist_noclobber(&sub_dst)
                     }.chain_err(|| format!("Error persisting '{}'",
                                            sub_dst.display()))?;
-                    // TODO Set modified time
                 },
 
                 FileData::Directory(mode) => {
