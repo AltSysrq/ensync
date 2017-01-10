@@ -53,7 +53,7 @@ pub fn list_keys(storage: &Storage) -> Result<()> {
         println!("  created:      {}", format_date(Some(&key.created)));
         println!("  last changed: {}", format_date(key.updated.as_ref()));
         println!("  last used:    {}", format_date(key.used.as_ref()));
-        println!();
+        println!("");
     }
     Ok(())
 }

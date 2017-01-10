@@ -45,7 +45,7 @@ pub fn ls<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
         }
         ls_one(replica, path, human_readable)?;
         if show_headers {
-            println!();
+            println!("");
         }
     }
     Ok(())
