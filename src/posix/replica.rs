@@ -60,6 +60,15 @@ fn metadata_to_fd(path: &Path, md: &fs::Metadata,
                   config: &Config)
                   -> Result<FileData> {
     let typ = md.file_type();
+
+    // Treat the `internal.ensync` directory as if it were a Special file so
+    // that it can not be affected by the syncing process. (Recursing into it
+    // could cause many problems, since it is by nature very live during the
+    // sync process.)
+    if Some(OsStr::new(PRIVATE_DIR_NAME)) == path.file_name() {
+        return Ok(FileData::Special);
+    }
+
     if typ.is_dir() {
         Ok(FileData::Directory(md.mode() & 0o7777))
     } else if typ.is_symlink() {
@@ -380,7 +389,7 @@ impl Replica for PosixReplica {
         })
     }
 
-    fn prepare(&self) -> Result<()> {
+    fn prepare (&self) -> Result<()> {
         // Reclaim any files left over from a crashed run
         try!(self.clean_scratch());
 
@@ -994,17 +1003,21 @@ mod test {
                 CString::new(root.path().join("fifo").to_str().unwrap())
                     .unwrap().as_ptr(), 0o000));
         }
+        fs::DirBuilder::new().mode(0o700).create(
+            root.path().join(PRIVATE_DIR_NAME)).unwrap();
 
         replica.prepare().unwrap();
         let mut dir = replica.root().unwrap();
         let list = replica.list(&mut dir).unwrap();
-        assert_eq!(3, list.len());
+        assert_eq!(4, list.len());
         for (name, fd) in list {
             if oss("dir") == name {
                 assert_eq!(FileData::Directory(0o700), fd);
             } else if oss("sym") == name {
                 assert_eq!(FileData::Symlink(oss("target")), fd);
             } else if oss("fifo") == name {
+                assert_eq!(FileData::Special, fd);
+            } else if oss(PRIVATE_DIR_NAME) == name {
                 assert_eq!(FileData::Special, fd);
             } else {
                 panic!("Unexpected filename: {:?}", name);
