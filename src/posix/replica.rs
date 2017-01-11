@@ -271,14 +271,23 @@ impl Replica for PosixReplica {
 
         let path = dir.child(name);
 
-        // If this can be translated to a simple `chmod()`, do so.
+        // If this can be translated to a simple `chmod()` and/or mtime
+        // adjustment, do so.
         match (old, UNKNOWN_HASH, new, UNKNOWN_HASH) {
-            (&FileData::Directory(_), h1, &FileData::Directory(mode), h2) |
-            (&FileData::Regular(_,_,_,h1), _, &FileData::Regular(mode,_,_,h2), _)
+            (&FileData::Directory(m1), h1, &FileData::Directory(m2), h2) |
+            (&FileData::Regular(m1,_,_,h1), _, &FileData::Regular(m2,_,_,h2), _)
             if h1 == h2 => {
                 try!(self.check_matches(&path, old));
-                try!(fs::set_permissions(
-                    &path, fs::Permissions::from_mode(mode)));
+                if m1 != m2 {
+                    try!(fs::set_permissions(
+                        &path, fs::Permissions::from_mode(m2)));
+                }
+                if let (&FileData::Regular(_, _, t1, _),
+                        &FileData::Regular(_, _, t2, _))  = (old, new) {
+                    if t1 != t2 {
+                        try!(posix::set_mtime_path(&path, t2));
+                    }
+                }
                 dir.toggle_file(File(name, old));
                 dir.toggle_file(File(name, new));
                 return Ok(new.clone());

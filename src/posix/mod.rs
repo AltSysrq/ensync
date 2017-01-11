@@ -51,10 +51,13 @@
 //! This top-level module also has some miscellaneous functions for working
 //! with POSIX filesystems.
 
+use std::ffi::CString;
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::io::AsRawFd;
-use libc::{futimes, timeval};
+use std::path::Path;
+use libc::{utimes, futimes, timeval};
 
 use defs::FileTime;
 
@@ -72,6 +75,25 @@ pub fn set_mtime(file: &fs::File, mtime: FileTime) -> io::Result<()> {
                             timeval { tv_sec: mtime, tv_usec: 0 } ];
     let code = unsafe {
         futimes(file.as_raw_fd(), &access_modified[0])
+    };
+
+    if 0 == code {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Like `set_mtime`, but operates on a path instead.
+pub fn set_mtime_path<P : AsRef<Path>>(path: P, mtime: FileTime)
+                                         -> io::Result<()> {
+    let access_modified = [ timeval { tv_sec: mtime, tv_usec: 0 },
+                            timeval { tv_sec: mtime, tv_usec: 0 } ];
+    let path = CString::new(
+        path.as_ref().to_owned().into_os_string().into_vec())
+        .expect("set_mtime_path path argument contains NUL");
+    let code = unsafe {
+        utimes(path.as_ptr(), &access_modified[0])
     };
 
     if 0 == code {
