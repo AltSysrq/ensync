@@ -1,5 +1,5 @@
 ---
--- Copyright (c) 2016, Jason Lingle
+-- Copyright (c) 2016, 2017, Jason Lingle
 --
 -- This file is part of Ensync.
 --
@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS "file" (
   -- For regular files and directories, the numeric POSIX permissions. 0 for
   -- symlinks and the root directory.
   "mode"        INTEGER NOT NULL,
+  -- For regular files, the POSIX mtime (seconds).
+  "mtime"       INTEGER NOT NULL,
   -- For regular files, the 32-byte hash of the content. For symlinks, the
   -- target. Empty for directories.
   "content"     BLOB NOT NULL
@@ -90,5 +92,5 @@ CREATE TABLE IF NOT EXISTS "condemnation" (
 ) WITHOUT ROWID;
 
 -- Create the root directory if not already there
-INSERT OR IGNORE INTO "file" (id, parent, name, type, mode, content)
-VALUES (0, 0, "", 0, 0, "");
+INSERT OR IGNORE INTO "file" (id, parent, name, type, mode, mtime, content)
+VALUES (0, 0, "", 0, 0, 0, "");

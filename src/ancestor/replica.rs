@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -169,12 +169,13 @@ trait AsEntry {
 impl AsEntry for FileData {
     fn as_entry(&self, dir: i64) -> FileEntry {
         match *self {
-            FileData::Regular(mode, _, _, ref hash) => FileEntry {
+            FileData::Regular(mode, _, time, ref hash) => FileEntry {
                 id: -1,
                 parent: dir,
                 name: Cow::Borrowed(b""),
                 typ: T_REGULAR,
                 mode: mode as i64,
+                mtime: time as i64,
                 content: Cow::Borrowed(hash),
             },
             FileData::Directory(mode) => FileEntry {
@@ -183,6 +184,7 @@ impl AsEntry for FileData {
                 name: Cow::Borrowed(b""),
                 typ: T_DIRECTORY,
                 mode: mode as i64,
+                mtime: 0,
                 content: Cow::Borrowed(b""),
             },
             FileData::Symlink(ref target) => FileEntry {
@@ -191,6 +193,7 @@ impl AsEntry for FileData {
                 name: Cow::Borrowed(b""),
                 typ: T_SYMLINK,
                 mode: 0,
+                mtime: 0,
                 content: Cow::Borrowed(target.as_nbytes()),
             },
             FileData::Special =>
@@ -242,8 +245,9 @@ impl Replica for AncestorReplica {
                             } else {
                                 let mut hash = [0;32];
                                 hash.copy_from_slice(&*e.content);
-                                Some(FileData::Regular(e.mode as FileMode,
-                                                       0, 0, hash))
+                                Some(FileData::Regular(
+                                    e.mode as FileMode,
+                                    0, e.mtime as FileTime, hash))
                             }
                         },
                         T_DIRECTORY => {
@@ -420,8 +424,9 @@ mod test {
     }
 
     fn mkreg(replica: &AncestorReplica, dir: &mut DirHandle,
-             name: &str, mode: FileMode, h: u8) -> Result<FileData> {
-        let data = FileData::Regular(mode, 0, 0, [h;32]);
+             name: &str, mode: FileMode, mtime: FileTime, h: u8)
+             -> Result<FileData> {
+        let data = FileData::Regular(mode, 0, mtime, [h;32]);
         replica.create(dir, File(&oss(name), &data), data.clone())
     }
 
@@ -456,7 +461,7 @@ mod test {
     fn create_and_list() {
         let (replica, mut root) = new();
 
-        mkreg(&replica, &mut root, "foo", 0o666, 1).unwrap();
+        mkreg(&replica, &mut root, "foo", 0o666, 42, 1).unwrap();
         mkdir(&replica, &mut root, "bar", 0o777).unwrap();
         mksym(&replica, &mut root, "xyzzy", "plugh").unwrap();
 
@@ -464,8 +469,9 @@ mod test {
         assert_eq!(3, listed.len());
         for (name, data) in listed {
             if oss("foo") == name {
-                if let FileData::Regular(mode, _, _, hash) = data {
+                if let FileData::Regular(mode, _, mtime, hash) = data {
                     assert_eq!(0o666, mode);
+                    assert_eq!(42, mtime);
                     assert_eq!([1;32], hash);
                 } else {
                     panic!("`foo` was returned as a non-file: {:?}", data);

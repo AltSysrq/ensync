@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -83,8 +83,22 @@ impl FileData {
     /// content.
     ///
     /// This is slightly less strict than a full equality test, ignoring some
-    /// of the fields for regular fiels.
+    /// of the fields for regular files.
     pub fn matches(&self, that: &FileData) -> bool {
+        use self::FileData::*;
+
+        match (self, that) {
+            (&Directory(m1), &Directory(m2)) => m1 == m2,
+            (&Regular(m1, _, t1, ref h1), &Regular(m2, _, t2, ref h2)) =>
+                m1 == m2 && t1 == t2 && *h1 == *h2,
+            (&Symlink(ref t1), &Symlink(ref t2)) => *t1 == *t2,
+            (&Special, &Special) => true,
+            _ => false,
+        }
+    }
+
+    /// Returns whether non-metadata about this file and another one match.
+    pub fn matches_data(&self, that: &FileData) -> bool {
         use self::FileData::*;
 
         match (self, that) {

@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -266,9 +266,42 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
                 Unsync
             };
 
+        // If the client and server agree other than metadata, pick the one
+        // that disagrees with the ancestor, or the one that is newer if they
+        // both disagree.
+        if !c.matches(s) && c.matches_data(s) {
+            let server_wins = if a.map_or(false, |a| c.matches(a)) {
+                true
+            } else if a.map_or(false, |a| s.matches(a)) {
+                false
+            } else {
+                s.newer_than(c)
+            };
+
+            (if server_wins {
+                if mode.inbound.update.on() {
+                    use_server
+                } else if mode.outbound.update.force() {
+                    use_client
+                } else {
+                    // If we can't reconcile, simply leave as-is since it's
+                    // just metadata. We also don't report the conflict.
+                    InSync
+                }
+            } else {
+                if mode.outbound.update.on() {
+                    use_client
+                } else if mode.inbound.update.force() {
+                    use_server
+                } else {
+                    InSync
+                }
+            }, NoConflict)
+
         // No conflict if one side agrees with the ancestor. As with creates
-        // and deletes, force settings revert the updated side instead.
-        if a.map_or(false, |a| a.matches(c)) {
+        // and deletes, force settings revert the updated side instead. We
+        // don't care about metadata (modified time) here.
+        } else if a.map_or(false, |a| a.matches(c)) {
             (if mode.inbound.update.on() {
                 use_server
             } else if mode.outbound.update.force() {
@@ -562,12 +595,18 @@ mod test {
         let reg777_1b_data = FileData::Regular(0o777, 0, 1, [4;32]);
         let reg777_2_data = FileData::Regular(0o777, 0, 2, [2;32]);
         let reg777_3_data = FileData::Regular(0o777, 0, 3, [3;32]);
+        let reg777_4t1_data = FileData::Regular(0o777, 0, 1, [0;32]);
+        let reg777_4t2_data = FileData::Regular(0o777, 0, 2, [0;32]);
+        let reg777_4t3_data = FileData::Regular(0o777, 0, 3, [0;32]);
         let reg777_1 = Some(&reg777_1_data);
         let reg770_1 = Some(&reg770_1_data);
         let reg700_1 = Some(&reg700_1_data);
         let reg777_2 = Some(&reg777_2_data);
         let reg777_3 = Some(&reg777_3_data);
         let reg777_1b = Some(&reg777_1b_data);
+        let reg777_4t1 = Some(&reg777_4t1_data);
+        let reg777_4t2 = Some(&reg777_4t2_data);
+        let reg777_4t3 = Some(&reg777_4t3_data);
 
         let dir777_data = FileData::Directory(0o777);
         let dir770_data = FileData::Directory(0o770);
@@ -747,6 +786,49 @@ mod test {
                               EditEdit(ConflictingEdit::Content,
                                        ConflictingEdit::Content))
             .f("CUD/CUD", Use(Client)); // Client wins ties
+
+        // mtime changed to earlier date
+        assert_reconciliation(reg777_4t2, reg777_4t2, reg777_4t1, NoConflict)
+            .f("---/---", InSync)
+            .f("cud/---", Use(Server))
+            .f("---/cud", InSync)
+            .f("CUD/---", Use(Server))
+            .f("---/CUD", Use(Client))
+            .f("cud/cud", Use(Server))
+            .f("CUD/cud", Use(Server))
+            .f("cud/CUD", Use(Server))
+            .f("CUD/CUD", Use(Server));
+        assert_reconciliation(reg777_4t1, reg777_4t2, reg777_4t2, NoConflict)
+            .f("---/---", InSync)
+            .f("cud/---", InSync)
+            .f("---/cud", Use(Client))
+            .f("CUD/---", Use(Server))
+            .f("---/CUD", Use(Client))
+            .f("cud/cud", Use(Client))
+            .f("CUD/cud", Use(Client))
+            .f("cud/CUD", Use(Client))
+            .f("CUD/CUD", Use(Client));
+        // mtime changed on both
+        assert_reconciliation(reg777_4t1, reg777_4t2, reg777_4t3, NoConflict)
+            .f("---/---", InSync)
+            .f("cud/---", Use(Server))
+            .f("---/cud", InSync)
+            .f("CUD/---", Use(Server))
+            .f("---/CUD", Use(Client))
+            .f("cud/cud", Use(Server))
+            .f("CUD/cud", Use(Server))
+            .f("cud/CUD", Use(Server))
+            .f("CUD/CUD", Use(Server));
+        assert_reconciliation(reg777_4t3, reg777_4t2, reg777_4t1, NoConflict)
+            .f("---/---", InSync)
+            .f("cud/---", InSync)
+            .f("---/cud", Use(Client))
+            .f("CUD/---", Use(Server))
+            .f("---/CUD", Use(Client))
+            .f("cud/cud", Use(Client))
+            .f("CUD/cud", Use(Client))
+            .f("cud/CUD", Use(Client))
+            .f("CUD/CUD", Use(Client));
 
         assert_reconciliation(dir777, dir770, dir700,
                               EditEdit(ConflictingEdit::Mode,

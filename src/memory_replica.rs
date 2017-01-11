@@ -822,7 +822,7 @@ mod test {
         let hash = hashof(mkreg(&mut replica, &mut root, "foo", 0o777)
                           .unwrap());
         replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Regular(0o777, 99, 99, hash))).unwrap();
+            &oss("foo"), &FileData::Regular(0o777, 99, 0, hash))).unwrap();
 
         assert!(replica.list(&mut root).unwrap().is_empty());
     }

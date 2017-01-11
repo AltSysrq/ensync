@@ -31,6 +31,7 @@ use libc::isatty;
 use ancestor::*;
 use cli::open_server::open_server_replica;
 use cli::config::Config;
+use cli::format_date;
 use defs::*;
 use errors::*;
 use log::*;
@@ -124,7 +125,7 @@ impl LoggerImpl {
                 match *self.0 {
                     FileData::Directory(mode) =>
                         write!(f, "directory (mode {:04o})", mode),
-                    FileData::Regular(mode, mut size, _, _) => {
+                    FileData::Regular(mode, mut size, time, _) => {
                         let suffixes = ["bytes", "kB", "MB", "GB",
                                         "TB", "PB", "EB", "ZB", "YB"];
                         let mut suffix_ix = 0usize;
@@ -133,8 +134,10 @@ impl LoggerImpl {
                             suffix_ix += 1;
                         }
 
-                        write!(f, "regular file (mode {:04o}, size {} {})",
-                               mode, size, suffixes[suffix_ix])
+                        write!(f, "regular file (mode {:04o}, size {} {}, \
+                                   modified {})",
+                               mode, size, suffixes[suffix_ix],
+                               format_date::format_timestamp(time))
                     },
                     FileData::Symlink(ref target) =>
                         write!(f, "symlink to {}",
