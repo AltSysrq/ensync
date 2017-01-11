@@ -18,12 +18,13 @@
 
 use std::borrow::Cow;
 use std::cmp::{max, min};
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io::{Write, stdout, stderr};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::Ordering::SeqCst;
 use std::thread;
 use libc::isatty;
@@ -77,9 +78,11 @@ impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, &'a OsStr)> {
 struct LoggerImpl {
     client_root: PathBuf,
     verbose_level: LogLevel,
+    include_creations_under_created_directory: bool,
     itemise_level: LogLevel,
     include_ancestors: bool,
     colour: bool,
+    created_directories: RwLock<HashSet<PathBuf>>,
 }
 
 impl Logger for LoggerImpl {
@@ -212,8 +215,20 @@ impl LoggerImpl {
                      recon_str, conflict_str)
             },
 
-            Log::Create(side, path, name, state) =>
-                say!((path, name), side, "New {}", FDD(state)),
+            Log::Create(side, path, name, state) => {
+                if let FileData::Directory(..) = *state {
+                    self.created_directories.write().unwrap()
+                        .insert(Path::new(path).to_owned());
+                }
+
+                if self.include_creations_under_created_directory ||
+                    Path::new(path).parent().map_or(
+                        true, |p| !self.created_directories.read()
+                            .unwrap().contains(p))
+                {
+                    say!((path, name), side, "New {}", FDD(state))
+                }
+            },
 
             Log::Update(side, path, name, old, new) =>
                 say!((path, name), side, "Change {} to {}",
@@ -508,12 +523,27 @@ pub fn run(config: &Config, storage: Arc<Storage>,
                            config.private_root.display()))?)
         .chain_err(|| "Failed to set up ancestor replica")?;
 
-    let nominal_log_level = (WARN as i32) + verbosity - quietness;
+    // Default to EDIT, but don't show newly created items under a directory
+    // which itself is now since that does not convey information.
+    let mut nominal_log_level = (EDIT as i32) + verbosity - quietness;
+
+    // Virtual log level between EDIT and INFO in which creations under new
+    // directories are also logged.
+    let include_creations_under_created_directory;
+    if nominal_log_level > (EDIT as i32) {
+        include_creations_under_created_directory = true;
+        nominal_log_level -= 1;
+    } else {
+        include_creations_under_created_directory = false;
+    }
+
     let level = max(FATAL as i32, min(255, nominal_log_level)) as LogLevel;
 
     let log = LoggerImpl {
         client_root: config.client_root.to_owned(),
         verbose_level: level,
+        include_creations_under_created_directory:
+            include_creations_under_created_directory,
         itemise_level: if !itemise {
             0
         } else if !itemise_unchanged {
@@ -523,6 +553,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         },
         include_ancestors: include_ancestors,
         colour: colour,
+        created_directories: RwLock::new(HashSet::new()),
     };
 
     // For some reason the type parms on `Context` are required
