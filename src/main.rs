@@ -26,7 +26,7 @@ extern crate libc;
 extern crate num_cpus;
 extern crate rand;
 extern crate regex;
-extern crate rpassword;
+#[cfg(passphrase_prompt)] extern crate rpassword;
 extern crate serde;
 extern crate serde_cbor;
 extern crate sqlite;

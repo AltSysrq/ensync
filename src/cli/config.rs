@@ -26,7 +26,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use flate2;
-use rpassword;
+#[cfg(passphrase_prompt)] use rpassword;
 use toml;
 
 use defs::PRIVATE_DIR_NAME;
@@ -316,6 +316,26 @@ impl FromStr for PassphraseConfig {
     }
 }
 
+#[cfg(passphrase_prompt)]
+fn do_prompt_passphrase(what: &str, confirm: bool) -> Result<Vec<u8>> {
+    let first = rpassword::prompt_password_stdout(
+        &format!("Enter {}: ", what))?;
+    if confirm {
+        let second = rpassword::prompt_password_stdout(
+            &format!("Retype {}: ", what))?;
+        if first != second {
+            return Err("Passwords do not match".into());
+        }
+    }
+    Ok(first.into())
+}
+
+#[cfg(not(passphrase_prompt))]
+fn do_prompt_passphrase(_: &str, _: bool) -> Result<Vec<u8>> {
+    Err("Reading the passphrase from the terminal is not supported in this \
+         build of Ensync (requires the `passphrase_prompt` feature)".into())
+}
+
 impl PassphraseConfig {
     /// Read the value of this passphrase value.
     ///
@@ -346,18 +366,8 @@ impl PassphraseConfig {
     fn read_passphrase_impl(&self, what: &str, confirm: bool)
                             -> Result<Vec<u8>> {
         match *self {
-            PassphraseConfig::Prompt => {
-                let first = rpassword::prompt_password_stdout(
-                    &format!("Enter {}: ", what))?;
-                if confirm {
-                    let second = rpassword::prompt_password_stdout(
-                        &format!("Retype {}: ", what))?;
-                    if first != second {
-                        return Err("Passwords do not match".into());
-                    }
-                }
-                Ok(first.into())
-            },
+            PassphraseConfig::Prompt =>
+                do_prompt_passphrase(what, confirm),
 
             PassphraseConfig::String(ref s) => Ok(s.clone().into()),
 

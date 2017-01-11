@@ -16,7 +16,7 @@ num_cpus = "1.2.1"
 quick-error = "1.1.0"
 rand = "0.3.15"
 regex = "0.1.80"
-rpassword = "0.3.0"
+rpassword = { version = "0.3.0", optional = true }
 # Non-1.0 status shouldn't be much of an issue since we're just using AES and
 # Scrypt.
 rust-crypto = "0.2.36"
@@ -30,9 +30,23 @@ toml = "0.2.1"
 [dependencies.clap]
 version = "2.20"
 default-features = false
-features = ["suggestions", "wrap_help"]
+features = []
 
 [dev-dependencies]
 quickcheck = "0.4.1"
 tempdir = "0.3.5"
 os_pipe = "0.2.0"
+
+[features]
+
+default = [ "passphrase_prompt", "nicities" ]
+
+# Enable to support prompting for a passphrase interactively.
+#
+# This depends on `rpassword`, which is not available on all platforms (e.g.,
+# it does not currently support DragonFly BSD).
+passphrase_prompt = [ "rpassword" ]
+
+# Enable some nicities for interactive use that may not be available on all
+# platforms.
+nicities = [ "clap/suggestions", "clap/wrap_help" ]
