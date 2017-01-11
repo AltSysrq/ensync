@@ -156,7 +156,7 @@ impl LoggerImpl {
                     FATAL => ("\x1B[1;31m", "FATAL"),
                     ERROR => ("\x1B[31m", "ERROR"),
                     WARN  => ("\x1B[33m", "WARN "),
-                    EDIT  => ("\x1B[34m", "EDIT "),
+                    EDIT  => ("\x1B[36m", "EDIT "),
                     INFO  => ("", "INFO "),
                     _ => panic!("Unexpected level {}", level),
                 };
@@ -169,11 +169,14 @@ impl LoggerImpl {
                 };
 
                 if ReplicaSide::Ancestor != side || self.include_ancestors {
-                    perrln!(concat!("[{}{}{}] {} {}: ", $extra),
+                    perrln!(concat!("[{}{}{}] {} {}{}{}: ", $extra),
                             if self.colour { start_colour } else { "" },
                             level_name,
                             if self.colour { "\x1B[0m" } else { "" },
-                            side_name, PathDisplay(&self.client_root, $path)
+                            side_name,
+                            if self.colour { "\x1B[1m" } else { "" },
+                            PathDisplay(&self.client_root, $path),
+                            if self.colour { "\x1B[0m" } else { "" }
                             $(, $arg)*);
                 }
             }}
@@ -181,9 +184,9 @@ impl LoggerImpl {
 
         match *what {
             Log::EnterDirectory(dir) =>
-                say!(dir, ReplicaSide::Client, "Entering directory"),
+                say!(dir, ReplicaSide::Client, "entering directory"),
             Log::LeaveDirectory(dir) =>
-                say!(dir, ReplicaSide::Client, "Leaving directory"),
+                say!(dir, ReplicaSide::Client, "leaving directory"),
 
             Log::Inspect(dir, name, reconciliation, conflict) => {
                 let recon_str = match reconciliation {
@@ -201,12 +204,12 @@ impl LoggerImpl {
                 let conflict_str = match conflict {
                     Conflict::NoConflict => Cow::Borrowed(""),
                     Conflict::EditDelete(deleted_side) => Cow::Owned(
-                        format!(" (conflict: deleted on {} side, \
+                        format!("\n        (conflict: deleted on {} side, \
                                  changed on {} side)",
                                 name_side(deleted_side),
                                 name_side(deleted_side.rev()))),
                     Conflict::EditEdit(client, server) => Cow::Owned(
-                        format!(" (conflict: {} changed locally, \
+                        format!("\n        (conflict: {} changed locally, \
                                  {} changed remotely)", name_edit(client),
                                 name_edit(server))),
                 };
@@ -226,23 +229,28 @@ impl LoggerImpl {
                         true, |p| !self.created_directories.read()
                             .unwrap().contains(p))
                 {
-                    say!((path, name), side, "New {}", FDD(state))
+                    say!((path, name), side, "create\
+                                              \n        + {}", FDD(state))
                 }
             },
 
             Log::Update(side, path, name, old, new) =>
-                say!((path, name), side, "Change {} to {}",
+                say!((path, name), side, "update\
+                                          \n        - {}\
+                                          \n        + {}",
                      FDD(old), FDD(new)),
 
             Log::Rename(side, path, old, new) =>
-                say!((path, old), side, "Rename to '{}'",
+                say!((path, old), side, "rename\
+                                         \n        -> {}",
                      new.as_path().display()),
 
             Log::Remove(side, path, name, state) =>
-                say!((path, name), side, "Remove {}", FDD(state)),
+                say!((path, name), side, "delete\
+                                          \n        - {}", FDD(state)),
 
             Log::Rmdir(side, path) =>
-                say!(path, side, "Remove directory"),
+                say!(path, side, "remove directory"),
 
             Log::Error(side, path, ref op, err) => {
                 match *op {
