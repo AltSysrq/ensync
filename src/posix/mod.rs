@@ -57,7 +57,7 @@ use std::io;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
-use libc::{utimes, futimes, timeval};
+use libc::{utimes, futimes, timeval, c_long};
 
 use defs::FileTime;
 
@@ -71,8 +71,8 @@ pub use self::replica::PosixReplica;
 /// Set the atime and mtime of the given file handle to the given time, in
 /// seconds.
 pub fn set_mtime(file: &fs::File, mtime: FileTime) -> io::Result<()> {
-    let access_modified = [ timeval { tv_sec: mtime, tv_usec: 0 },
-                            timeval { tv_sec: mtime, tv_usec: 0 } ];
+    let access_modified = [ timeval { tv_sec: mtime as c_long, tv_usec: 0 },
+                            timeval { tv_sec: mtime as c_long, tv_usec: 0 } ];
     let code = unsafe {
         futimes(file.as_raw_fd(), &access_modified[0])
     };
@@ -87,8 +87,8 @@ pub fn set_mtime(file: &fs::File, mtime: FileTime) -> io::Result<()> {
 /// Like `set_mtime`, but operates on a path instead.
 pub fn set_mtime_path<P : AsRef<Path>>(path: P, mtime: FileTime)
                                          -> io::Result<()> {
-    let access_modified = [ timeval { tv_sec: mtime, tv_usec: 0 },
-                            timeval { tv_sec: mtime, tv_usec: 0 } ];
+    let access_modified = [ timeval { tv_sec: mtime as c_long, tv_usec: 0 },
+                            timeval { tv_sec: mtime as c_long, tv_usec: 0 } ];
     let path = CString::new(
         path.as_ref().to_owned().into_os_string().into_vec())
         .expect("set_mtime_path path argument contains NUL");
