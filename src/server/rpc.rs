@@ -16,58 +16,312 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::fmt;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::sync::{Condvar, Mutex};
 
-use serde;
-use serde::bytes::ByteBuf;
-use serde_cbor;
+use fourleaf;
 
 use defs::HashId;
 use errors::*;
-use serde_types::rpc::*;
 use server::storage::*;
 
-#[allow(unused_parens)]
-fn read_frame<R : Read, T : serde::Deserialize + fmt::Debug>
-    (mut sin: R) -> Result<Option<T>>
-{
-    let mut frame_len_arr = [0u8;4];
-    match sin.read_exact(&mut frame_len_arr) {
-        Ok(_) => (),
-        Err(ref err) if io::ErrorKind::UnexpectedEof == err.kind() =>
-            return Ok(None),
-        Err(err) => return Err(err.into()),
-    }
-    let frame_len = (((frame_len_arr[0] as u32)      ) |
-                     ((frame_len_arr[1] as u32) <<  8) |
-                     ((frame_len_arr[2] as u32) << 16) |
-                     ((frame_len_arr[3] as u32) << 24));
-    let mut frame_data = sin.by_ref().take(frame_len as u64);
-    let res: serde_cbor::Result<T> = serde_cbor::from_reader(&mut frame_data);
+pub const PROTOCOL_VERSION_MAJOR: u32 = 0;
+pub const PROTOCOL_VERSION_MINOR: u32 = 0;
 
-    // Discard any extraneous frame data
-    {
-        let mut bytes = frame_data.bytes();
-        while let Some(Ok(_)) = bytes.next() { }
-    }
-
-    Ok(Some(try!(res)))
+/// Identifies a client or server implementation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImplementationInfo {
+    /// The name of the implementation, eg, "ensync"
+    pub name: String,
+    /// The major, minor, patch version of the implementation.
+    pub version: (u32, u32, u32),
+    /// The protocol version the implementation supports.
+    ///
+    /// Clients SHOULD send the latest protocol they support. The server
+    /// MUST respond to `ClientInfo` with `Error` if it does not support
+    /// the stated version. A server which supports a later version but
+    /// also supports that version MUST respond with a protocol version of
+    /// the same major version, but may include a different minor version.
+    /// A server which only supports protocol versions earlier than the
+    /// client's SHOULD respond with the latest protocol version it
+    /// supports; in this case, whether to continue is up to the client.
+    ///
+    /// A major version difference in the protocol indicates a change that
+    /// both sides must be aware of. A minor version difference implies
+    /// that the CBOR format is backwards-compatible, and that no new
+    /// server behaviours will be triggered without explicit opt-in by the
+    /// client.
+    ///
+    /// Note that the protocol version numbers both start at 0.
+    pub protocol: (u32, u32),
 }
 
-fn send_frame<W : Write, T : serde::Serialize>(mut out: W, obj: T)
-                                               -> Result<()> {
-    let data = try!(serde_cbor::to_vec(&obj));
-    let length: [u8;4] = [
-        ((data.len()      ) & 0xFF) as u8,
-        ((data.len() >>  8) & 0xFF) as u8,
-        ((data.len() >> 16) & 0xFF) as u8,
-        ((data.len() >> 24) & 0xFF) as u8,
-    ];
-    try!(out.write_all(&length));
-    try!(out.write_all(&data));
-    try!(out.flush());
+fourleaf_retrofit!(struct ImplementationInfo : {} {} {
+    |_context, this|
+    [1] name: String = &this.name,
+    [2] version: (u32, u32, u32) = this.version,
+    [3] protocol: (u32, u32) = this.protocol,
+    { Ok(ImplementationInfo { name: name, version: version,
+                              protocol: protocol }) }
+});
+
+impl ImplementationInfo {
+    /// Returns an `ImplementationInfo` for this implementation.
+    pub fn this_implementation() -> Self {
+        ImplementationInfo {
+            name: env!("CARGO_PKG_NAME").to_owned(),
+            version: (
+                env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
+                env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
+                env!("CARGO_PKG_VERSION_PATCH").parse().unwrap(),
+            ),
+            protocol: (PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR),
+        }
+    }
+}
+
+/// A RPC request sent to a remote server.
+///
+/// Different request types merit different responses; some involve no
+/// response at all.
+///
+/// See also `SERVER-WIRE.md` in the repository root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Request {
+    /// Does not correspond to a `Storage` method.
+    ///
+    /// Informs the server about client properties.
+    ///
+    /// Clients SHOULD send this as their first request.
+    ///
+    /// Response: One `ServerInfo` | `Error`.
+    ClientInfo {
+        /// The implementation information about the client.
+        implementation: ImplementationInfo,
+    },
+    /// `Storage::getdir`.
+    ///
+    /// Response: One `DirData` | `NotFound` | `Error`
+    GetDir(HashId),
+    /// `Storage::getobj`
+    ///
+    /// Response: One `ObjData` | `NotFound` | `Error`
+    GetObj(HashId),
+    /// `Storage::fordir`
+    ///
+    /// Response:
+    /// - Any number of `DirEntry`
+    /// - One `Done` | `Error`
+    ForDir,
+    /// `Storage::start_tx`
+    ///
+    /// No response.
+    StartTx(Tx),
+    /// `Storage::commit`
+    ///
+    /// Response: One `Done` | `Fail` | `Error`
+    Commit(Tx),
+    /// `Storage::abort`
+    ///
+    /// Response: One `Done` | `Error`
+    Abort(Tx),
+    /// `Storage::mkdir`
+    ///
+    /// No response.
+    Mkdir { tx: Tx, id: HashId, ver: HashId, data: Vec<u8>, },
+    /// `Storage::updir`
+    ///
+    /// No response.
+    Updir { tx: Tx, id: HashId, ver: HashId, old_len: u32,
+            append: Vec<u8>, },
+    /// `Storage::rmdir`
+    ///
+    /// No response.
+    Rmdir { tx: Tx, id: HashId, ver: HashId, old_len: u32, },
+    /// `Storage::linkobj`
+    ///
+    /// Response: One `Done` | `NotFound` | `Error`
+    Linkobj { tx: Tx, id: HashId, linkid: HashId },
+    /// `Storage::putobj`
+    ///
+    /// No response.
+    Putobj { tx: Tx, id: HashId, linkid: HashId, data: Vec<u8>, },
+    /// `Storage::unlinkobj`
+    ///
+    /// No response.
+    Unlinkobj { tx: Tx, id: HashId, linkid: HashId },
+    /// `Storage::clean_up`
+    ///
+    /// Response: One `Done`.
+    CleanUp,
+}
+
+fourleaf_retrofit!(enum Request : {} {} {
+    |_context|
+    [1] Request::ClientInfo { ref implementation } => {
+        [1] implementation: ImplementationInfo = implementation,
+        { Ok(Request::ClientInfo { implementation: implementation }) }
+    },
+    [2] Request::GetDir(ref id) => {
+        [1] id: HashId = id,
+        { Ok(Request::GetDir(id)) }
+    },
+    [3] Request::GetObj(ref id) => {
+        [1] id: HashId = id,
+        { Ok(Request::GetObj(id)) }
+    },
+    [4] Request::ForDir => {
+        { Ok(Request::ForDir) }
+    },
+    [5] Request::StartTx(tx) => {
+        [1] tx: Tx = tx,
+        { Ok(Request::StartTx(tx)) }
+    },
+    [6] Request::Commit(tx) => {
+        [1] tx: Tx = tx,
+        { Ok(Request::Commit(tx)) }
+    },
+    [7] Request::Abort(tx) => {
+        [1] tx: Tx = tx,
+        { Ok(Request::Abort(tx)) }
+    },
+    [8] Request::Mkdir { tx, ref id, ref ver, ref data } => {
+        [1] tx: Tx = tx,
+        [2] id: HashId = id,
+        [3] ver: HashId = ver,
+        [4] data: Vec<u8> = data,
+        { Ok(Request::Mkdir { tx: tx, id: id, ver: ver, data: data }) }
+    },
+    [9] Request::Updir { tx, ref id, ref ver, old_len, ref append } => {
+        [1] tx: Tx = tx,
+        [2] id: HashId = id,
+        [3] ver: HashId = ver,
+        [4] old_len: u32 = old_len,
+        [5] append: Vec<u8> = append,
+        { Ok(Request::Updir { tx: tx, id: id, ver: ver,
+                              old_len: old_len, append: append }) }
+    },
+    [10] Request::Rmdir { tx, ref id, ref ver, old_len } => {
+        [1] tx: Tx = tx,
+        [2] id: HashId = id,
+        [3] ver: HashId = ver,
+        [4] old_len: u32 = old_len,
+        { Ok(Request::Rmdir { tx: tx, id: id, ver: ver, old_len: old_len }) }
+    },
+    [11] Request::Linkobj { tx, ref id, ref linkid } => {
+        [1] tx: Tx = tx,
+        [2] id: HashId = id,
+        [3] linkid: HashId = linkid,
+        { Ok(Request::Linkobj { tx: tx, id: id, linkid: linkid }) }
+    },
+    [12] Request::Putobj { tx, ref id, ref linkid, ref data } => {
+        [1] tx: Tx = tx,
+        [2] id: HashId = id,
+        [3] linkid: HashId = linkid,
+        [4] data: Vec<u8> = data,
+        { Ok(Request::Putobj { tx: tx, id: id, linkid: linkid, data: data }) }
+    },
+    [13] Request::Unlinkobj { tx, ref id, ref linkid } => {
+        [1] tx: Tx = tx,
+        [2] id: HashId = id,
+        [3] linkid: HashId = linkid,
+        { Ok(Request::Unlinkobj { tx: tx, id: id, linkid: linkid }) }
+    },
+    [14] Request::CleanUp => {
+        { Ok(Request::CleanUp) }
+    },
+});
+
+/// Responses correspoinding to various `Request`s above.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Response {
+    /// The request was carried out successfully, and there is no
+    /// information to return.
+    Done,
+    /// The request was not executed due to conditions on the request.
+    Fail,
+    /// The server tried to execute the request, but failed to do so.
+    Error(String),
+    /// The server encountered an error and cannot continue.
+    ///
+    /// This is mainly for things like protocol faults where recovering
+    /// from a malformed stream is not generally possible. (Even if the
+    /// framing mechanism is still working correctly, if the request that
+    /// was not understood did not take a response, returning an error
+    /// would desynchronise the request/response pairing.)
+    FatalError(String),
+    /// The item referenced by the request does not exist.
+    NotFound,
+    /// Metadata (id, version, length) about a directory.
+    DirEntry(HashId, HashId, u32),
+    /// The version and full data of a directory.
+    DirData(HashId, Vec<u8>),
+    /// The full data of an object.
+    ObjData(Vec<u8>),
+    /// Identifies information about the server.
+    ServerInfo {
+        /// Information about the server implementation.
+        implementation: ImplementationInfo,
+        /// If set, the client should display the given plaintext message
+        /// to the user.
+        motd: Option<String>,
+    },
+}
+
+fourleaf_retrofit!(enum Response : {} {} {
+    |_context|
+    [1] Response::Done => { { Ok(Response::Done) } },
+    [2] Response::Fail => { { Ok(Response::Fail) } },
+    [3] Response::Error(ref msg) => {
+        [1] msg: String = msg,
+        { Ok(Response::Error(msg)) }
+    },
+    [4] Response::FatalError(ref msg) => {
+        [1] msg: String = msg,
+        { Ok(Response::FatalError(msg)) }
+    },
+    [5] Response::NotFound => { { Ok(Response::NotFound) } },
+    [6] Response::DirEntry(ref id, ref ver, len) => {
+        [1] id: HashId = id,
+        [2] ver: HashId = ver,
+        [3] len: u32 = len,
+        { Ok(Response::DirEntry(id, ver, len)) }
+    },
+    [7] Response::DirData(ref ver, ref data) => {
+        [1] ver: HashId = ver,
+        [2] data: Vec<u8> = data,
+        { Ok(Response::DirData(ver, data)) }
+    },
+    [8] Response::ObjData(ref data) => {
+        [1] data: Vec<u8> = data,
+        { Ok(Response::ObjData(data)) }
+    },
+    [9] Response::ServerInfo { ref implementation, ref motd } => {
+        [1] implementation: ImplementationInfo = implementation,
+        [2] motd: Option<String> = motd,
+        { Ok(Response::ServerInfo { implementation: implementation,
+                                    motd: motd }) }
+    },
+});
+
+fn read_frame<R : BufRead,
+              T : fourleaf::Deserialize<R, fourleaf::de::style::Copying> + ::std::fmt::Debug>
+    (mut sin: R) -> Result<Option<T>>
+{
+    if sin.fill_buf()?.is_empty() {
+        return Ok(None);
+    }
+
+    let mut config = fourleaf::DeConfig::default();
+    config.max_blob = 128 * 1024 * 1024;
+    let value = fourleaf::from_reader(sin, &config)?;
+    Ok(Some(value))
+}
+
+fn send_frame<W : Write, T : fourleaf::Serialize>(mut out: W, obj: T)
+                                                  -> Result<()> {
+    fourleaf::to_writer(&mut out, obj)?;
+    out.flush()?;
     Ok(())
 }
 
@@ -112,23 +366,23 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
                     motd: None,
                 }),
 
-            Request::GetDir(H(id)) => match storage.getdir(&id) {
+            Request::GetDir(id) => match storage.getdir(&id) {
                 Ok(Some((v, data))) =>
-                    Some(Response::DirData(H(v), ByteBuf::from(data))),
+                    Some(Response::DirData(v, data)),
                 Ok(None) => Some(Response::NotFound),
                 Err(err) => err!(err),
             },
 
-            Request::GetObj(H(id)) => match storage.getobj(&id) {
+            Request::GetObj(id) => match storage.getobj(&id) {
                 Ok(Some(data)) =>
-                    Some(Response::ObjData(ByteBuf::from(data))),
+                    Some(Response::ObjData(data)),
                 Ok(None) => Some(Response::NotFound),
                 Err(err) => err!(err),
             },
 
             Request::ForDir => {
                 match storage.for_dir(&mut |id, v, len| {
-                    write_response(sout, Response::DirEntry(H(*id), H(*v), len))
+                    write_response(sout, Response::DirEntry(*id, *v, len))
                 }) {
                     Ok(()) => Some(Response::Done),
                     Err(err) => err!(err),
@@ -152,22 +406,22 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
             },
 
             Request::Mkdir { tx, id, ver, data } => {
-                let _ = storage.mkdir(tx, &id.0, &ver.0, &data[..]);
+                let _ = storage.mkdir(tx, &id, &ver, &data[..]);
                 None
             },
 
             Request::Updir { tx, id, ver, old_len, append } => {
-                let _ = storage.updir(tx, &id.0, &ver.0, old_len, &append[..]);
+                let _ = storage.updir(tx, &id, &ver, old_len, &append[..]);
                 None
             },
 
             Request::Rmdir { tx, id, ver, old_len } => {
-                let _ = storage.rmdir(tx, &id.0, &ver.0, old_len);
+                let _ = storage.rmdir(tx, &id, &ver, old_len);
                 None
             },
 
             Request::Linkobj { tx, id, linkid } => {
-                match storage.linkobj(tx, &id.0, &linkid.0) {
+                match storage.linkobj(tx, &id, &linkid) {
                     Ok(true) => Some(Response::Done),
                     Ok(false) => Some(Response::NotFound),
                     Err(err) => err!(err),
@@ -175,12 +429,12 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
             },
 
             Request::Putobj { tx, id, linkid, data } => {
-                let _ = storage.putobj(tx, &id.0, &linkid.0, &data[..]);
+                let _ = storage.putobj(tx, &id, &linkid, &data[..]);
                 None
             },
 
             Request::Unlinkobj { tx, id, linkid } => {
-                let _ = storage.unlinkobj(tx, &id.0, &linkid.0);
+                let _ = storage.unlinkobj(tx, &id, &linkid);
                 None
             },
 
@@ -209,7 +463,7 @@ pub struct RemoteStorage {
     // it does match, the response is read and then the integer on `sin` is
     // incremented and all waiters on `cond` are notified.
     sout: Mutex<(Box<Write + Send>, u64)>,
-    sin: Mutex<(Box<Read + Send>, u64)>,
+    sin: Mutex<(Box<BufRead + Send>, u64)>,
     cond: Condvar,
 }
 
@@ -242,7 +496,7 @@ impl RemoteStorage {
         Ok(())
     }
 
-    fn send_sync_request<T, F : FnOnce (&mut Read) -> Result<T>>(
+    fn send_sync_request<T, F : FnOnce (&mut BufRead) -> Result<T>>(
         &self, req: Request, read: F) -> Result<T>
     {
         let ticket = {
@@ -290,9 +544,9 @@ impl RemoteStorage {
 impl Storage for RemoteStorage {
     fn getdir(&self, id: &HashId) -> Result<Option<(HashId, Vec<u8>)>> {
         handle_response!(try!(self.send_single_sync_request(
-            Request::GetDir(H(*id))
+            Request::GetDir(*id)
         )) => {
-            Response::DirData(H(v), data) =>
+            Response::DirData(v, data) =>
                 Ok(Some((v, data.into()))),
             Response::NotFound => Ok(None),
         })
@@ -300,7 +554,7 @@ impl Storage for RemoteStorage {
 
     fn getobj(&self, id: &HashId) -> Result<Option<Vec<u8>>> {
         handle_response!(try!(self.send_single_sync_request(
-            Request::GetObj(H(*id))
+            Request::GetObj(*id)
         )) => {
             Response::ObjData(data) => Ok(Some(data.into())),
             Response::NotFound => Ok(None),
@@ -316,7 +570,7 @@ impl Storage for RemoteStorage {
                     |r| r.ok_or(ErrorKind::ServerConnectionClosed.into())
                 )) => {
                     Response::Done => break,
-                    Response::DirEntry(H(id), H(v), l) => match f(&id, &v, l) {
+                    Response::DirEntry(id, v, l) => match f(&id, &v, l) {
                         Ok(()) => { },
                         // We can't return early on failure here as there are
                         // still more responses we need to consume.
@@ -357,29 +611,29 @@ impl Storage for RemoteStorage {
     fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, data: &[u8])
              -> Result<()> {
         self.send_async_request(Request::Mkdir {
-            tx: tx, id: H(*id), ver: H(*v), data: ByteBuf::from(data)
+            tx: tx, id: *id, ver: *v, data: data.to_owned()
         })
     }
 
     fn updir(&self, tx: Tx, id: &HashId, v: &HashId, old_len: u32,
              data: &[u8]) -> Result<()> {
         self.send_async_request(Request::Updir {
-            tx: tx, id: H(*id), ver: H(*v), old_len: old_len,
-            append: ByteBuf::from(data)
+            tx: tx, id: *id, ver: *v, old_len: old_len,
+            append: data.to_owned()
         })
     }
 
     fn rmdir(&self, tx: Tx, id: &HashId, v: &HashId, old_len: u32)
              -> Result<()> {
         self.send_async_request(Request::Rmdir {
-            tx: tx, id: H(*id), ver: H(*v), old_len: old_len
+            tx: tx, id: *id, ver: *v, old_len: old_len
         })
     }
 
     fn linkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
                -> Result<bool> {
         handle_response!(try!(self.send_single_sync_request(
-            Request::Linkobj { tx: tx, id: H(*id), linkid: H(*linkid) }
+            Request::Linkobj { tx: tx, id: *id, linkid: *linkid }
         )) => {
             Response::Done => Ok(true),
             Response::NotFound => Ok(false),
@@ -389,15 +643,15 @@ impl Storage for RemoteStorage {
     fn putobj(&self, tx: Tx, id: &HashId, linkid: &HashId, data: &[u8])
               -> Result<()> {
         self.send_async_request(Request::Putobj {
-            tx: tx, id: H(*id), linkid: H(*linkid),
-            data: ByteBuf::from(data)
+            tx: tx, id: *id, linkid: *linkid,
+            data: data.to_owned()
         })
     }
 
     fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
                  -> Result<()> {
         self.send_async_request(Request::Unlinkobj {
-            tx: tx, id: H(*id), linkid: H(*linkid),
+            tx: tx, id: *id, linkid: *linkid,
         })
     }
 
@@ -415,7 +669,6 @@ mod test {
 
     use os_pipe;
 
-    use serde_types::rpc::ImplementationInfo;
     use server::local_storage::LocalStorage;
     use super::*;
 

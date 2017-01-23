@@ -19,12 +19,13 @@
 use std::ffi;
 use std::io;
 
+use fourleaf;
 use serde_cbor;
 use sqlite;
 use tempfile;
 
 use defs::HashId;
-use serde_types;
+use server;
 
 error_chain! {
     types {
@@ -38,6 +39,8 @@ error_chain! {
         Sqlite(sqlite::Error);
         NullInString(ffi::NulError);
         SerdeCbor(serde_cbor::Error);
+        FourleafDeser(fourleaf::de::Error);
+        FourleafSer(fourleaf::stream::Error);
     }
 
     errors {
@@ -139,7 +142,7 @@ error_chain! {
             description("Server error")
             display("{}", err)
         }
-        UnexpectedServerResponse(response: serde_types::rpc::Response) {
+        UnexpectedServerResponse(response: server::rpc::Response) {
             description("Unexpected server response")
             display("Unexpected server response: {:?}", response)
         }

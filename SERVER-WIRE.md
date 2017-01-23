@@ -8,9 +8,6 @@ backend.
 
 MUST, MAY, and so forth follow the usual meaning.
 
-All integers are written in little-endian order. Integer types are named using
-their Rust names.
-
 ## Transport
 
 No underlying transport protocol is specified, though it must inherently be an
@@ -20,11 +17,8 @@ or timeouts here.
 
 ## Protocol
 
-The client and server streams are both separated into frames. Each frame begins
-with a `u32` indicating the number of bytes following the frame header. The
-frame payload follows; it is a CBOR object corresponding to a
-`serde_types::rpc::Request` or `serde_types::rpc::Response`; the exact CBOR
-format is simply however Serde causes that enumeration to be serialised.
+The server and the client send streams of fourleaf values conforming to the
+`Response` and `Request` enums defined in `rpc.rs`, respectively.
 
 Depending on the type, each client frame may require the server to send one or
 more response frames. The server MUST NOT send unsolicited frames, except that
