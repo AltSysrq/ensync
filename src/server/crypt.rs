@@ -157,7 +157,8 @@ use std::io::{Read, Write};
 use std::result::Result as StdResult;
 
 use chrono::{DateTime, NaiveDateTime, UTC};
-use fourleaf;
+use fourleaf::{self, UnknownFields};
+use fourleaf::adapt::Copied;
 use keccak;
 use rand::{Rng, OsRng};
 use rust_crypto::{aes, blockmodes, scrypt};
@@ -178,12 +179,14 @@ pub const BLKSZ: usize = 16;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdfList {
     pub keys: BTreeMap<String, KdfEntry>,
+    pub unknown: UnknownFields<'static>,
 }
 
 fourleaf_retrofit!(struct KdfList : {} {} {
     |_context, this|
     [1] keys: BTreeMap<String, KdfEntry> = &this.keys,
-    { Ok(KdfList { keys: keys }) }
+    (?) unknown: Copied<UnknownFields<'static>> = &this.unknown,
+    { Ok(KdfList { keys: keys, unknown: unknown.0 }) }
 });
 
 /// A single passphrase which may be used to derive the master key.
@@ -210,6 +213,7 @@ pub struct KdfEntry {
     /// The pairwise XOR of the master key with this derived key, allowing
     /// the master key to be derived once this derived key is known.
     pub master_diff: HashId,
+    pub unknown: UnknownFields<'static>,
 }
 
 #[derive(Clone, Copy)]
@@ -233,11 +237,13 @@ fourleaf_retrofit!(struct KdfEntry : {} {} {
     [5] salt: HashId = this.salt,
     [6] hash: HashId = this.hash,
     [7] master_diff: HashId = this.master_diff,
+    (?) unknown: Copied<UnknownFields<'static>> = &this.unknown,
     { Ok(KdfEntry { created: created.0,
                     updated: updated.map(|v| v.0),
                     used: used.map(|v| v.0),
                     algorithm: algorithm, salt: salt, hash: hash,
-                    master_diff: master_diff }) }
+                    master_diff: master_diff,
+                    unknown: unknown.0 }) }
 });
 
 thread_local! {
@@ -345,6 +351,7 @@ pub fn create_key(passphrase: &[u8], master: &MasterKey,
         salt: salt,
         hash: sha3(&derived),
         master_diff: hixor(&derived, &master.0),
+        unknown: UnknownFields::default(),
     }
 }
 

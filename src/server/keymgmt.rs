@@ -104,7 +104,8 @@ pub fn init_keys<S : Storage + ?Sized>(
 
         let master_key = MasterKey::generate_new();
         let mut kdflist = KdfList {
-            keys: BTreeMap::new()
+            keys: BTreeMap::new(),
+            unknown: Default::default(),
         };
         kdflist.keys.insert(
             key_name.to_owned(),
