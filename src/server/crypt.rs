@@ -156,7 +156,8 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::result::Result as StdResult;
 
-use chrono::{DateTime, UTC};
+use chrono::{DateTime, NaiveDateTime, UTC};
+use fourleaf;
 use keccak;
 use rand::{Rng, OsRng};
 use rust_crypto::{aes, blockmodes, scrypt};
@@ -166,10 +167,78 @@ use rust_crypto::symmetriccipher::{Decryptor, Encryptor, SymmetricCipherError};
 
 use defs::HashId;
 use errors::*;
-use serde_types::crypt::*;
 
 const SCRYPT_18_8_1: &'static str = "scrypt-18-8-1";
 pub const BLKSZ: usize = 16;
+
+/// Stored in cleartext fourleaf as directory `[0u8;32]`.
+///
+/// This stores the parameters used for the key-derivation function of each
+/// passphrase and how to move from a derived key to the master key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KdfList {
+    pub keys: BTreeMap<String, KdfEntry>,
+}
+
+fourleaf_retrofit!(struct KdfList : {} {} {
+    |_context, this|
+    [1] keys: BTreeMap<String, KdfEntry> = &this.keys,
+    { Ok(KdfList { keys: keys }) }
+});
+
+/// A single passphrase which may be used to derive the master key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KdfEntry {
+    /// The time this (logical) entry was created.
+    pub created: DateTime<UTC>,
+    /// The time this (logical) entry was last updated.
+    pub updated: Option<DateTime<UTC>>,
+    /// The time this entry was last used to derive the master key.
+    pub used: Option<DateTime<UTC>>,
+    /// The algorithm used.
+    ///
+    /// This includes the parameters used. Note that these are not parsed;
+    /// the possible combinations are hardwired.
+    ///
+    /// The only option right now is "scrypt-18-8-1".
+    pub algorithm: String,
+    /// The randomly-generated salt.
+    pub salt: HashId,
+    /// The SHA3 hash of the derived key, to determine whether the key is
+    /// correct.
+    pub hash: HashId,
+    /// The pairwise XOR of the master key with this derived key, allowing
+    /// the master key to be derived once this derived key is known.
+    pub master_diff: HashId,
+}
+
+#[derive(Clone, Copy)]
+struct SerDt(DateTime<UTC>);
+fourleaf_retrofit!(struct SerDt : {} {} {
+    |context, this|
+    [1] secs: i64 = this.0.naive_utc().timestamp(),
+    [2] nsecs: u32 = this.0.naive_utc().timestamp_subsec_nanos(),
+    { NaiveDateTime::from_timestamp_opt(secs, nsecs)
+      .ok_or(fourleaf::de::Error::InvalidValueMsg(
+          context.to_string(), "invalid timestamp"))
+      .map(|ndt| SerDt(DateTime::from_utc(ndt, UTC))) }
+});
+
+fourleaf_retrofit!(struct KdfEntry : {} {} {
+    |_context, this|
+    [1] created: SerDt = SerDt(this.created),
+    [2] updated: Option<SerDt> = this.updated.map(SerDt),
+    [3] used: Option<SerDt> = this.used.map(SerDt),
+    [4] algorithm: String = &this.algorithm,
+    [5] salt: HashId = this.salt,
+    [6] hash: HashId = this.hash,
+    [7] master_diff: HashId = this.master_diff,
+    { Ok(KdfEntry { created: created.0,
+                    updated: updated.map(|v| v.0),
+                    used: used.map(|v| v.0),
+                    algorithm: algorithm, salt: salt, hash: hash,
+                    master_diff: master_diff }) }
+});
 
 thread_local! {
     static RANDOM: RefCell<OsRng> = RefCell::new(
@@ -273,9 +342,9 @@ pub fn create_key(passphrase: &[u8], master: &MasterKey,
         updated: updated,
         used: used,
         algorithm: SCRYPT_18_8_1.to_owned(),
-        salt: H(salt),
-        hash: H(sha3(&derived)),
-        master_diff: H(hixor(&derived, &master.0)),
+        salt: salt,
+        hash: sha3(&derived),
+        master_diff: hixor(&derived, &master.0),
     }
 }
 
@@ -284,11 +353,11 @@ pub fn create_key(passphrase: &[u8], master: &MasterKey,
 pub fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
                              -> Option<MasterKey> {
     match entry.algorithm.as_str() {
-        SCRYPT_18_8_1 => Some(scrypt_18_8_1(passphrase, &entry.salt.0)),
+        SCRYPT_18_8_1 => Some(scrypt_18_8_1(passphrase, &entry.salt)),
         _ => None,
     }.and_then(|derived| {
-        if sha3(&derived) == entry.hash.0 {
-            Some(MasterKey(hixor(&derived, &entry.master_diff.0)))
+        if sha3(&derived) == entry.hash {
+            Some(MasterKey(hixor(&derived, &entry.master_diff)))
         } else {
             None
         }
@@ -575,7 +644,6 @@ mod test {
 
     use std::collections::BTreeMap;
 
-    use serde_types::crypt::KdfEntry;
     use super::*;
 
     #[test]

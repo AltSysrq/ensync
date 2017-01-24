@@ -21,14 +21,13 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, UTC};
-use serde_cbor;
+use fourleaf;
 
 use defs::HashId;
 use errors::*;
 use server::crypt::*;
 use server::storage::*;
 use server::dir::DIRID_KEYS;
-use serde_types::crypt::*;
 
 fn do_tx<S : Storage + ?Sized, R, F : FnMut (Tx) -> Result<R>>(
     storage: &S, mut f: F) -> Result<R>
@@ -56,8 +55,13 @@ fn do_tx<S : Storage + ?Sized, R, F : FnMut (Tx) -> Result<R>>(
 fn get_kdflist<S : Storage + ?Sized>(
     storage: &S) -> Result<Option<(KdfList, HashId, u32)>>
 {
+    let mut config = fourleaf::DeConfig::default();
+    config.max_blob = 16*1024*1024;
+    config.max_collect = 65536;
+
     if let Some((ver, data)) = storage.getdir(&DIRID_KEYS)? {
-        Ok(Some((serde_cbor::from_slice(&data)?, ver, data.len() as u32)))
+        Ok(Some((fourleaf::from_slice_copy(&data, &config)?, ver,
+                 data.len() as u32)))
     } else {
         Ok(None)
     }
@@ -67,7 +71,7 @@ fn put_kdflist<S : Storage + ?Sized>(storage: &S, kdf: &KdfList,
                                      tx: Tx, old: Option<(&HashId, u32)>)
                                      -> Result<(HashId, u32)> {
     let new_ver = rand_hashid();
-    let new_data = serde_cbor::to_vec(kdf)?;
+    let new_data = fourleaf::to_vec(kdf)?;
 
     if let Some((old_ver, old_len)) = old {
         storage.rmdir(tx, &DIRID_KEYS, old_ver, old_len)?;
