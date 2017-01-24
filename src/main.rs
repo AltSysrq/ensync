@@ -27,8 +27,6 @@ extern crate num_cpus;
 extern crate rand;
 extern crate regex;
 #[cfg(passphrase_prompt)] extern crate rpassword;
-extern crate serde;
-extern crate serde_cbor;
 extern crate sqlite;
 extern crate tempfile;
 extern crate tiny_keccak as keccak;
@@ -44,9 +42,6 @@ extern crate toml;
 
 mod defs;
 mod errors;
-mod serde_types {
-    include!(concat!(env!("OUT_DIR"), "/serde_types.rs"));
-}
 mod sql;
 mod work_stack;
 

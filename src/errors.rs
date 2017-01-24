@@ -20,7 +20,6 @@ use std::ffi;
 use std::io;
 
 use fourleaf;
-use serde_cbor;
 use sqlite;
 use tempfile;
 
@@ -38,7 +37,6 @@ error_chain! {
         Io(io::Error);
         Sqlite(sqlite::Error);
         NullInString(ffi::NulError);
-        SerdeCbor(serde_cbor::Error);
         FourleafDeser(fourleaf::de::Error);
         FourleafSer(fourleaf::stream::Error);
     }

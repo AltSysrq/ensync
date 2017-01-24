@@ -41,7 +41,7 @@
 //!
 //! For this discussion, we'll consider all forms of seed input to the key
 //! derivation system to be the "passphrase". Also look at `KdfList` and
-//! `KdfEntry` defined in `serde_types.in.rs`.
+//! `KdfEntry`.
 //!
 //! To protect the user's files, we encrypt them using a passphrase as a key in
 //! some way. A trivial approach would be to simply hash the passphrase and use
