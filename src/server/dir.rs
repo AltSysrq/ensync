@@ -33,11 +33,10 @@
 //! # Header format
 //!
 //! A directory file starts with a header. The header is a single _chunk_ as
-//! defined by the V0 format; the chunk contains a `Header` (see
-//! `serde_types.in.rs`) encoded with CBOR. The decoder must verify that the id
-//! and version in the header match the metadata returned alongside the data.
-//! The format indicated in the header dictates how the rest of the file is
-//! formatted.
+//! defined by the V0 format; the chunk contains a `Header` encoded with
+//! fourleaf. The decoder must verify that the id and version in the header
+//! match the metadata returned alongside the data. The format indicated in the
+//! header dictates how the rest of the file is formatted.
 //!
 //! # V0 format
 //!
@@ -49,8 +48,8 @@
 //! - A SHA-3 HMAC (32 bytes)
 //! - A 4-byte little-endian integer indicating the length of the data in
 //! bytes (including this integer, but not including the HMAC).
-//! - The content of the chunk in CBOR. For everything but the header, this is
-//! a `[v0::EntryPair]` as defined in `serde_types.in.rs`.
+//! - The content of the chunk in fourleaf. For everything but the header, this
+//! is a `[v0::EntryPair]`.
 //! - Arbitrary data padding the content to the declared number of BLKSZ-byte
 //! blocks.
 //!
@@ -69,9 +68,9 @@
 //! with that name in the whole directory, or non-existent if the directory
 //! never mentions that name.
 //!
-//! Deletions have an explicit state (`v0::Entry::X`) so that they can replace
-//! an existing file without rebuilding the whole directory state. When a
-//! rebuild does eventually happen, the explicit deleted entries are not
+//! Deletions have an explicit state (`v0::Entry::Deleted`) so that they can
+//! replace an existing file without rebuilding the whole directory state. When
+//! a rebuild does eventually happen, the explicit deleted entries are not
 //! preserved.
 
 use std::collections::HashMap;
@@ -82,19 +81,17 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::usize;
 
+use fourleaf::{self, Deserialize, Serialize, UnknownFields};
 use flate2;
 use keccak;
-use serde::{Deserialize, Serialize};
-use serde::bytes::Bytes;
-use serde_cbor;
 
 use defs::*;
 use errors::*;
 use block_xfer::*;
 use replica::ReplicaDirectory;
 use sql::{SendConnection, StatementEx};
-use serde_types::dir::*;
 use server::crypt::*;
 use server::storage::*;
 use server::transfer::ServerTransferOut;
@@ -107,6 +104,121 @@ pub const DIRID_KEYS: HashId = [0;32];
 /// various named roots.
 pub const DIRID_PROOT: HashId = [255;32];
 
+/// Stored in the first chunk of directory contents to describe the
+/// directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Header {
+    /// The id of this directory.
+    ///
+    /// This provides explicit protection against a directory file being
+    /// replaced.
+    pub dir_id: HashId,
+    /// The numeric version of these contents.
+    ///
+    /// This must match what was decoded from the directory metadata. It
+    /// prevents being able to roll a directory file back to an older
+    /// version.
+    ///
+    /// This also perturbs the directory content from the very first block.
+    pub ver: u64,
+    /// The binary format for the rest of the directory. Each version
+    /// corresponds to one of the `v*` submodules.
+    pub fmt: u32,
+}
+
+fourleaf_retrofit!(struct Header : {} {} {
+    |_context, this|
+    [1] dir_id: HashId = this.dir_id,
+    [2] ver: u64 = this.ver,
+    [3] fmt: u32 = this.fmt,
+    { Ok(Header { dir_id: dir_id, ver: ver, fmt: fmt }) }
+});
+
+mod v0 {
+    use fourleaf::UnknownFields;
+    use fourleaf::adapt::Copied;
+
+    use defs::*;
+
+    /// Describes the content of a single file.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum Entry {
+        /// A subdirectory with the given mode, as with
+        /// `FileData::Directory`, but also includes the id of that
+        /// subdirectory.
+        Directory {
+            mode: FileMode,
+            id: HashId,
+            unknown: UnknownFields<'static>,
+        },
+        /// A regular file. Mostly as with `FileData::Regular`, but also
+        /// includes the block size and a list of alternating object ids
+        /// comprising the file and their linkids.
+        Regular {
+            mode: FileMode,
+            size: FileSize,
+            time: FileTime,
+            hmac: HashId,
+            block_size: u32,
+            blocks: Vec<(HashId, HashId)>,
+            unknown: UnknownFields<'static>,
+        },
+        /// A symlink, as per `FileData::Symlink`.
+        Symlink {
+            target: Vec<u8>,
+            unknown: UnknownFields<'static>,
+        },
+        /// A deleted file.
+        Deleted {
+            unknown: UnknownFields<'static>,
+        },
+        /// An unrecognised entry.
+        Unknown(u64, UnknownFields<'static>),
+    }
+
+    fourleaf_retrofit!(enum Entry : {} {} {
+        |_context|
+        [1] Entry::Directory { mode, id, ref unknown } => {
+            [1] mode: FileMode = mode,
+            [2] id: HashId = id,
+            (?) unknown: Copied<UnknownFields<'static>> = unknown,
+            { Ok(Entry::Directory { mode: mode, id: id, unknown: unknown.0 }) }
+        },
+        [2] Entry::Regular { mode, size, time, hmac, block_size,
+                             ref blocks, ref unknown } => {
+            [1] mode: FileMode = mode,
+            [2] size: FileSize = size,
+            [3] time: FileTime = time,
+            [4] hmac: HashId = hmac,
+            [5] block_size: u32 = block_size,
+            [6] blocks: Vec<(HashId, HashId)> = blocks,
+            (?) unknown: Copied<UnknownFields<'static>> = unknown,
+            { Ok(Entry::Regular { mode: mode, size: size, time: time,
+                                  hmac: hmac, block_size: block_size,
+                                  blocks: blocks, unknown: unknown.0 }) }
+        },
+        [3] Entry::Symlink { ref target, ref unknown } => {
+            [1] target: Vec<u8> = target,
+            (?) unknown: Copied<UnknownFields<'static>> = unknown,
+            { Ok(Entry::Symlink { target: target, unknown: unknown.0 }) }
+        },
+        [4] Entry::Deleted { ref unknown } => {
+            (?) unknown: Copied<UnknownFields<'static>> = unknown,
+            { Ok(Entry::Deleted { unknown: unknown.0 }) }
+        },
+        (?) Entry::Unknown(discriminant, ref fields) => {
+            (=) discriminant: u64 = discriminant,
+            (?) fields: Copied<UnknownFields<'static>> = fields,
+            { Ok(Entry::Unknown(discriminant, fields.0)) }
+        }
+    });
+
+    /// Describes an edit for the given filename to the given content.
+    ///
+    /// Each chunk of a v0 directory (other than the first) is a sequence
+    /// of `EntryPair`s.
+    pub type EntryPair = (Vec<u8>, Entry);
+}
 /// Maintains the state of a server-side directory.
 ///
 /// Quite a bit of replica logic ends up here as a result of the transactional
@@ -198,7 +310,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
     pub fn subdir(parent: Arc<Self>, name: &OsStr) -> Result<Self> {
         let id = match *parent.lookup(&mut parent.content.lock().unwrap(),
                                       name)? {
-            v0::Entry::D(_, H(id)) => Ok(id),
+            v0::Entry::Directory { id, .. } => Ok(id),
             _ => Err(ErrorKind::NotADirectory),
         }?;
 
@@ -247,14 +359,15 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
 
     fn v0_entry_to_filedata(&self, e: &v0::Entry) -> Option<FileData> {
         match *e {
-            v0::Entry::D(mode, _) =>
+            v0::Entry::Directory { mode, .. } =>
                 Some(FileData::Directory(mode)),
-            v0::Entry::R(mode, size, time, H(hash), _, _) =>
-                Some(FileData::Regular(mode, size, time, hash)),
-            v0::Entry::S(ref target) =>
+            v0::Entry::Regular { mode, size, time, hmac, .. } =>
+                Some(FileData::Regular(mode, size, time, hmac)),
+            v0::Entry::Symlink { ref target, .. } =>
                 Some(FileData::Symlink(OsString::from_vec(
                     target.to_vec()))),
-            v0::Entry::X => None,
+            v0::Entry::Unknown(..) => Some(FileData::Special),
+            v0::Entry::Deleted { .. } => None,
         }
     }
 
@@ -266,7 +379,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             |(name, value)| (
                 name.to_owned(),
                 self.v0_entry_to_filedata(value)
-                    .expect("Entry::X in content.files"))).collect())
+                    .expect("Entry::Deleted in content.files"))).collect())
     }
 
     /// Remove a subdirectory of this directory for which `test` returns
@@ -287,7 +400,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             let mut child_name = None;
             let mut child_id = None;
             for (name, entry) in &content.files { match entry {
-                &v0::Entry::D(mode, H(id))
+                &v0::Entry::Directory { mode, id, .. }
                 if test(&name, mode, &id)? => {
                     child_name = Some(name.to_owned());
                     child_id = Some(id);
@@ -325,7 +438,9 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                                        &child_content.cipher_version,
                                        child_content.length)?;
                 }
-                self.add_entry(tx, content, name, v0::Entry::X)?;
+                self.add_entry(tx, content, name, v0::Entry::Deleted {
+                    unknown: UnknownFields::default()
+                })?;
                 Ok(child_id)
             } else {
                 // If this directory no longer exists, we basically succeeded.
@@ -374,27 +489,27 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             // Prepare to remove the file and ensure that it is what the caller
             // expects it to be.
             test(match self.lookup_opt(content, name)? {
-                Some(&v0::Entry::X) => panic!("Entry::X in content.files"),
-                Some(&v0::Entry::D(mode, H(id))) => {
+                Some(&v0::Entry::Deleted { .. }) => panic!("Entry::Deleted in content.files"),
+                Some(&v0::Entry::Directory { mode, id, .. }) => {
                     // Save the id of this subdirectory so we know what to
                     // write if `new` is also a subdirectory.
                     subdir_id = Some(id);
                     Some(FileData::Directory(mode))
                 },
-                Some(&v0::Entry::S(ref target)) =>
+                Some(&v0::Entry::Symlink{ ref target, .. }) =>
                     Some(FileData::Symlink(OsString::from_vec(
                         target.to_vec()))),
-                Some(&v0::Entry::R(mode, size, time, H(id), _, ref parts)) => {
+                Some(&v0::Entry::Regular { mode, size, time, hmac, ref blocks,
+                                           .. }) => {
                     // Prepare to replace this file by unlinking its
                     // constituents
-                    for i in 0..parts.len() / 2 {
-                        let H(ref id) = parts[i*2];
-                        let H(ref linkid) = parts[i*2 + 1];
+                    for &(ref id, ref linkid) in blocks {
                         self.storage.unlinkobj(tx, id, linkid)?;
                     }
 
-                    Some(FileData::Regular(mode, size, time, id))
+                    Some(FileData::Regular(mode, size, time, hmac))
                 },
+                Some(&v0::Entry::Unknown(..)) => Some(FileData::Special),
                 None => None,
             }.as_ref())?;
 
@@ -413,7 +528,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
 
             // Determine what the new entry is and prepare to write it.
             let new_entry = match new {
-                None => v0::Entry::X,
+                None => v0::Entry::Deleted { unknown: UnknownFields::default() },
                 Some(&FileData::Special) =>
                     panic!("Attempt to create special file on server"),
                 Some(&FileData::Directory(mode)) => {
@@ -423,10 +538,14 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                     } else {
                         self.create_directory(tx)?
                     };
-                    v0::Entry::D(mode, H(id))
+                    v0::Entry::Directory { mode: mode, id: id, unknown:
+                                           UnknownFields::default() }
                 },
                 Some(&FileData::Symlink(ref target)) =>
-                    v0::Entry::S(target.clone().into_vec().into()),
+                    v0::Entry::Symlink {
+                        target: target.clone().into_vec().into(),
+                        unknown: UnknownFields::default()
+                    },
                 Some(&FileData::Regular(mode, size, time, _)) => {
                     let mut xfer = xfer.as_mut().ok_or(ErrorKind::MissingXfer)?;
                     xfer.reset()?;
@@ -435,8 +554,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                         &mut xfer, self.block_size, self.key.hmac_secret(),
                         |blockid, block_data| {
                             let linkid = rand_hashid();
-                            blocks.push(H(*blockid));
-                            blocks.push(H(linkid));
+                            blocks.push((*blockid, linkid));
 
                             if !self.storage.linkobj(tx, &blockid, &linkid)? {
                                 self.upload_object(tx, &blockid, &linkid,
@@ -445,8 +563,13 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                             Ok(())
                         })?;
                     xfer.finish(&blocklist)?;
-                    v0::Entry::R(mode, size, time, H(blocklist.total),
-                                 self.block_size as u32, blocks)
+                    v0::Entry::Regular {
+                        mode: mode, size: size, time: time,
+                        hmac: blocklist.total,
+                        block_size: self.block_size as u32,
+                        blocks: blocks,
+                        unknown: UnknownFields::default(),
+                    }
                 },
             };
 
@@ -480,7 +603,9 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             let entry = self.lookup_opt(content, old)?
                 .ok_or(ErrorKind::NotFound)?.clone();
 
-            self.add_entry(tx, content, old.to_owned(), v0::Entry::X)?;
+            self.add_entry(tx, content, old.to_owned(), v0::Entry::Deleted {
+                unknown: UnknownFields::default()
+            })?;
             self.add_entry(tx, content, new.to_owned(), entry)?;
             Ok(Some(()))
         }).map(|_| ())?;
@@ -495,18 +620,18 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         let mut content = self.content.lock().unwrap();
         match self.lookup_opt(&mut content, name)? {
             None => Err(ErrorKind::ServerContentDeleted.into()),
-            Some(&v0::Entry::R(_, _, _, H(actual), bs, ref blocks)) => {
+            Some(&v0::Entry::Regular { hmac: actual, block_size,
+                                       ref blocks, .. }) => {
                 if *expected == actual {
                     Ok(ContentAddressableSource {
                         blocks: BlockList {
                             total: actual,
                             size: 0, // Not used
-                            blocks: blocks
-                                .chunks(2)
-                                .map(|v| v[0].0)
+                            blocks: blocks.iter()
+                                .map(|v| v.0)
                                 .collect(),
                         },
-                        block_size: bs as usize,
+                        block_size: block_size as usize,
                         fetch: Arc::new(ServerTransferOut::new(
                             self.storage.clone(), self.key.clone())),
                     })
@@ -594,7 +719,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
 
         // Ensure that we actually got the directory we asked for and the
         // version the server said was present.
-        if header.dir_id.0 != self.id {
+        if header.dir_id != self.id {
             return Err(ErrorKind::DirectoryEmbeddedIdMismatch(
                 self.path.clone()).into());
         }
@@ -651,9 +776,11 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         Ok(())
     }
 
-    fn read_v0_chunk<T : Deserialize>(&self,
-                                      data: &mut&[u8], prev_hmac: &mut HashId)
-                                      -> Result<Option<T>> {
+    fn read_v0_chunk<T : for<'a> Deserialize<
+            fourleaf::io::TransparentCursor<&'a [u8]>,
+            fourleaf::de::style::Copying>>
+        (&self, data: &mut&[u8], prev_hmac: &mut HashId) -> Result<Option<T>>
+    {
         // If data is completely empty, we're done.
         if data.is_empty() {
             return Ok(None);
@@ -687,7 +814,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         }
 
         let hmac_data = &data[..len_blocks * BLKSZ];
-        let cbor_data = &hmac_data[4..len_bytes];
+        let fl_data = &hmac_data[4..len_bytes];
         *data = &data[len_blocks * BLKSZ ..];
 
         // Verify this chunk's HMAC
@@ -708,7 +835,12 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         *prev_hmac = chunk_hmac;
 
         // Everything checks out, read the data from the chunk.
-        serde_cbor::from_slice(cbor_data).chain_err(
+        let mut config = fourleaf::DeConfig::default();
+        config.max_blob = usize::MAX;
+        config.max_collect = usize::MAX;
+        config.ignore_unknown_fields = false;
+        println!("Trying to deserialise: {:?}", fl_data);
+        fourleaf::from_slice_copy(fl_data, &config).map(Some).chain_err(
             || ErrorKind::ServerDirectoryCorrupt(
                 self.path.clone(),
                 "Chunk contains invalid data".to_owned()))
@@ -787,13 +919,13 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             &self.id, content.version, &self.key);
 
         let header = Header {
-            dir_id: H(self.id),
+            dir_id: self.id,
             ver: content.version,
             fmt: 0,
         };
 
         let entries = content.files.iter()
-            .map(|(k, v)| (Bytes::new(k.as_bytes()), v))
+            .map(|(k, v)| (k.as_bytes().to_owned(), v))
             .collect::<Vec<_>>();
         content.physical_entries = entries.len() as u32;
 
@@ -818,7 +950,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                     -> Result<()> {
         let mut cleartext = Vec::new();
         self.encode_chunk(&mut cleartext,
-                          &[(Bytes::new(name.as_bytes()), entry)],
+                          &[(name.as_bytes().to_owned(), entry)],
                           &mut content.prev_hmac);
 
         let mut ciphertext = Vec::<u8>::new();
@@ -839,8 +971,8 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         dst.extend(&UNKNOWN_HASH);
         dst.extend(&[0u8;4]);
         // Write the actual content
-        serde_cbor::ser::to_writer(dst, &value)
-            .expect("CBOR serialisation failed");
+        fourleaf::to_writer(&mut*dst, &value)
+            .expect("fourleaf serialisation failed");
 
         // Now we know enough to fill in the length
         let mut length = dst.len() - start - UNKNOWN_HASH.len();
@@ -903,7 +1035,10 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                 self.rewrite(tx, content, false)?;
                 // Add this directory to the parent
                 parent.add_entry(tx, parent_content, name.clone(),
-                                 v0::Entry::D(mode, H(self.id)))?;
+                                 v0::Entry::Directory {
+                                     mode: mode,
+                                     id: self.id,
+                                     unknown: UnknownFields::default() })?;
                 Ok(Some(()))
             })?;
             self.save_latest_dir_ver(content)?;
@@ -920,7 +1055,7 @@ impl DirContent {
         let name = OsString::from_vec(entry.0.into());
 
         match entry.1 {
-            v0::Entry::X => { self.files.remove(&name); },
+            v0::Entry::Deleted { .. } => { self.files.remove(&name); },
             e => { self.files.insert(name, e); },
         }
 
