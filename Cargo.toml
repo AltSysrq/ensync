@@ -6,7 +6,7 @@ authors = ["Jason Lingle <jason@lin.gl>"]
 [dependencies]
 chrono = { version = "0.2" }
 flate2 = "0.2.14"
-fourleaf = { path = "../fourleaf" }
+fourleaf = "0.1.0"
 error-chain = "0.7.1"
 libc = "0.2.18"
 num_cpus = "1.2.1"
