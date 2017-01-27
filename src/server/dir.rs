@@ -230,6 +230,7 @@ pub struct Dir<S : Storage + ?Sized + 'static> {
     pub parent: Option<Arc<Dir<S>>>,
     pub path: OsString,
 
+    // Lock hierarchy: Lock may not be acquired while lock on `content` is held.
     db: Arc<Mutex<SendConnection>>,
     key: Arc<MasterKey>,
     storage: Arc<S>,
@@ -237,7 +238,6 @@ pub struct Dir<S : Storage + ?Sized + 'static> {
     block_size: usize,
     compression: flate2::Compression,
 
-    // Lock hierarchy: Lock may not be acquired while lock on `db` is held.
     content: Mutex<DirContent>,
 }
 
@@ -678,7 +678,6 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             return Ok(());
         }
 
-        let db = self.db.lock().unwrap();
 
         let (cipher_version, cipher_data) = self.storage.getdir(&self.id)?
             // If missing, fail with `DirectoryMissing` instead of `NotFound`
@@ -689,12 +688,14 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
 
         // Validate that the version has not recessed from the latest thing we
         // ever successfully parsed.
-        if let Some((latest_ver, latest_len)) =
-            db.prepare("SELECT `ver`, `len` FROM `latest_dir_ver` \
+        if let Some((latest_ver, latest_len)) = {
+            let db = self.db.lock().unwrap();
+            let v = db.prepare("SELECT `ver`, `len` FROM `latest_dir_ver` \
                         WHERE `id` = ?1")
-            .binding(1, &self.id[..])
-            .first(|s| Ok((s.read::<i64>(0)?, s.read::<i64>(1)?)))?
-        {
+                .binding(1, &self.id[..])
+                .first(|s| Ok((s.read::<i64>(0)?, s.read::<i64>(1)?)))?;
+            v
+        } {
             if (version, cipher_data.len() as u64) <
                 (latest_ver as u64, latest_len as u64)
             {
@@ -758,7 +759,6 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         // Read all content successfully; write back to the current content and
         // record this as the latest version we've ever seen.
         *content = new_content;
-        drop(db);
 
         self.save_latest_dir_ver(&mut*content)?;
 
