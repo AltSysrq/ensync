@@ -839,7 +839,6 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         config.max_blob = usize::MAX;
         config.max_collect = usize::MAX;
         config.ignore_unknown_fields = false;
-        println!("Trying to deserialise: {:?}", fl_data);
         fourleaf::from_slice_copy(fl_data, &config).map(Some).chain_err(
             || ErrorKind::ServerDirectoryCorrupt(
                 self.path.clone(),
