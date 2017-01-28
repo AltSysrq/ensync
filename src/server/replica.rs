@@ -249,7 +249,9 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
                 .binding(1, &id[..])
                 .binding(2, ver as i64)
                 .binding(3, length as i64)
-                .exists()?
+                .exists()
+                .chain_err(|| "Error testing whether server \
+                               directory is dirty")?
             {
                 // Either the directory is still clean (ver and len match), or
                 // we don't have any entry for it at all.
@@ -262,15 +264,18 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
                 next_target = db.prepare("SELECT `parent` FROM `clean_dir` \
                                           WHERE `id` = ?1 AND `parent` IS NOT NULL")
                     .binding(1, &target[..])
-                    .first(|s| s.read::<Vec<u8>>(0))?;
+                    .first(|s| s.read::<Vec<u8>>(0))
+                    .chain_err(|| "Error finding parent of dirty \
+                                   server directory")?;
 
                 db.prepare("DELETE FROM `clean_dir` WHERE `id` = ?1")
                     .binding(1, &target[..])
-                    .run()?;
+                    .run()
+                    .chain_err(|| "Error marking server directory dirty")?;
             }
 
             Ok(())
-        })
+        }).chain_err(|| "Error while iterating server directories")
     }
 
     fn clean_up(&self) -> Result<()> {

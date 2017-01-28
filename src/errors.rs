@@ -139,7 +139,7 @@ error_chain! {
         }
         ServerError(err: String) {
             description("Server error")
-            display("{}", err)
+            display("Server error: {}", err)
         }
         UnexpectedServerResponse(response: server::rpc::Response) {
             description("Unexpected server response")

@@ -46,11 +46,10 @@ pub struct ImplementationInfo {
     /// client's SHOULD respond with the latest protocol version it
     /// supports; in this case, whether to continue is up to the client.
     ///
-    /// A major version difference in the protocol indicates a change that
-    /// both sides must be aware of. A minor version difference implies
-    /// that the CBOR format is backwards-compatible, and that no new
-    /// server behaviours will be triggered without explicit opt-in by the
-    /// client.
+    /// A major version difference in the protocol indicates a change that both
+    /// sides must be aware of. A minor version difference implies that the
+    /// fourleaf format is backwards-compatible, and that no new server
+    /// behaviours will be triggered without explicit opt-in by the client.
     ///
     /// Note that the protocol version numbers both start at 0.
     pub protocol: (u32, u32),
@@ -492,7 +491,8 @@ impl RemoteStorage {
 
     fn send_async_request(&self, req: Request) -> Result<()> {
         let mut sout = self.sout.lock().unwrap();
-        try!(send_frame(&mut sout.0, req));
+        send_frame(&mut sout.0, req).chain_err(
+            || "Error writing request to server")?;
         Ok(())
     }
 
@@ -501,7 +501,8 @@ impl RemoteStorage {
     {
         let ticket = {
             let mut sout = self.sout.lock().unwrap();
-            try!(send_frame(&mut sout.0, req));
+            send_frame(&mut sout.0, req).chain_err(
+                || "Error writing request to server")?;
             let t = sout.1;
             sout.1 += 1;
             t
@@ -514,7 +515,8 @@ impl RemoteStorage {
             }
             sin.1 += 1;
 
-            let ret = read(&mut*sin.0);
+            let ret = read(&mut*sin.0).chain_err(
+                || "Error reading server response");
             self.cond.notify_all();
             ret
         }

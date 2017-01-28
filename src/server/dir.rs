@@ -455,7 +455,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             db.prepare(
                 "DELETE FROM `latest_dir_ver` WHERE `id` = ?1")
                 .binding(1, &child_id[..])
-                .run()?;
+                .run().chain_err(|| "Error cleaning up latest_dir_ver")?;
         }
 
         Ok(child_id.is_some())
@@ -772,7 +772,8 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             .binding(1, &self.id[..])
             .binding(2, content.version as i64)
             .binding(3, content.length as u64 as i64)
-            .run()?;
+            .run()
+            .chain_err(|| "Failed to save latest directory version")?;
         Ok(())
     }
 
