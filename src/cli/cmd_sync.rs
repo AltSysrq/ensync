@@ -427,7 +427,9 @@ impl LoggerImpl {
             Log::Inspect(parent, name, Reconciliation::InSync, _) |
             Log::Inspect(parent, name, Reconciliation::Unsync, _) |
             Log::Inspect(parent, name, Reconciliation::Irreconcilable, _) => {
-                // TODO We should get the actual file type here too
+                // We can't really output a file type even if the data were
+                // included in this log type, since the three replicas could
+                // each have a different file type.
                 say!(LineItem {
                     fill: Some(' '),
                     update_type: Some('.'),
