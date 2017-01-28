@@ -23,7 +23,7 @@ use fourleaf;
 use sqlite;
 use tempfile;
 
-use defs::HashId;
+use defs::{DisplayHash, HashId};
 use server;
 
 error_chain! {
@@ -75,8 +75,9 @@ error_chain! {
             display("Invalid hash value in database")
         }
         HmacMismatch(context: &'static str, expected: HashId, actual: HashId) {
-            description("HMAC does not match content")
-            display("HMAC does not match content")
+            description("Block HMAC does not match content")
+            display("Block HMAC does not match content (expected {}, got {})",
+                    DisplayHash(*expected), DisplayHash(*actual))
         }
         AllSuffixesInUse {
             description("Shunt failed: All file suffixes in use")

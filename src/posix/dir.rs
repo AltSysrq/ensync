@@ -116,6 +116,10 @@ impl DirHandle {
         }))
     }
 
+    pub fn path(&self) -> &Path {
+        &self.0.path
+    }
+
     pub fn name(&self) -> &OsStr {
         &self.0.name
     }

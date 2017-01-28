@@ -55,6 +55,11 @@ pub struct PosixReplica {
     tmpix: AtomicUsize,
 }
 
+fn path_metadata(path: &Path) -> Result<fs::Metadata> {
+    fs::symlink_metadata(path).chain_err(
+        || format!("Error reading metadata for '{}'", path.display()))
+}
+
 fn metadata_to_fd(path: &Path, md: &fs::Metadata,
                   dao: &Dao, calc_hash_if_unknown: bool,
                   config: &Config)
@@ -72,17 +77,21 @@ fn metadata_to_fd(path: &Path, md: &fs::Metadata,
     if typ.is_dir() {
         Ok(FileData::Directory(md.mode() & 0o7777))
     } else if typ.is_symlink() {
-        let target = try!(fs::read_link(path)).into_os_string();
+        let target = fs::read_link(path)
+            .chain_err(|| format!("Failed to read symlink '{}'", path.display()))?
+            .into_os_string();
         Ok(FileData::Symlink(target))
     } else if typ.is_file() {
         let mode = md.mode() & 0o7777;
         let mtime = md.mtime();
         let ino = md.ino();
         let size = md.size();
-        let hash = try!(get_or_compute_hash(
+        let hash = get_or_compute_hash(
             path, dao, &InodeStatus {
                 ino: ino, mtime: mtime, size: size,
-            }, calc_hash_if_unknown, config));
+            }, calc_hash_if_unknown, config)
+            .chain_err(|| format!("Failed to compute hash of regular file '{}'",
+                                  path.display()))?;
         Ok(FileData::Regular(mode, size, mtime, hash))
     } else {
         Ok(FileData::Special)
@@ -92,8 +101,10 @@ fn metadata_to_fd(path: &Path, md: &fs::Metadata,
 fn get_or_compute_hash(path: &Path, dao: &Dao, stat: &InodeStatus,
                        calc_hash_if_unknown: bool,
                        config: &Config) -> Result<HashId> {
-    if let Some(cached) = try!(dao.cached_file_hash(
-        path.as_os_str(), stat, config.cache_generation))
+    if let Some(cached) = dao.cached_file_hash(
+        path.as_os_str(), stat, config.cache_generation)
+        .chain_err(|| format!("Error checking for cached hash for '{}'",
+                              path.display()))?
     {
         return Ok(cached);
     }
@@ -102,9 +113,12 @@ fn get_or_compute_hash(path: &Path, dao: &Dao, stat: &InodeStatus,
         return Ok(UNKNOWN_HASH);
     }
 
-    let blocklist = try!(stream_to_blocks(
-        try!(fs::File::open(path)), config.block_size, &config.hmac_secret[..],
-        |_,_| Ok(())));
+    let file = fs::File::open(path).chain_err(
+        || format!("Unable to open '{}'", path.display()))?;
+    let blocklist = stream_to_blocks(
+        file, config.block_size, &config.hmac_secret[..],
+        |_,_| Ok(()))
+        .chain_err(|| format!("Error reading '{}'", path.display()))?;
     let _ = dao.cache_file_hashes(
         path.as_os_str(), &blocklist.total, &blocklist.blocks[..],
         config.block_size, stat, config.cache_generation);
@@ -146,8 +160,10 @@ impl Replica for PosixReplica {
     }
 
     fn set_dir_clean(&self, dir: &DirHandle) -> Result<bool> {
-        try!(self.dao.lock().unwrap().set_dir_clean(
-            &dir.full_path_with_trailing_slash(), &dir.hash()));
+        self.dao.lock().unwrap().set_dir_clean(
+            &dir.full_path_with_trailing_slash(), &dir.hash())
+            .chain_err(|| format!("Failed to mark '{}' clean",
+                                  dir.path().display()))?;
         Ok(true)
     }
 
@@ -168,13 +184,18 @@ impl Replica for PosixReplica {
                 {
                     return Ok(ret);
                 } else {
-                    return Err(err.into());
+                    let r: io::Result<()> = Err(err);
+                    r.chain_err(
+                        || format!("Error listing directory '{}'",
+                                   dir.path().display()))?;
+                    unreachable!()
                 }
             },
 
         };
         for entry in entries {
-            let entry = try!(entry);
+            let entry = entry.chain_err(
+                || format!("Error listing directory '{}'", dir.path().display()))?;
 
             let name = entry.file_name();
             if OsStr::new(".") == &name ||
@@ -183,9 +204,12 @@ impl Replica for PosixReplica {
                 continue;
             }
 
-            let fd = try!(metadata_to_fd(
-                &entry.path(), &try!(entry.metadata()),
-                &*self.dao.lock().unwrap(), true, &*self.config));
+            let md = entry.metadata().chain_err(
+                || format!("Error reading file metadata for '{}'",
+                           entry.path().display()))?;
+            let fd = metadata_to_fd(
+                &entry.path(), &md,
+                &*self.dao.lock().unwrap(), true, &*self.config)?;
             dir.toggle_file(File(&name, &fd));
             ret.push((name, fd));
         }
@@ -195,8 +219,8 @@ impl Replica for PosixReplica {
 
     fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
               -> Result<()> {
-        try!(assert_sane_filename(old));
-        try!(assert_sane_filename(new));
+        assert_sane_filename(old)?;
+        assert_sane_filename(new)?;
 
         // Make sure the name under `new` doesn't already exist. This isn't
         // quite atomic with the rest of the operation, but there's no way to
@@ -206,17 +230,22 @@ impl Replica for PosixReplica {
         match fs::symlink_metadata(&new_path) {
             Ok(_) => return Err(ErrorKind::RenameDestExists.into()),
             Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
-            Err(e) => return Err(e.into()),
+            err => err.chain_err(
+                || format!("Failied to check whether '{}' exists",
+                           new_path.display())).map(|_| ())?,
         }
 
         // Get the file data representation so we can remove/add it to the sum
         // hash of the directory state.
         let old_path = dir.child(old);
-        let fd = try!(metadata_to_fd(
-            &old_path, &try!(fs::symlink_metadata(&old_path)),
-            &*self.dao.lock().unwrap(), false, &*self.config));
+        let old_md = path_metadata(&old_path)?;
+        let fd = metadata_to_fd(
+            &old_path, &old_md,
+            &*self.dao.lock().unwrap(), false, &*self.config)?;
 
-        try!(fs::rename(&old_path, &new_path));
+        fs::rename(&old_path, &new_path).chain_err(
+            || format!("Failed to rename '{}' to '{}'",
+                       old_path.display(), new_path.display()))?;
 
         // Update the directory state hash accordingly
         dir.toggle_file(File(old, &fd));
@@ -226,12 +255,12 @@ impl Replica for PosixReplica {
     }
 
     fn remove(&self, dir: &mut DirHandle, target: File) -> Result<()> {
-        try!(assert_sane_filename(target.0));
+        assert_sane_filename(target.0)?;
 
         let path = dir.child(target.0);
-        try!(self.check_matches(&path, target.1));
+        self.check_matches(&path, target.1)?;
 
-        try!(self.remove_general(&path, target.1));
+        self.remove_general(&path, target.1)?;
 
         let _ = self.dao.lock().unwrap().delete_cache(path.as_os_str());
         dir.toggle_file(target);
@@ -242,11 +271,11 @@ impl Replica for PosixReplica {
     fn create(&self, dir: &mut DirHandle, source: File,
               xfer: Option<ContentAddressableSource>)
               -> Result<FileData> {
-        try!(assert_sane_filename(source.0));
-        try!(dir.create_if_needed(self, None));
+        assert_sane_filename(source.0)?;
+        dir.create_if_needed(self, None)?;
 
         let path = dir.child(source.0);
-        let ret = try!(self.put_file(dir, source, xfer, || {
+        let ret = self.put_file(dir, source, xfer, || {
             // Make sure the file doesn't already exist.
             // This is a bit racy since we have no way to atomically create the
             // file with the desired content if and only if no file with that name
@@ -255,9 +284,14 @@ impl Replica for PosixReplica {
                 Ok(_) => Err(ErrorKind::CreateExists.into()),
                 Err(ref err) if io::ErrorKind::NotFound == err.kind() =>
                     Ok(()),
-                Err(err) => Err(err.into()),
+                err => {
+                    err.chain_err(
+                        || format!("Error checking whether '{}' exists",
+                                   path.display()))?;
+                    unreachable!()
+                },
             }
-        }));
+        })?;
 
         dir.toggle_file(source);
         return Ok(ret);
@@ -267,7 +301,7 @@ impl Replica for PosixReplica {
               old: &FileData, new: &FileData,
               xfer: Option<ContentAddressableSource>)
               -> Result<FileData> {
-        try!(assert_sane_filename(name));
+        assert_sane_filename(name)?;
 
         let path = dir.child(name);
 
@@ -277,15 +311,19 @@ impl Replica for PosixReplica {
             (&FileData::Directory(m1), h1, &FileData::Directory(m2), h2) |
             (&FileData::Regular(m1,_,_,h1), _, &FileData::Regular(m2,_,_,h2), _)
             if h1 == h2 => {
-                try!(self.check_matches(&path, old));
+                self.check_matches(&path, old)?;
                 if m1 != m2 {
-                    try!(fs::set_permissions(
-                        &path, fs::Permissions::from_mode(m2)));
+                    fs::set_permissions(
+                        &path, fs::Permissions::from_mode(m2)).chain_err(
+                        || format!("Error setting permissions on '{}'",
+                                   path.display()))?;
                 }
                 if let (&FileData::Regular(_, _, t1, _),
                         &FileData::Regular(_, _, t2, _))  = (old, new) {
                     if t1 != t2 {
-                        try!(posix::set_mtime_path(&path, t2));
+                        posix::set_mtime_path(&path, t2).chain_err(
+                            || format!("Error setting mtime on '{}'",
+                                       path.display()))?;
                     }
                 }
                 dir.toggle_file(File(name, old));
@@ -296,8 +334,8 @@ impl Replica for PosixReplica {
         }
 
         let mut shunted_name = None;
-        let ret = try!(self.put_file(dir, File(name, new), xfer, || {
-            try!(self.check_matches(&path, old));
+        let ret = self.put_file(dir, File(name, new), xfer, || {
+            self.check_matches(&path, old)?;
 
             // Table of what we need to do before updating:
             //        old
@@ -325,13 +363,15 @@ impl Replica for PosixReplica {
             // like a situation that would come up meaningfully often, and the
             // atomic replacement is generally more important.
             if old.is_dir() || new.is_dir() {
-                shunted_name = Some(try!(self.shunt_file(&path)));
+                shunted_name = Some(self.shunt_file(&path)?);
             }
             Ok(())
-        }));
+        })?;
 
         if let Some(shunted) = shunted_name {
-            try!(self.remove_general(&shunted, old));
+            self.remove_general(&shunted, old).chain_err(
+                || format!("Failed to remove shunted file '{}'",
+                           shunted.display()))?;
         }
 
         dir.toggle_file(File(name, old));
@@ -342,10 +382,10 @@ impl Replica for PosixReplica {
 
     fn chdir(&self, dir: &DirHandle, subdir: &OsStr)
              -> Result<DirHandle> {
-        try!(assert_sane_filename(subdir));
+        assert_sane_filename(subdir)?;
 
         let path = dir.child(subdir);
-        let md = try!(fs::symlink_metadata(&path));
+        let md = path_metadata(&path)?;
         if !md.file_type().is_dir() {
             Err(ErrorKind::NotADirectory.into())
         } else if md.dev() != self.config.root_dev {
@@ -361,21 +401,25 @@ impl Replica for PosixReplica {
     }
 
     fn rmdir(&self, subdir: &mut DirHandle) -> Result<()> {
-        let dir = try!(subdir.parent().cloned().ok_or(ErrorKind::RmdirRoot));
+        let dir = subdir.parent().cloned().ok_or(ErrorKind::RmdirRoot)?;
         let path = dir.child(subdir.name());
         match fs::symlink_metadata(&path) {
             Ok(md) => {
                 match fs::remove_dir(&path) {
                     Ok(()) => { },
                     Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
-                    Err(e) => return Err(e.into()),
+                    err => err.chain_err(
+                        || format!("Error removing directory '{}'",
+                                   path.display()))?,
                 }
                 dir.toggle_file(File(path.file_name().unwrap(),
                                      &FileData::Directory(
                                          md.mode() & 0o7777)));
             },
             Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
-            Err(e) => return Err(e.into()),
+            err => err.chain_err(
+                || format!("Error reading metadata for '{}'", path.display()))
+                .map(|_| ())?,
         }
         Ok(())
     }
@@ -400,13 +444,13 @@ impl Replica for PosixReplica {
 
     fn prepare (&self) -> Result<()> {
         // Reclaim any files left over from a crashed run
-        try!(self.clean_scratch());
+        self.clean_scratch()?;
 
         // Walk all directories marked clean and check whether they are still
         // clean.
         let dao = self.dao.lock().unwrap();
-        for clean_dir in try!(dao.iter_clean_dirs()) {
-            let (path, expected_hash) = try!(clean_dir);
+        for clean_dir in dao.iter_clean_dirs()? {
+            let (path, expected_hash) = clean_dir?;
             let dir = DirHandle::root(path.into());
 
             if let Ok(mut diriter) = fs::read_dir(dir.full_path()) {
@@ -418,15 +462,18 @@ impl Replica for PosixReplica {
                         continue;
                     }
 
-                    let fd = try!(metadata_to_fd(
-                        &entry.path(), &try!(entry.metadata()),
-                        &*dao, false, &*self.config));
+                    let md = entry.metadata().chain_err(
+                        || format!("Error reading metadata for '{}'",
+                                   entry.path().display()))?;
+                    let fd = metadata_to_fd(
+                        &entry.path(), &md,
+                        &*dao, false, &*self.config)?;
                     dir.toggle_file(File(&name, &fd));
                 }
             }
 
             if expected_hash != dir.hash() {
-                try!(dao.set_dir_dirty(&dir.full_path_with_trailing_slash()));
+                dao.set_dir_dirty(&dir.full_path_with_trailing_slash())?;
             }
         }
 
@@ -434,7 +481,7 @@ impl Replica for PosixReplica {
     }
 
     fn clean_up(&self) -> Result<()> {
-        try!(self.clean_scratch());
+        self.clean_scratch()?;
         let _ = self.dao.lock().unwrap().prune_hash_cache(
             &self.config.root.as_os_str(),
             self.config.cache_generation);
@@ -457,14 +504,14 @@ impl PosixReplica {
         let root = root.as_ref();
         let private_dir = private_dir.as_ref();
 
-        let dao = try!(Dao::open(
+        let dao = Dao::open(
             &private_dir.join("db.sqlite").to_str()
                 .ok_or_else(
                     || format!("Path '{}' is not valid UTF-8",
-                               private_dir.display()))?));
-        let cache_generation = try!(dao.next_generation());
-        let root_dev = try!(fs::symlink_metadata(root)).dev();
-        let private_dev = try!(fs::symlink_metadata(private_dir)).dev();
+                               private_dir.display()))?)?;
+        let cache_generation = dao.next_generation()?;
+        let root_dev = path_metadata(root)?.dev();
+        let private_dev = path_metadata(private_dir)?.dev();
 
         if root_dev != private_dev {
             return Err(ErrorKind::PrivateXDev.into());
@@ -541,12 +588,15 @@ impl PosixReplica {
         for sfx in 1..65536 {
             let mut new_path = old_path.as_os_str().to_owned();
             new_path.push(format!("!{}", sfx));
+            let new_path = PathBuf::from(new_path);
 
             if let Err(err) = fs::symlink_metadata(&new_path) {
                 if io::ErrorKind::NotFound == err.kind() {
-                    try!(fs::rename(old_path, &new_path));
+                    fs::rename(old_path, &new_path).chain_err(
+                        || format!("Failed to shunt '{}' to '{}'",
+                                   old_path.display(), new_path.display()))?;
                     let _ = self.dao.lock().unwrap().rename_cache(
-                        old_path.as_os_str(), &new_path);
+                        old_path.as_os_str(), &new_path.as_os_str());
                     return Ok(new_path.into());
                 } else {
                     return Err(err.into());
@@ -577,41 +627,59 @@ impl PosixReplica {
                 panic!("Attempted to create generic special file locally"),
 
             FileData::Directory(mode) => {
-                try!(before_establish());
+                before_establish()?;
                 let path = dir.child(source.0);
-                try!(fs::DirBuilder::new()
-                     .mode(mode)
-                     .create(&path));
+                fs::DirBuilder::new()
+                    .mode(mode)
+                    .create(&path)
+                    .chain_err(|| format!(
+                        "Error creating directory at '{}'", path.display()))?;
                 // mkdir() restricts the mode via umask, so we need to make
                 // another call to get the mode we actually want.
-                try!(fs::set_permissions(
-                    &path, fs::Permissions::from_mode(mode)));
+                fs::set_permissions(
+                    &path, fs::Permissions::from_mode(mode)).chain_err(
+                    || format!(
+                        "Error setting permissions on directory '{}'",
+                        path.display()))?;
                 Ok(source.1.clone())
             },
 
             FileData::Symlink(ref target) => {
-                let (_, scratch_path) = try!(self.scratch_file(
-                    |path| unix::fs::symlink(target, path)));
-                try!(before_establish());
-                try!(fs::rename(&scratch_path, &dir.child(source.0)));
+                let (_, scratch_path) = self.scratch_file(
+                    |path| unix::fs::symlink(target, path)).chain_err(
+                    || "Failed to create temporary symlink")?;
+                before_establish()?;
+                fs::rename(&scratch_path, &dir.child(source.0)).chain_err(
+                    || format!("Failed to move new symlink to '{}'",
+                               dir.child(source.0).display()))?;
                 Ok(source.1.clone())
             },
 
             FileData::Regular(mode, _, time, _) => {
                 let (mut scratch_file, scratch_path) =
-                    try!(self.scratch_regular(0o600));
+                    self.scratch_regular(0o600)?;
                 if let Some(xfer) = xfer {
                     // Copy the file to the local filesystem
-                    try!(self.xfer_file(&mut scratch_file, &xfer));
+                    self.xfer_file(&mut scratch_file, &xfer).chain_err(
+                        || format!("Failed to transfer content of '{}'",
+                                   dir.child(source.0).display()))?;
                     // Move anything out of the way as needed
-                    try!(before_establish());
+                    before_establish()?;
                     let new_path = dir.child(source.0);
                     // Atomically put into place after setting the mode and
                     // mtime
-                    try!(fs::set_permissions(
-                        &scratch_path, fs::Permissions::from_mode(mode)));
-                    try!(posix::set_mtime(&scratch_file, time));
-                    try!(fs::rename(&scratch_path, &new_path));
+                    fs::set_permissions(
+                        &scratch_path, fs::Permissions::from_mode(mode))
+                        .chain_err(
+                            || format!("Failed to set permissions on '{}'",
+                                       scratch_path.display()))?;
+                    posix::set_mtime(&scratch_file, time).chain_err(
+                        || format!("Failed to set mtime on '{}'",
+                                   scratch_path.display()))?;
+                    fs::rename(&scratch_path, &new_path).chain_err(
+                        || format!("Failed to move '{}' to '{}'",
+                                   scratch_path.display(),
+                                   new_path.display()))?;
                     // Cache the content of the file, assuming that nobody
                     // modified it between us renaming it there and `stat()`ing
                     // it now.
@@ -632,8 +700,10 @@ impl PosixReplica {
     fn remove_general(&self, path: &Path, fd: &FileData) -> Result<()> {
         match *fd {
             FileData::Regular(..) => self.hide_file(path),
-            FileData::Directory(..) => Ok(try!(fs::remove_dir(path))),
-            _ => Ok(try!(fs::remove_file(path))),
+            FileData::Directory(..) => fs::remove_dir(path).chain_err(
+                || format!("Failed to remove directory '{}'", path.display())),
+            _ => fs::remove_file(path).chain_err(
+                || format!("Failed to remove symlink '{}'", path.display())),
         }
     }
 
@@ -641,8 +711,12 @@ impl PosixReplica {
     /// absent from its current location and scheduled for deletion, while
     /// still available in the block cache for efficient renames.
     fn hide_file(&self, old_path: &Path) -> Result<()> {
-        let (_, new_path) = try!(self.scratch_regular(0o600));
-        try!(fs::rename(old_path, &new_path));
+        let (_, new_path) = self.scratch_regular(0o600).chain_err(
+            || format!("Failed to generate path to which to move \
+                        deleted file '{}'", old_path.display()))?;
+        fs::rename(old_path, &new_path).chain_err(
+            || format!("Failed to remove file '{}' to '{}'",
+                       old_path.display(), new_path.display()))?;
         let _ = self.dao.lock().unwrap().rename_cache(
             old_path.as_os_str(), new_path.as_os_str());
         Ok(())
@@ -671,14 +745,14 @@ impl PosixReplica {
 
         // We may have partially written the file in the above attempt, so
         // reset it to 0-length
-        try!(dst.seek(io::SeekFrom::Start(0)));
-        try!(dst.set_len(0));
+        dst.seek(io::SeekFrom::Start(0))?;
+        dst.set_len(0)?;
 
         // Write the file a block at a time. Use local blocks when possible,
         // otherwise fetch from the transfer object.
-        try!(blocks_to_stream(
+        blocks_to_stream(
             &xfer.blocks, dst, &self.config.hmac_secret[..],
-            |hid| self.xfer_block(hid, &*xfer.fetch)));
+            |hid| self.xfer_block(hid, &*xfer.fetch))?;
         Ok(())
     }
 
@@ -750,8 +824,8 @@ impl PosixReplica {
             // match `hash`.
             let mut data: Vec<u8> = Vec::new();
             let _ = fs::File::open(&path).and_then(|mut src| {
-                try!(src.seek(io::SeekFrom::Start((off * bs) as u64)));
-                try!(src.take(bs as u64).read_to_end(&mut data));
+                src.seek(io::SeekFrom::Start((off * bs) as u64))?;
+                src.take(bs as u64).read_to_end(&mut data)?;
                 Ok(())
             });
 
@@ -772,15 +846,15 @@ impl PosixReplica {
 
     fn update_cache(&self, path: &Path, bl: &BlockList,
                     block_size: usize) -> Result<()> {
-        let md = try!(fs::symlink_metadata(path));
+        let md = path_metadata(path)?;
         let mtime = md.mtime();
         let ino = md.ino();
         let size = md.size();
 
-        try!(self.dao.lock().unwrap().cache_file_hashes(
+        self.dao.lock().unwrap().cache_file_hashes(
             path.as_os_str(), &bl.total, &bl.blocks[..], block_size,
             &InodeStatus { mtime: mtime, ino: ino, size: size },
-            self.config.cache_generation));
+            self.config.cache_generation)?;
         Ok(())
     }
 
@@ -791,9 +865,9 @@ impl PosixReplica {
     fn check_matches(&self, path: &Path, fd: &FileData)
                      -> Result<()> {
         let dao = self.dao.lock().unwrap();
-        let curr_fd = try!(metadata_to_fd(
-            &path, &try!(fs::symlink_metadata(&path)),
-            &dao, false, &*self.config));
+        let curr_fd = metadata_to_fd(
+            &path, &path_metadata(&path)?,
+            &dao, false, &*self.config)?;
         if !curr_fd.matches(fd) {
             Err(ErrorKind::ExpectationNotMatched.into())
         } else {
@@ -803,8 +877,8 @@ impl PosixReplica {
 
     /// Removes all scratch files in the private directory.
     fn clean_scratch(&self) -> Result<()> {
-        for file in try!(fs::read_dir(&self.config.private_dir)) {
-            let file = try!(file);
+        for file in fs::read_dir(&self.config.private_dir)? {
+            let file = file?;
             if file.file_name().to_str().map_or(
                 false, |name| name.starts_with("scratch"))
             {

@@ -17,6 +17,7 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::ffi::{OsStr,OsString};
+use std::fmt;
 
 /// Type for content hashes of regular files and for blob identifiers on the
 /// server.
@@ -32,6 +33,25 @@ pub const UNKNOWN_HASH: HashId = [0;32];
 /// The name of the directory which is a sibling to the configuration and which
 /// is the root of Ensync's private data.
 pub const PRIVATE_DIR_NAME: &'static str = "internal.ensync";
+
+/// Wraps a `HashId` to display it in hexadecimal format.
+#[derive(Clone, Copy)]
+pub struct DisplayHash(pub HashId);
+impl fmt::Display for DisplayHash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\
+                   {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\
+                   {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\
+                   {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+               self.0[ 0], self.0[ 1], self.0[ 2], self.0[ 3], self.0[ 4],
+               self.0[ 5], self.0[ 6], self.0[ 7], self.0[ 8], self.0[ 9],
+               self.0[10], self.0[11], self.0[12], self.0[13], self.0[14],
+               self.0[15], self.0[16], self.0[17], self.0[18], self.0[19],
+               self.0[20], self.0[21], self.0[22], self.0[23], self.0[24],
+               self.0[25], self.0[26], self.0[27], self.0[28], self.0[29],
+               self.0[30], self.0[31])
+    }
+}
 
 // These were originally defined to `mode_t`, `off_t`, `time_t`, and `ino_t`
 // when we planned to use the POSIX API directly.

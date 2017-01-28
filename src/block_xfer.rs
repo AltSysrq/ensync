@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -149,7 +149,7 @@ pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> Result<()>,
 
         hash = hash_block(secret, &block_data[0..off]);
 
-        try!(block_out(&hash, &block_data[0..off]));
+        block_out(&hash, &block_data[0..off])?;
         total_kc.update(&hash);
         blocks.push(hash);
         size += off as FileSize;
@@ -202,7 +202,7 @@ pub fn blocks_to_stream<R : io::Read,
     }
 
     for id in &input.blocks {
-        let mut reader = try!(block_fetch(id));
+        let mut reader = block_fetch(id)?;
         let mut kc = Keccak::new_sha3_256();
         kc.update(secret);
 
@@ -211,7 +211,8 @@ pub fn blocks_to_stream<R : io::Read,
                 Ok(0) => break,
                 Ok(nread) => {
                     kc.update(&buf[0..nread]);
-                    try!(output.write_all(&buf[0..nread]));
+                    output.write_all(&buf[0..nread]).chain_err(
+                        || "Error writing to output stream")?;
                 },
                 Err(ref e) if e.kind() == io::ErrorKind::Interrupted =>
                     continue,
