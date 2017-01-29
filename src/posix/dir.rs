@@ -148,7 +148,7 @@ impl DirHandle {
 
     pub fn full_path_with_trailing_slash(&self) -> OsString {
         let mut s = self.0.path.as_os_str().to_owned();
-        if OsStr::new("s") != &s {
+        if OsStr::new("/") != &s {
             s.push("/");
         }
         s

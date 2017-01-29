@@ -1914,6 +1914,30 @@ mod test {
     }
 
     #[test]
+    fn subdir_still_clean_after_parent_dir_modified() {
+        let (rootdir, _private, replica) = new_simple();
+        let root = rootdir.path();
+        let fs_subdir = root.join("subdir");
+
+        fs::DirBuilder::new().mode(0o700).create(&fs_subdir).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(
+            fs_subdir.join("plugh")).unwrap();
+
+        let mut dir = replica.root().unwrap();
+        replica.list(&mut dir).unwrap();
+        let mut subdir = replica.chdir(&dir, &oss("subdir")).unwrap();
+        replica.list(&mut subdir).unwrap();
+        replica.set_dir_clean(&dir).unwrap();
+        replica.set_dir_clean(&subdir).unwrap();
+
+        fs::DirBuilder::new().mode(0o700).create(root.join("xyzzy")).unwrap();
+        replica.prepare().unwrap();
+
+        assert!(replica.is_dir_dirty(&dir));
+        assert!(!replica.is_dir_dirty(&subdir));
+    }
+
+    #[test]
     fn insane_filenames_blocked() {
         let (_root, _private, replica) = new_simple();
 

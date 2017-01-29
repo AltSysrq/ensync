@@ -120,12 +120,8 @@ fn process_file(
         ApplyResult::Fail => dirstate.fail("ApplyResult::Fail"),
         ApplyResult::Clean(true) => {
             dirstate.empty.store(false, SeqCst);
-            if self.cli.is_dir_dirty(&dir.cli.dir) ||
-                self.srv.is_dir_dirty(&dir.srv.dir)
-            {
-                self.recurse_into_dir(dir, dir_path, name, rules,
-                                      dirstate.clone());
-            }
+            self.recurse_into_dir(dir, dir_path, name, rules,
+                                  dirstate.clone());
         },
         ApplyResult::RecursiveDelete(side, mode) =>
             self.recursive_delete(dir, dir_path, name, rules,
@@ -289,10 +285,15 @@ fn recurse_into_dir(
                      &self.log, log::ReplicaSide::Ancestor),
            try_chdir(&self.srv, &dir.srv.dir, parent_name, name,
                      &self.log, log::ReplicaSide::Server)) {
-        (Some(cli_dir), Some(anc_dir), Some(srv_dir)) =>
-            self.recurse_and_then(
-                cli_dir, anc_dir, srv_dir, file_rules, state,
-                |this, dir, _| this.mark_both_clean(&dir)),
+        (Some(cli_dir), Some(anc_dir), Some(srv_dir)) => {
+            if self.cli.is_dir_dirty(&cli_dir) ||
+                self.srv.is_dir_dirty(&srv_dir)
+            {
+                self.recurse_and_then(
+                    cli_dir, anc_dir, srv_dir, file_rules, state,
+                    |this, dir, _| this.mark_both_clean(&dir))
+            }
+        },
 
         _ => state.fail("recurse_into_dir chdir failed"),
     }
