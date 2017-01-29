@@ -18,6 +18,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::sync::{Arc, Mutex};
+use std::u32;
 
 use flate2;
 use sqlite;
@@ -27,7 +28,7 @@ use defs::*;
 use errors::*;
 use replica::*;
 use sql::{SendConnection, StatementEx};
-use super::crypt::{MasterKey, decrypt_dir_ver};
+use super::crypt::{MasterKey, encrypt_dir_ver};
 use super::dir::*;
 use super::storage::*;
 
@@ -239,25 +240,29 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     }
 
     fn prepare(&self) -> Result<()> {
-        self.storage.for_dir(&mut |id, crypt_ver, length| {
-            let ver = decrypt_dir_ver(id, crypt_ver, &self.key);
+        let db = self.db.lock().unwrap();
+        {
+            let mut stmt = db.prepare(
+                "SELECT `id`, `ver`, `len` FROM clean_dir")?;
+            while sqlite::State::Done != stmt.next()? {
+                let vid: Vec<u8> = stmt.read(0)?;
+                let vver: i64 = stmt.read(1)?;
+                let ilen: i64 = stmt.read(2)?;
 
-            let db = self.db.lock().unwrap();
-            if !db.prepare("SELECT 1 FROM `clean_dir` \
-                            WHERE `id` = ?1 AND (\
-                              `ver` != ?2 OR `len` != ?3)")
-                .binding(1, &id[..])
-                .binding(2, ver as i64)
-                .binding(3, length as i64)
-                .exists()
-                .chain_err(|| "Error testing whether server \
-                               directory is dirty")?
-            {
-                // Either the directory is still clean (ver and len match), or
-                // we don't have any entry for it at all.
-                return Ok(());
+                let mut id = UNKNOWN_HASH;
+                if vid.len() != id.len() ||
+                    ilen < 0 || ilen > u32::MAX as i64
+                {
+                    return Err(ErrorKind::InvalidServerDirEntry.into());
+                }
+                id.copy_from_slice(&vid);
+
+                let ver = encrypt_dir_ver(&id, vver as u64, &self.key);
+                self.storage.check_dir_dirty(&id, &ver, ilen as u32)?;
             }
+        }
 
+        self.storage.for_dirty_dir(&mut |id| {
             // Remove the clean entries for this directory and all its parents.
             let mut next_target = Some(id.to_vec());
             while let Some(target) = next_target {
