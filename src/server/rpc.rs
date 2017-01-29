@@ -106,12 +106,6 @@ pub enum Request {
     ///
     /// Response: One `ObjData` | `NotFound` | `Error`
     GetObj(HashId),
-    /// `Storage::for_dir`
-    ///
-    /// Response:
-    /// - Any number of `DirEntry`
-    /// - One `Done` | `Error`
-    ForDir,
     /// `Storage::check_dir_dirty`
     ///
     /// No response.
@@ -177,9 +171,6 @@ fourleaf_retrofit!(enum Request : {} {} {
     [3] Request::GetObj(ref id) => {
         [1] id: HashId = id,
         { Ok(Request::GetObj(id)) }
-    },
-    [0] Request::ForDir => {
-        { Ok(Request::ForDir) }
     },
     [4] Request::CheckDirDirty(ref id, ref ver, len) => {
         [1] id: HashId = id,
@@ -271,8 +262,6 @@ pub enum Response {
     NotFound,
     /// A directory id which is to be considered dirty.
     DirtyDir(HashId),
-    /// Metadata (id, version, length) about a directory.
-    DirEntry(HashId, HashId, u32),
     /// The version and full data of a directory.
     DirData(HashId, Vec<u8>),
     /// The full data of an object.
@@ -300,12 +289,6 @@ fourleaf_retrofit!(enum Response : {} {} {
         { Ok(Response::FatalError(msg)) }
     },
     [5] Response::NotFound => { { Ok(Response::NotFound) } },
-    [0] Response::DirEntry(ref id, ref ver, len) => {
-        [1] id: HashId = id,
-        [2] ver: HashId = ver,
-        [3] len: u32 = len,
-        { Ok(Response::DirEntry(id, ver, len)) }
-    },
     [6] Response::DirtyDir(ref id) => {
         [1] id: HashId = id,
         { Ok(Response::DirtyDir(id)) }
@@ -401,15 +384,6 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
                     Some(Response::ObjData(data)),
                 Ok(None) => Some(Response::NotFound),
                 Err(err) => err!(err),
-            },
-
-            Request::ForDir => {
-                match storage.for_dir(&mut |id, v, len| {
-                    write_response(sout, Response::DirEntry(*id, *v, len))
-                }) {
-                    Ok(()) => Some(Response::Done),
-                    Err(err) => err!(err),
-                }
             },
 
             Request::CheckDirDirty(ref id, ref ver, len) => {
@@ -600,32 +574,6 @@ impl Storage for RemoteStorage {
         )) => {
             Response::ObjData(data) => Ok(Some(data.into())),
             Response::NotFound => Ok(None),
-        })
-    }
-
-    fn for_dir(&self, f: &mut FnMut (&HashId, &HashId, u32) -> Result<()>)
-               -> Result<()> {
-        self.send_sync_request(Request::ForDir, |mut sin| {
-            let mut error = None;
-            loop {
-                handle_response!(try!(read_frame(&mut sin).and_then(
-                    |r| r.ok_or(ErrorKind::ServerConnectionClosed.into())
-                )) => {
-                    Response::Done => break,
-                    Response::DirEntry(id, v, l) => match f(&id, &v, l) {
-                        Ok(()) => { },
-                        // We can't return early on failure here as there are
-                        // still more responses we need to consume.
-                        Err(err) => error = Some(err),
-                    },
-                })
-            }
-
-            if let Some(error) = error {
-                Err(error)
-            } else {
-                Ok(())
-            }
         })
     }
 

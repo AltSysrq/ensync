@@ -47,13 +47,6 @@ fn get_nx_obj_returns_none() {
 }
 
 #[test]
-fn for_dir_on_empty_storage_does_nothing() {
-    init!(dir, storage);
-
-    storage.for_dir(&mut |_, _, _| panic!("for_dir emitted a value")).unwrap();
-}
-
-#[test]
 fn committing_empty_transaction_succeeds() {
     init!(dir, storage);
 
@@ -256,35 +249,6 @@ fn rmdir_then_mkdir_in_same_commit_permitted() {
     assert_eq!(b"new", &data[..]);
 }
 
-
-#[test]
-fn for_dir_iterates_directories() {
-    init!(dir, storage);
-
-    storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"foo").unwrap();
-    storage.mkdir(1, &hashid(3), &hashid(4), b"plugh").unwrap();
-    assert!(storage.commit(1).unwrap());
-
-    let mut seen_foo = false;
-    let mut seen_bar = false;
-    storage.for_dir(&mut |id, ver, len| {
-        if hashid(1) == *id {
-            assert!(!seen_foo);
-            seen_foo = true;
-            assert_eq!(hashid(2), *ver);
-            assert_eq!(3, len);
-        } else if hashid(3) == *id {
-            assert!(!seen_bar);
-            seen_bar = true;
-            assert_eq!(hashid(4), *ver);
-            assert_eq!(5, len);
-        } else {
-            panic!("Unexpected id: {:?}", id);
-        }
-        Ok(())
-    }).unwrap();
-}
 
 #[test]
 fn check_dirty_dir_handles_nx_length_mismatch_and_ver_mismatch() {

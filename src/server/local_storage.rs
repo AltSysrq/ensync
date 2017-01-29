@@ -453,32 +453,6 @@ impl Storage for LocalStorage {
         }
     }
 
-    fn for_dir(&self, f: &mut FnMut (&HashId, &HashId, u32) -> Result<()>)
-               -> Result<()> {
-        let db = self.db.lock().unwrap();
-        let mut stmt = try!(db.prepare(
-            "SELECT `id`, `ver`, `length` FROM `dirs`"));
-        while sqlite::State::Done != try!(stmt.next()) {
-            let vid: Vec<u8> = try!(stmt.read(0));
-            let vver: Vec<u8> = try!(stmt.read(1));
-            let ilen: i64 = try!(stmt.read(2));
-
-            let mut id = UNKNOWN_HASH;
-            let mut ver = UNKNOWN_HASH;
-            if vid.len() != id.len() || vver.len() != ver.len() ||
-                ilen < 0 || ilen > u32::MAX as i64
-            {
-                return Err(ErrorKind::InvalidServerDirEntry.into());
-            }
-
-            id.copy_from_slice(&vid);
-            ver.copy_from_slice(&vver);
-            try!(f(&id, &ver, ilen as u32));
-        }
-
-        Ok(())
-    }
-
     fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
                        -> Result<()> {
         let exists = { let db = self.db.lock().unwrap(); let b = db.prepare(

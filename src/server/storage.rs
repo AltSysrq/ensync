@@ -45,11 +45,6 @@ pub trait Storage : Send + Sync {
     fn getdir(&self, id: &HashId) -> Result<Option<(HashId, Vec<u8>)>>;
     /// Returns the object with the given hash id if it exists.
     fn getobj(&self, id: &HashId) -> Result<Option<Vec<u8>>>;
-    /// Executes `f` on every `(directory,version,length)` triple currently
-    /// known to the server, until `f` returns an error or an internal error
-    /// occurs, or all directories have been inspected.
-    fn for_dir(&self, f: &mut FnMut (&HashId, &HashId, u32) -> Result<()>)
-               -> Result<()>;
 
     /// Check whether a directory with the given id, version, and length exists.
     ///
