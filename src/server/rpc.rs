@@ -106,12 +106,21 @@ pub enum Request {
     ///
     /// Response: One `ObjData` | `NotFound` | `Error`
     GetObj(HashId),
-    /// `Storage::fordir`
+    /// `Storage::for_dir`
     ///
     /// Response:
     /// - Any number of `DirEntry`
     /// - One `Done` | `Error`
     ForDir,
+    /// `Storage::check_dir_dirty`
+    ///
+    /// No response.
+    CheckDirDirty(HashId, HashId, u32),
+    /// `Storgae::for_dirty_dir`
+    ///
+    /// - Any number of `DirtyDir`
+    /// - One `Done` | `Error`
+    ForDirtyDir,
     /// `Storage::start_tx`
     ///
     /// No response.
@@ -169,29 +178,38 @@ fourleaf_retrofit!(enum Request : {} {} {
         [1] id: HashId = id,
         { Ok(Request::GetObj(id)) }
     },
-    [4] Request::ForDir => {
+    [0] Request::ForDir => {
         { Ok(Request::ForDir) }
     },
-    [5] Request::StartTx(tx) => {
+    [4] Request::CheckDirDirty(ref id, ref ver, len) => {
+        [1] id: HashId = id,
+        [2] ver: HashId = ver,
+        [3] len: u32 = len,
+        { Ok(Request::CheckDirDirty(id, ver, len)) }
+    },
+    [5] Request::ForDirtyDir => {
+        { Ok(Request::ForDirtyDir) }
+    },
+    [6] Request::StartTx(tx) => {
         [1] tx: Tx = tx,
         { Ok(Request::StartTx(tx)) }
     },
-    [6] Request::Commit(tx) => {
+    [7] Request::Commit(tx) => {
         [1] tx: Tx = tx,
         { Ok(Request::Commit(tx)) }
     },
-    [7] Request::Abort(tx) => {
+    [8] Request::Abort(tx) => {
         [1] tx: Tx = tx,
         { Ok(Request::Abort(tx)) }
     },
-    [8] Request::Mkdir { tx, ref id, ref ver, ref data } => {
+    [9] Request::Mkdir { tx, ref id, ref ver, ref data } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
         [3] ver: HashId = ver,
         [4] data: Vec<u8> = data,
         { Ok(Request::Mkdir { tx: tx, id: id, ver: ver, data: data }) }
     },
-    [9] Request::Updir { tx, ref id, ref ver, old_len, ref append } => {
+    [10] Request::Updir { tx, ref id, ref ver, old_len, ref append } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
         [3] ver: HashId = ver,
@@ -200,33 +218,33 @@ fourleaf_retrofit!(enum Request : {} {} {
         { Ok(Request::Updir { tx: tx, id: id, ver: ver,
                               old_len: old_len, append: append }) }
     },
-    [10] Request::Rmdir { tx, ref id, ref ver, old_len } => {
+    [11] Request::Rmdir { tx, ref id, ref ver, old_len } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
         [3] ver: HashId = ver,
         [4] old_len: u32 = old_len,
         { Ok(Request::Rmdir { tx: tx, id: id, ver: ver, old_len: old_len }) }
     },
-    [11] Request::Linkobj { tx, ref id, ref linkid } => {
+    [12] Request::Linkobj { tx, ref id, ref linkid } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
         [3] linkid: HashId = linkid,
         { Ok(Request::Linkobj { tx: tx, id: id, linkid: linkid }) }
     },
-    [12] Request::Putobj { tx, ref id, ref linkid, ref data } => {
+    [13] Request::Putobj { tx, ref id, ref linkid, ref data } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
         [3] linkid: HashId = linkid,
         [4] data: Vec<u8> = data,
         { Ok(Request::Putobj { tx: tx, id: id, linkid: linkid, data: data }) }
     },
-    [13] Request::Unlinkobj { tx, ref id, ref linkid } => {
+    [14] Request::Unlinkobj { tx, ref id, ref linkid } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
         [3] linkid: HashId = linkid,
         { Ok(Request::Unlinkobj { tx: tx, id: id, linkid: linkid }) }
     },
-    [14] Request::CleanUp => {
+    [15] Request::CleanUp => {
         { Ok(Request::CleanUp) }
     },
 });
@@ -251,6 +269,8 @@ pub enum Response {
     FatalError(String),
     /// The item referenced by the request does not exist.
     NotFound,
+    /// A directory id which is to be considered dirty.
+    DirtyDir(HashId),
     /// Metadata (id, version, length) about a directory.
     DirEntry(HashId, HashId, u32),
     /// The version and full data of a directory.
@@ -280,11 +300,15 @@ fourleaf_retrofit!(enum Response : {} {} {
         { Ok(Response::FatalError(msg)) }
     },
     [5] Response::NotFound => { { Ok(Response::NotFound) } },
-    [6] Response::DirEntry(ref id, ref ver, len) => {
+    [0] Response::DirEntry(ref id, ref ver, len) => {
         [1] id: HashId = id,
         [2] ver: HashId = ver,
         [3] len: u32 = len,
         { Ok(Response::DirEntry(id, ver, len)) }
+    },
+    [6] Response::DirtyDir(ref id) => {
+        [1] id: HashId = id,
+        { Ok(Response::DirtyDir(id)) }
     },
     [7] Response::DirData(ref ver, ref data) => {
         [1] ver: HashId = ver,
@@ -382,6 +406,22 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
             Request::ForDir => {
                 match storage.for_dir(&mut |id, v, len| {
                     write_response(sout, Response::DirEntry(*id, *v, len))
+                }) {
+                    Ok(()) => Some(Response::Done),
+                    Err(err) => err!(err),
+                }
+            },
+
+            Request::CheckDirDirty(ref id, ref ver, len) => {
+                // TODO Here and below, the responseless messages need to
+                // handle errors in some way.
+                let _ = storage.check_dir_dirty(id, ver, len);
+                None
+            },
+
+            Request::ForDirtyDir => {
+                match storage.for_dirty_dir(&mut |id| {
+                    write_response(sout, Response::DirtyDir(*id))
                 }) {
                     Ok(()) => Some(Response::Done),
                     Err(err) => err!(err),
@@ -573,6 +613,37 @@ impl Storage for RemoteStorage {
                 )) => {
                     Response::Done => break,
                     Response::DirEntry(id, v, l) => match f(&id, &v, l) {
+                        Ok(()) => { },
+                        // We can't return early on failure here as there are
+                        // still more responses we need to consume.
+                        Err(err) => error = Some(err),
+                    },
+                })
+            }
+
+            if let Some(error) = error {
+                Err(error)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
+                       -> Result<()> {
+        self.send_async_request(Request::CheckDirDirty(*id, *ver, len))
+    }
+
+    fn for_dirty_dir(&self, f: &mut FnMut (&HashId) -> Result<()>)
+                     -> Result<()> {
+        self.send_sync_request(Request::ForDirtyDir, |mut sin| {
+            let mut error = None;
+            loop {
+                handle_response!(try!(read_frame(&mut sin).and_then(
+                    |r| r.ok_or(ErrorKind::ServerConnectionClosed.into())
+                )) => {
+                    Response::Done => break,
+                    Response::DirtyDir(id) => match f(&id) {
                         Ok(()) => { },
                         // We can't return early on failure here as there are
                         // still more responses we need to consume.

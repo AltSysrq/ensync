@@ -19,16 +19,16 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry::*;
 use std::fs;
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, BufRead, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::u32;
 
 use keccak::Keccak;
 use sqlite;
-use tempfile::{NamedTempFile, PersistError};
+use tempfile::{self, NamedTempFile, PersistError};
 
-use defs::{HashId, UNKNOWN_HASH};
+use defs::{DisplayHash, HashId, UNKNOWN_HASH};
 use errors::*;
 use sql::{self, SendConnection, StatementEx};
 use server::storage::*;
@@ -83,6 +83,7 @@ pub struct LocalStorage {
     tmpdir: PathBuf,
     dirdir: PathBuf,
     objdir: PathBuf,
+    dirty_dir_buf: Mutex<fs::File>,
     db: Mutex<SendConnection>,
     txns: Mutex<HashMap<Tx, TxData>>,
 }
@@ -128,23 +129,32 @@ impl LocalStorage {
         let objdir = path.join("objs");
         let dirdir = path.join("dirs");
 
-        try!(fs::create_dir_all(&root));
-        try!(fs::create_dir_all(&tmpdir));
-        try!(fs::create_dir_all(&objdir));
-        try!(fs::create_dir_all(&dirdir));
+        fn create_dir_all(path: &Path) -> Result<()> {
+            fs::create_dir_all(path).chain_err(
+                || format!("Failed to create directory '{}'", path.display()))
+        }
+
+        try!(create_dir_all(&root));
+        try!(create_dir_all(&tmpdir));
+        try!(create_dir_all(&objdir));
+        try!(create_dir_all(&dirdir));
         for i in 0..256 {
             let suffix = format!("{:02x}", i);
-            try!(fs::create_dir_all(objdir.join(&suffix)));
-            try!(fs::create_dir_all(dirdir.join(&suffix)));
+            try!(create_dir_all(&objdir.join(&suffix)));
+            try!(create_dir_all(&dirdir.join(&suffix)));
         }
 
         let cxn = try!(sqlite::Connection::open(path.join("state.sqlite")));
         try!(cxn.execute(include_str!("storage-schema.sql")));
 
+        let tmpfile = tempfile::tempfile().chain_err(
+            || "Failed to create temporary file")?;
+
         Ok(LocalStorage {
             tmpdir: tmpdir,
             objdir: objdir,
             dirdir: dirdir,
+            dirty_dir_buf: Mutex::new(tmpfile),
             db: Mutex::new(SendConnection(cxn)),
             txns: Mutex::new(HashMap::default()),
         })
@@ -447,7 +457,7 @@ impl Storage for LocalStorage {
                -> Result<()> {
         let db = self.db.lock().unwrap();
         let mut stmt = try!(db.prepare(
-            "SELECT `id`, `ver`, `length` FROM dirs"));
+            "SELECT `id`, `ver`, `length` FROM `dirs`"));
         while sqlite::State::Done != try!(stmt.next()) {
             let vid: Vec<u8> = try!(stmt.read(0));
             let vver: Vec<u8> = try!(stmt.read(1));
@@ -466,6 +476,52 @@ impl Storage for LocalStorage {
             try!(f(&id, &ver, ilen as u32));
         }
 
+        Ok(())
+    }
+
+    fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
+                       -> Result<()> {
+        let exists = { let db = self.db.lock().unwrap(); let b = db.prepare(
+            "SELECT 1 FROM `dirs` \
+             WHERE `id` = ?1 AND ver = ?2 AND length = ?3")
+            .binding(1, &id[..])
+            .binding(2, &ver[..])
+            .binding(3, len as u64 as i64)
+            .exists()
+            .chain_err(|| format!("Error checking state of directory {}/{}",
+                                  DisplayHash(*id), DisplayHash(*ver))); b }?;
+
+        if !exists {
+            self.dirty_dir_buf.lock().unwrap().write_all(id).chain_err(
+                || "Error writing to dirty directory buffer")?;
+        }
+
+        Ok(())
+    }
+
+    fn for_dirty_dir(&self, f: &mut FnMut (&HashId) -> Result<()>)
+                     -> Result<()> {
+        let mut d = self.dirty_dir_buf.lock().unwrap();
+        d.seek(io::SeekFrom::Start(0)).chain_err(
+            || "Error seeking dirty directory buffer")?;
+
+        {
+            let mut reader = io::BufReader::new(&mut*d);
+            while !reader.fill_buf()
+                .chain_err(|| "Error reading dirty directory buffer")?
+                .is_empty()
+            {
+                let mut id = HashId::default();
+                reader.read_exact(&mut id).chain_err(
+                    || "Error reading dirty directory buffer")?;
+                f(&id)?;
+            }
+        }
+
+        d.seek(io::SeekFrom::Start(0)).chain_err(
+            || "Error seeking dirty directory buffer")?;
+        d.set_len(0).chain_err(
+            || "Error truncating dirty directory buffer")?;
         Ok(())
     }
 

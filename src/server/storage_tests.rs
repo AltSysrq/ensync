@@ -8,6 +8,7 @@
 // filesystem with the same layout as `LocalStorage`, and will in some cases
 // act on this assumption to simulate interference from concurrent processes.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use tempdir::TempDir;
@@ -283,6 +284,49 @@ fn for_dir_iterates_directories() {
         }
         Ok(())
     }).unwrap();
+}
+
+#[test]
+fn check_dirty_dir_handles_nx_length_mismatch_and_ver_mismatch() {
+    init!(dir, storage);
+
+    storage.start_tx(1).unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), b"unchanged").unwrap();
+    storage.mkdir(1, &hashid(3), &hashid(4), b"length mismatch").unwrap();
+    storage.mkdir(1, &hashid(5), &hashid(6), b"version mismatch").unwrap();
+    storage.commit(1).unwrap();
+
+    storage.check_dir_dirty(&hashid(1), &hashid(2), 9).unwrap(); // clean
+    storage.check_dir_dirty(&hashid(3), &hashid(4), 3).unwrap(); // length
+    storage.check_dir_dirty(&hashid(5), &hashid(0), 16).unwrap(); // version
+    storage.check_dir_dirty(&hashid(9), &hashid(0), 42).unwrap(); // unknown
+
+    let mut returned = HashSet::new();
+    storage.for_dirty_dir(&mut |id| {
+        returned.insert(*id);
+        Ok(())
+    }).unwrap();
+
+    assert_eq!(3, returned.len());
+    assert!(returned.contains(&hashid(3)));
+    assert!(returned.contains(&hashid(5)));
+    assert!(returned.contains(&hashid(9)));
+}
+
+#[test]
+fn for_ditry_dir_resets_buffer() {
+    init!(dir, storage);
+
+    storage.check_dir_dirty(&hashid(1), &hashid(2), 9).unwrap();
+    let mut returned = false;
+    storage.for_dirty_dir(&mut |id| {
+        assert_eq!(hashid(1), *id);
+        assert!(!returned);
+        returned = true;
+        Ok(())
+    }).unwrap();
+
+    storage.for_dirty_dir(&mut |_| panic!("Item returned")).unwrap();
 }
 
 #[test]

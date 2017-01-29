@@ -51,6 +51,18 @@ pub trait Storage : Send + Sync {
     fn for_dir(&self, f: &mut FnMut (&HashId, &HashId, u32) -> Result<()>)
                -> Result<()>;
 
+    /// Check whether a directory with the given id, version, and length exists.
+    ///
+    /// If such a directory does exist, do nothing. If no such directory
+    /// exists, place the id into an internal buffer.
+    fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
+                       -> Result<()>;
+
+    /// For each directory id buffered by calls to `check_dir_dirty`, invoke
+    /// `f`. The dirty directory buffer is then cleared.
+    fn for_dirty_dir(&self, f: &mut FnMut (&HashId) -> Result<()>)
+                     -> Result<()>;
+
     /// Begins a write transaction private to this session.
     ///
     /// `tx` is an arbitrary integer not already used for a transaction id this
