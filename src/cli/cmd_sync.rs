@@ -35,6 +35,7 @@ use cli::config::Config;
 use cli::format_date;
 use defs::*;
 use errors::*;
+use interrupt;
 use log::*;
 use posix::*;
 use reconcile::compute::*;
@@ -592,6 +593,8 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         }
     }
 
+    interrupt::install_signal_handler();
+
     if level >= WARN {
         perrln!("Scanning files for changes...");
     }
@@ -618,7 +621,11 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         let _ = thread.join().expect("Child thread panicked");
     }
 
-    if root_state.success.load(SeqCst) {
+    if interrupt::is_interrupted() {
+        if level >= ERROR {
+            perrln!("Syncing interrupted");
+        }
+    } else if root_state.success.load(SeqCst) {
         if level >= EDIT {
             perrln!("Syncing completed successfully");
         }

@@ -42,6 +42,7 @@ extern crate toml;
 
 mod defs;
 mod errors;
+mod interrupt;
 mod sql;
 mod work_stack;
 

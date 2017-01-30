@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use defs::*;
 use errors::*;
+use interrupt::is_interrupted;
 use log::{self,Log,Logger};
 use replica::{Replica,ReplicaDirectory};
 use rules::*;
@@ -62,14 +63,14 @@ pub struct DirState {
 
 impl DirState {
     fn fail(&self, _why: &str) {
-        //println!("Dir marked as failed: {}", why);
         self.success.store(false, SeqCst);
     }
 }
 
 impl Drop for DirState {
     fn drop(&mut self) {
-        debug_assert!(self.quiet || 0 == self.pending.load(SeqCst),
+        debug_assert!(is_interrupted() || self.quiet ||
+                      0 == self.pending.load(SeqCst),
                       "DirState dropped while it still had a pending \
                        count of {}", self.pending.load(SeqCst));
     }
@@ -174,6 +175,7 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
     mut rules_builder: <RULES as DirRules>::Builder,
     on_complete_supplier: F) -> Result<()>
 {
+    if is_interrupted() { return Ok(()); }
     let dir_path = cli_dir.full_path().to_owned();
 
     let cli_files = try!(read_dir_contents(
@@ -221,6 +223,7 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
     }
 
     while let Some(Reversed(name)) = dir.todo.pop() {
+        if is_interrupted() { return Ok(()); }
         self.process_file(&mut dir, &dir_path, &name, &dirstate);
     }
 

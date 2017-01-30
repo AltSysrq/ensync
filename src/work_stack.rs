@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -17,6 +17,8 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::sync::{Condvar,Mutex};
+
+use interrupt::is_interrupted;
 
 struct WorkStackData<T> {
     tasks: Vec<T>,
@@ -68,11 +70,12 @@ impl<T> WorkStack<T> {
     ///
     /// The current thread will process tasks from the stack by passing them to
     /// `f`. The function returns when the stack is empty and there are no
-    /// in-flight tasks.
+    /// in-flight tasks, or when the interrupt handler has recorded an
+    /// interrupt.
     pub fn run<F : FnMut (T)>(&self, mut f: F) {
         let mut lock = self.data.lock().unwrap();
 
-        loop {
+        while !is_interrupted() {
             if let Some(task) = lock.tasks.pop() {
                 // We got a task. Increment the in-flight counter so other
                 // threads know we might be adding something later, then unlock
