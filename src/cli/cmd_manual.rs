@@ -265,13 +265,8 @@ pub fn get<S : Storage + ?Sized, P1 : AsRef<Path>, P2 : AsRef<Path>>
                         .chain_err(|| format!("Failed to create \
                                                temporary file"))?;
 
-                    let mut perms = fs::symlink_metadata(tmpfile.path())
-                        .chain_err(|| format!("Error reading new file \
-                                               permissions on '{}'",
-                                              tmpfile.path().display()))?
-                        .permissions();
-                    perms.set_mode(mode);
-                    fs::set_permissions(tmpfile.path(), perms)
+                    fs::set_permissions(tmpfile.path(),
+                                        fs::Permissions::from_mode(mode))
                         .chain_err(|| format!("Error setting new file \
                                                permissions on '{}'",
                                               tmpfile.path().display()))?;
