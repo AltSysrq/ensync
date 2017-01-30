@@ -26,6 +26,8 @@ use std::path::{Path,PathBuf};
 use std::sync::{Arc,Mutex};
 use std::sync::atomic::{AtomicUsize,Ordering};
 
+use tempfile::{NamedTempFile, NamedTempFileOptions};
+
 use defs::*;
 use errors::*;
 use replica::*;
@@ -41,7 +43,6 @@ struct Config {
     private_dir: PathBuf,
     block_size: usize,
     cache_generation: i64,
-    root_dev: u64,
 }
 
 pub struct PosixReplica {
@@ -388,8 +389,6 @@ impl Replica for PosixReplica {
         let md = path_metadata(&path)?;
         if !md.file_type().is_dir() {
             Err(ErrorKind::NotADirectory.into())
-        } else if md.dev() != self.config.root_dev {
-            Err(ErrorKind::ChdirXDev.into())
         } else {
             Ok(dir.subdir(subdir, None))
         }
@@ -510,12 +509,6 @@ impl PosixReplica {
                     || format!("Path '{}' is not valid UTF-8",
                                private_dir.display()))?)?;
         let cache_generation = dao.next_generation()?;
-        let root_dev = path_metadata(root)?.dev();
-        let private_dev = path_metadata(private_dir)?.dev();
-
-        if root_dev != private_dev {
-            return Err(ErrorKind::PrivateXDev.into());
-        }
 
         Ok(PosixReplica {
             config: Arc::new(Config {
@@ -524,7 +517,6 @@ impl PosixReplica {
                 private_dir: private_dir.to_owned(),
                 block_size: block_size,
                 cache_generation: cache_generation,
-                root_dev: root_dev,
             }),
             dao: Arc::new(Mutex::new(dao)),
             tmpix: AtomicUsize::new(0),
@@ -645,9 +637,15 @@ impl PosixReplica {
             },
 
             FileData::Symlink(ref target) => {
-                let (_, scratch_path) = self.scratch_file(
-                    |path| unix::fs::symlink(target, path)).chain_err(
-                    || "Failed to create temporary symlink")?;
+                // We can't atomically create a symlink on top of anything
+                // else, but we *can* create a symlink, then atomically rename
+                // it into a non-symlink.
+                let scratch_path = NamedTempFile::new_in(dir.path())
+                    .chain_err(|| "Failed to create temporary name")?
+                    .path().to_owned();
+                unix::fs::symlink(target, &scratch_path).chain_err(
+                    || format!("Failed to create temporary symlink at '{}'",
+                               scratch_path.display()))?;
                 before_establish()?;
                 fs::rename(&scratch_path, &dir.child(source.0)).chain_err(
                     || format!("Failed to move new symlink to '{}'",
@@ -656,11 +654,17 @@ impl PosixReplica {
             },
 
             FileData::Regular(mode, _, time, _) => {
-                let (mut scratch_file, scratch_path) =
-                    self.scratch_regular(0o600)?;
+                let mut opts = NamedTempFileOptions::new();
+                opts.prefix(INVASIVE_TMP_PREFIX);
+
+                let mut scratch_file = opts.create_in(dir.path()).chain_err(
+                    || format!("Failed to create temporary file in '{}'",
+                               dir.path().display()))?;
+                let scratch_path = scratch_file.path().to_owned();
+
                 if let Some(xfer) = xfer {
                     // Copy the file to the local filesystem
-                    self.xfer_file(&mut scratch_file, &xfer).chain_err(
+                    self.xfer_file(&mut* scratch_file, &xfer).chain_err(
                         || format!("Failed to transfer content of '{}'",
                                    dir.child(source.0).display()))?;
                     // Move anything out of the way as needed
@@ -676,11 +680,10 @@ impl PosixReplica {
                     posix::set_mtime(&scratch_file, time).chain_err(
                         || format!("Failed to set mtime on '{}'",
                                    scratch_path.display()))?;
-                    fs::rename(&scratch_path, &new_path).chain_err(
-                        || format!("Failed to move '{}' to '{}'",
-                                   scratch_path.display(),
-                                   new_path.display()))?;
-                    scratch_file.sync_all().chain_err(
+                    let persisted = scratch_file.persist(&new_path)
+                        .chain_err(|| format!("Failed to persist '{}'",
+                                              new_path.display()))?;
+                    persisted.sync_all().chain_err(
                         || format!("Error fsync'ing '{}'",
                                    new_path.display()))?;
                     // Cache the content of the file, assuming that nobody
@@ -713,15 +716,26 @@ impl PosixReplica {
     /// Moves the file at `old_path` to a scratch location, so that it will be
     /// absent from its current location and scheduled for deletion, while
     /// still available in the block cache for efficient renames.
+    ///
+    /// If renaming the file fails, it is instead simply deleted.
     fn hide_file(&self, old_path: &Path) -> Result<()> {
         let (_, new_path) = self.scratch_regular(0o600).chain_err(
             || format!("Failed to generate path to which to move \
                         deleted file '{}'", old_path.display()))?;
-        fs::rename(old_path, &new_path).chain_err(
-            || format!("Failed to remove file '{}' to '{}'",
-                       old_path.display(), new_path.display()))?;
-        let _ = self.dao.lock().unwrap().rename_cache(
-            old_path.as_os_str(), new_path.as_os_str());
+        fs::rename(old_path, &new_path).map(|_| {
+            let _ = self.dao.lock().unwrap().rename_cache(
+                old_path.as_os_str(), new_path.as_os_str());
+        }).or_else(|_| {
+            match fs::remove_file(old_path) {
+                Ok(_) => { },
+                Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
+                Err(e) => return Err(e),
+            }
+
+            let _ = self.dao.lock().unwrap().delete_cache(
+                old_path.as_os_str());
+            Ok(())
+        })?;
         Ok(())
     }
 

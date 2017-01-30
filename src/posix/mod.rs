@@ -25,12 +25,12 @@
 //! the replica. Additionally, the replica uses the directory it owns for
 //! temporary files created during the sync process.
 //!
-//! The private directory must be on the same filesystem as the sync root. This
-//! is due to its use as a staging area for new files and as a cache to
-//! optimise renames (which can look like a delete followed by a create), both
-//! of which require being able to rename files to or from their location under
-//! the sync root. Attempts to access a directory in a different filesystem
-//! return an error.
+//! The private directory should be on the same filesystem as the sync root.
+//! This is due to its use as a cache to optimise renames (which can look like
+//! a delete followed by a create), which requires being able to rename files
+//! to or from their location under the sync root. If the sync crosses a
+//! filesystem boundary, this rename optimisation does not occur; renamed files
+//! will instead be re-downloaded if the deletion occurs before the create.
 //!
 //! Not everything in this module is POSIX-specific. The SQLite layer and some
 //! of the higher-level replica logic could probably be abstracted and reused

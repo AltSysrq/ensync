@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -90,16 +90,6 @@ error_chain! {
         RmdirRoot {
             description("Attempt to remove root directory")
             display("Attempt to remove root directory")
-        }
-        ChdirXDev {
-            description("Attempt to cross filesystem boundary")
-            display("Attempt to cross filesystem boundary")
-        }
-        PrivateXDev {
-            description("Private directory is on different filesystem from \
-                         sync root")
-            display("Private directory is on different filesystem from \
-                     sync root")
         }
         BadFilename(name: ffi::OsString) {
             description("Illegal file name")
