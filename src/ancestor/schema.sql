@@ -24,6 +24,10 @@ PRAGMA journal_mode = WAL;
 -- situation anyway.
 PRAGMA locking_mode = EXCLUSIVE;
 
+CREATE TABLE IF NOT EXISTS "db_dirty" (
+  "dirty"       INTEGER
+);
+
 -- The "file" table stores all the data in the ancestor replica.
 --
 -- Files are addressed either by their surrogate integer identifier, or by the

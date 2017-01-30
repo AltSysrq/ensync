@@ -31,7 +31,7 @@ use sql::*;
 ///
 /// The DAO is oblivious to the specific semantics of most of the data fields;
 /// particularly, it assigns no meaning to file type, mode, or content.
-pub struct Dao(SendConnection);
+pub struct Dao(VolatileConnection);
 
 /// A single row in the ancestor store. This is used both as a result from
 /// reading from the database as well as an input for filtering and writing.
@@ -109,11 +109,12 @@ impl Dao {
     /// open a temporary, in-memory database.
     ///
     /// The database is implicitly initialised and/or updated as needed.
-    pub fn open(path: &str) -> Result<Self> {
-        let cxn = try!(Connection::open(Path::new(path)));
-        try!(cxn.execute(include_str!("schema.sql")));
-
-        Ok(Dao(SendConnection(cxn)))
+    pub fn open<P : AsRef<Path>>(path: P) -> Result<Self> {
+        Ok(Dao(VolatileConnection::new(
+            path, include_str!("schema.sql"),
+            "This sync will be much more conservative than normal, as all \
+             files will be treated as new. (E.g., deleted files will be \
+             recreated, edited files will appear as conflicts, etc.)")?))
     }
 
     /// Retrieves a directory list.
