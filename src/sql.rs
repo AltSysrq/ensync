@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -18,7 +18,9 @@
 
 //! Miscelaneous utilities for working with SQLite.
 
+use std::fs;
 use std::ffi::{CString,OsStr,NulError};
+use std::io::{self, Write};
 use std::ops::{Deref, DerefMut};
 // Because we need to be able to represent an `OsStr` as bytes in the database.
 // This does not actually depend on anything POSIX-specific; if you're porting
@@ -26,6 +28,7 @@ use std::ops::{Deref, DerefMut};
 // encoding out and store that rather than using different behaviours for
 // different platforms.
 use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::result::Result as StdResult;
 
 use sqlite;
@@ -181,3 +184,121 @@ impl DerefMut for SendConnection {
 // it contains might not be `Send`. We do not use that feature, and SQLite
 // itself is prepared for cross-thread requests, so it is safe to be `Send`.
 unsafe impl Send for SendConnection { }
+
+/// Wrapper for `Connection` which runs the database in non-synchronous mode.
+///
+/// The schema must create a table named `db_dirty` which contains a `dirty`
+/// column and which is initially empty.
+///
+/// When the database is opened, the schema is executed, and then a test is
+/// made to see whether the `db_dirty` table is non-empty. If it is, or any
+/// error occurs in this process, `PRAGMA integrety_check(1)` is run. If that
+/// fails or returns any errors, a warning is printed, the database file is
+/// **deleted**, and then a new database is opened and the schema executed. If
+/// the second try fails, an error is returned.
+///
+/// When the connection is successfully set up, the following statements are
+/// run:
+///
+/// ```sql
+/// PRAGMA synchronous = FULL;
+/// INSERT INTO `db_dirty` (`dirty`) VALUES (1);
+/// PRAGMA synchronous = OFF;
+/// ```
+///
+/// Finally, when this value is dropped, the following is run, and any errors
+/// are ignored:
+///
+/// ```sql
+/// PRAGMA synchronous = FULL;
+/// DELETE FROM `db_dirty`;
+/// ```
+///
+/// Additionally, this type also has the same properties as `SendConnection`.
+pub struct VolatileConnection(pub sqlite::Connection);
+unsafe impl Send for VolatileConnection { }
+
+impl Deref for VolatileConnection {
+    type Target = sqlite::Connection;
+
+    fn deref(&self) -> &sqlite::Connection {
+        &self.0
+    }
+}
+impl DerefMut for VolatileConnection {
+    fn deref_mut(&mut self) -> &mut sqlite::Connection {
+        &mut self.0
+    }
+}
+
+macro_rules! eprintln {
+    ($($e:expr),*) => { { let _ = writeln!(io::stderr(), $($e),*); } }
+}
+
+impl VolatileConnection {
+    /// Sets up a new `VolatileConnection`, using the given path and
+    /// database schema.
+    ///
+    /// `bad_stuff` specifies a message to display to describe what the
+    /// consequences of nuking the database are.
+    pub fn new<P : AsRef<Path>>(path: P, schema: &str, bad_stuff: &str)
+                                -> sqlite::Result<Self> {
+        fn open_with_schema(path: &Path, schema: &str)
+                            -> sqlite::Result<sqlite::Connection> {
+            let cxn = sqlite::Connection::open(path)?;
+            cxn.execute(schema)?;
+            Ok(cxn)
+        }
+
+        fn open_first_try(path: &Path, schema: &str)
+                          -> sqlite::Result<sqlite::Connection> {
+            let cxn = open_with_schema(path, schema)?;
+            if cxn.prepare("SELECT 1 FROM `db_dirty`").exists()? {
+                eprintln!("Database '{}' not closed cleanly, performing \
+                           integrity check...", path.display());
+                let error: String = cxn.prepare("PRAGMA integrity_check(1)")
+                    .first(|s| s.read(0))?
+                    .unwrap_or_else(|| "(not ok)".to_owned());
+                if "ok" != &error {
+                    return Err(sqlite::Error {
+                        code: None, message: Some(error) });
+                }
+                if cxn.prepare("PRAGMA foreign_key_check").exists()? {
+                    return Err(sqlite::Error {
+                        code: None,
+                        message: Some("foreign key constraint violated"
+                                      .to_owned())
+                    });
+                }
+                eprintln!("Integrity check passed");
+            }
+            Ok(cxn)
+        }
+
+        let path = path.as_ref();
+        let cxn = open_first_try(path, schema).or_else(|e| {
+            eprintln!("Database '{}' is corrupt: {}\n\
+                       Deleting this file and creating a new, \
+                       empty database.\n\
+                       {}", path.display(), e, bad_stuff);
+            let _ = fs::remove_file(path);
+            open_with_schema(path, schema)
+        })?;
+
+        cxn.prepare("PRAGMA synchronous = FULL").run()?;
+        cxn.prepare("INSERT INTO `db_dirty` (`dirty`) VALUES (1)")
+            .run()?;
+        cxn.prepare("PRAGMA synchronous = OFF").run()?;
+        Ok(VolatileConnection(cxn))
+    }
+}
+
+impl Drop for VolatileConnection {
+    fn drop(&mut self) {
+        self.0.prepare("PRAGMA synchronous = FULL").run().and_then(
+            |_| self.0.prepare("DELETE FROM `db_dirty`").run())
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to clean database up: {}", e);
+            });
+    }
+}

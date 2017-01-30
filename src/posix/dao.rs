@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -19,18 +19,18 @@
 use std::ffi::{OsStr,OsString};
 use std::path::Path;
 
-use sqlite::{Connection, State, Statement};
+use sqlite::{State, Statement};
 
 use defs::*;
 use errors::*;
 use sql::*;
 
-/// Front-end to SQLite for the POSIX (client-side) ancestor replica.
+/// Front-end to SQLite for the POSIX (client-side) replica.
 ///
 /// This is higher-level than the otherwise comparable ancestor DAO, in that it
 /// handles all the semantics of the underlying database rather than being a
 /// simple translation layer.
-pub struct Dao(SendConnection);
+pub struct Dao(VolatileConnection);
 
 /// Iterator over the directories defined in the `clean_dirs` table.
 pub struct CleanDirs<'a>(Statement<'a>);
@@ -82,11 +82,11 @@ impl Dao {
     /// open a temporary, in-memory database.
     ///
     /// The database is implicitly initialised and/or updated as needed.
-    pub fn open(path: &str) -> Result<Self> {
-        let cxn = try!(Connection::open(Path::new(path)));
-        try!(cxn.execute(include_str!("schema.sql")));
-
-        Ok(Dao(SendConnection(cxn)))
+    pub fn open<P : AsRef<Path>>(path: P) -> Result<Self> {
+        Ok(Dao(VolatileConnection::new(
+            path, include_str!("schema.sql"),
+            "This sync may be slower than normal \
+             while things are recalculated.")?))
     }
 
     /// Returns an iterator over the whole `clean_dirs` table.

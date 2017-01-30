@@ -1,5 +1,5 @@
 ---
--- Copyright (c) 2016, Jason Lingle
+-- Copyright (c) 2016, 2017, Jason Lingle
 --
 -- This file is part of Ensync.
 --
@@ -23,6 +23,10 @@ PRAGMA journal_mode = WAL;
 -- "database locked" errors, since such errors indicate that we're in a fatal
 -- situation anyway.
 PRAGMA locking_mode = EXCLUSIVE;
+
+CREATE TABLE IF NOT EXISTS "db_dirty" (
+  "dirty"       INTEGER
+);
 
 -- Caches the computed hashes of whole regular files.
 --
