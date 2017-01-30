@@ -214,7 +214,7 @@ impl LocalStorage {
                 try!(tmpfile.write_all(data));
 
                 match tmpfile.persist_noclobber(self.dir_path(&id, &ver)) {
-                    Ok(_) => { },
+                    Ok(persisted) => { persisted.sync_all()?; },
                     Err(PersistError { ref error, .. })
                         if io::ErrorKind::AlreadyExists == error.kind() =>
                     {
@@ -261,6 +261,7 @@ impl LocalStorage {
                 // back, but the length in SQLite will still reflect the
                 // correct length.
                 try!(file.write_all(append));
+                try!(file.sync_data());
             },
 
             TxOp::Rmdir { ref id, ref ver, old_len } => {
@@ -307,7 +308,8 @@ impl LocalStorage {
                     let mut tmpfile = try!(
                         NamedTempFile::new_in(&self.tmpdir));
                     try!(io::copy(handle, &mut tmpfile));
-                    try!(tmpfile.persist(&objpath));
+                    let persisted = try!(tmpfile.persist(&objpath));
+                    try!(persisted.sync_all());
                 }
             },
 
@@ -636,6 +638,7 @@ impl Storage for LocalStorage {
         }
 
         let mut persisted = try!(tmpfile.persist(self.obj_path(id)));
+        try!(persisted.sync_all());
         try!(persisted.seek(io::SeekFrom::Start(0)));
 
         self.tx_add(tx, TxOp::LinkObj {
