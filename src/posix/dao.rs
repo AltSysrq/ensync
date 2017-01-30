@@ -198,39 +198,36 @@ impl Dao {
                              -> Result<()> {
         let path = path_str.as_nbytes();
 
-        try!(tx(&self.0, || {
-            // Kill any existing entry to transitively remove any block caches
-            // as well.
-            try!(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
-                 .binding(1, path).run());
+        // Kill any existing entry to transitively remove any block caches
+        // as well.
+        try!(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
+             .binding(1, path).run());
 
-            try!(self.0.prepare("INSERT INTO `hash_cache` ( \
-                                 path, hash, block_size, inode, size, mtime, \
-                                 generation \
+        try!(self.0.prepare("INSERT INTO `hash_cache` ( \
+                             path, hash, block_size, inode, size, mtime, \
+                             generation \
+                             ) VALUES ( \
+                             ?1,   ?2,   ?3,         ?4,    ?5,   ?6, \
+                             ?7)")
+             .binding(1, path)
+             .binding(2, &hash[..])
+             .binding(3, block_size as i64).binding(4, stat.ino as i64)
+             .binding(5, stat.size as i64).binding(6, stat.mtime as i64)
+             .binding(7, generation)
+             .run());
+        let id = try!(self.0.prepare("SELECT `id` FROM `hash_cache` \
+                                      WHERE `path` = ?1")
+                      .binding(1, path)
+                      .first(|s| s.read::<i64>(0)))
+            .expect("Couldn't find the id of the row just inserted");
+        for (ix, block) in blocks.iter().enumerate() {
+            try!(self.0.prepare("INSERT INTO `block_cache` ( \
+                                 file, offset, hash \
                                  ) VALUES ( \
-                                 ?1,   ?2,   ?3,         ?4,    ?5,   ?6, \
-                                 ?7)")
-                 .binding(1, path)
-                 .binding(2, &hash[..])
-                 .binding(3, block_size as i64).binding(4, stat.ino as i64)
-                 .binding(5, stat.size as i64).binding(6, stat.mtime as i64)
-                 .binding(7, generation)
-                 .run());
-            let id = try!(self.0.prepare("SELECT `id` FROM `hash_cache` \
-                                          WHERE `path` = ?1")
-                          .binding(1, path)
-                          .first(|s| s.read::<i64>(0)))
-                .expect("Couldn't find the id of the row just inserted");
-            for (ix, block) in blocks.iter().enumerate() {
-                try!(self.0.prepare("INSERT INTO `block_cache` ( \
-                                     file, offset, hash \
-                                     ) VALUES ( \
-                                     ?1,   ?2,     ?3)")
-                     .binding(1, id).binding(2, ix as i64)
-                     .binding(3, &block[..]).run());
-            }
-            Ok(())
-        }));
+                                 ?1,   ?2,     ?3)")
+                 .binding(1, id).binding(2, ix as i64)
+                 .binding(3, &block[..]).run());
+        }
         Ok(())
     }
 
@@ -246,36 +243,28 @@ impl Dao {
     pub fn cached_file_hash(&self, path: &OsStr, stat: &InodeStatus,
                             generation: i64)
                             -> Result<Option<HashId>> {
-        let hashvec = try!(tx(&self.0, || {
-            if let Some((id, hashvec)) = try!(
-                self.0.prepare(
-                    "SELECT `id`, `hash` FROM `hash_cache` \
-                     WHERE `path` = ?1 \
-                     AND   `inode` = ?2 AND `size` = ?3 \
-                     AND   `mtime` = ?4")
-                    .binding(1, path.as_nbytes())
-                    .binding(2, stat.ino as i64)
-                    .binding(3, stat.size as i64)
-                    .binding(4, stat.mtime as i64)
-                    .first(|s| Ok((try!(s.read::<i64>(0)),
-                                   try!(s.read::<Vec<u8>>(1))))))
-            {
-                try!(self.0.prepare(
-                    "UPDATE `hash_cache` \
-                     SET `generation` = ?2 \
-                     WHERE `id` = ?1")
-                     .binding(1, id)
-                     .binding(2, generation)
-                     .run());
+        if let Some((id, hashvec)) = try!(
+            self.0.prepare(
+                "SELECT `id`, `hash` FROM `hash_cache` \
+                 WHERE `path` = ?1 \
+                 AND   `inode` = ?2 AND `size` = ?3 \
+                 AND   `mtime` = ?4")
+                .binding(1, path.as_nbytes())
+                .binding(2, stat.ino as i64)
+                .binding(3, stat.size as i64)
+                .binding(4, stat.mtime as i64)
+                .first(|s| Ok((try!(s.read::<i64>(0)),
+                               try!(s.read::<Vec<u8>>(1))))))
+        {
+            try!(self.0.prepare(
+                "UPDATE `hash_cache` \
+                 SET `generation` = ?2 \
+                 WHERE `id` = ?1")
+                 .binding(1, id)
+                 .binding(2, generation)
+                 .run());
 
-                Ok(Some(hashvec))
-            } else {
-                Ok(None)
-            }
-        }));
-
-        if let Some(hv) = hashvec {
-            Ok(Some(try!(to_hashid(hv))))
+            Ok(Some(to_hashid(hashvec)?))
         } else {
             Ok(None)
         }

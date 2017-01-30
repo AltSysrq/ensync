@@ -17,7 +17,10 @@
 -- Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
+-- No transactions. We also run with `synchronous = OFF` (see
+-- `VolatileConnection`). Since this is just a cache, leaking dirty values is
+-- OK, as is corrupting the table if the application crashes.
+PRAGMA journal_mode = OFF;
 -- Running multiple processes on the same client store is not useful and can
 -- only cause problems, so prohibit. This also frees us from needing to handle
 -- "database locked" errors, since such errors indicate that we're in a fatal
