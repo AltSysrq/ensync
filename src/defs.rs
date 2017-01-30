@@ -35,7 +35,7 @@ pub const UNKNOWN_HASH: HashId = [0;32];
 pub const PRIVATE_DIR_NAME: &'static str = "internal.ensync";
 /// Prefix of invasive temporary files (i.e., those created implicitly by the
 /// sync process).
-pub const INVASIVE_TMP_PREFIX: &'static str = ".ensync_tmp_";
+pub const INVASIVE_TMP_PREFIX: &'static str = "ensync_tmp_";
 
 /// Wraps a `HashId` to display it in hexadecimal format.
 #[derive(Clone, Copy)]

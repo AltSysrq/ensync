@@ -56,6 +56,8 @@ struct DirContent {
     path: PathBuf,
     /// The name of this directory within its parent.
     name: OsString,
+    /// The id of the filesystem in which this directory resides.
+    dev: u64,
     /// If a parent directory handle exists, that parent. This is needed so
     /// that directories created implicitly via the synthdir mechanism
     /// correctly update the parent's hash.
@@ -91,10 +93,11 @@ static NUL: &'static [u8] = &[0u8];
 const INIT_HASH: HashId = [0;32];
 
 impl DirHandle {
-    pub fn root(path: PathBuf) -> Self {
+    pub fn root(path: PathBuf, dev: u64) -> Self {
         DirHandle(Arc::new(DirContent {
             path: path,
             name: OsString::new(),
+            dev: dev,
             parent: None,
             mcontent: Mutex::new(DirContentMut {
                 synth_mode: None,
@@ -103,11 +106,13 @@ impl DirHandle {
         }))
     }
 
-    pub fn subdir(&self, name: &OsStr, synth: Option<FileMode>)
+    pub fn subdir(&self, name: &OsStr, synth: Option<FileMode>,
+                  dev: u64)
                   -> DirHandle {
         DirHandle(Arc::new(DirContent {
             path: self.child(name),
             name: name.to_owned(),
+            dev: dev,
             parent: Some(self.clone()),
             mcontent: Mutex::new(DirContentMut {
                 synth_mode: synth,
@@ -139,6 +144,10 @@ impl DirHandle {
 
     pub fn child<P : AsRef<Path>>(&self, name: P) -> PathBuf {
         self.0.path.join(name)
+    }
+
+    pub fn dev(&self) -> u64 {
+        self.0.dev
     }
 
     pub fn is_synth(&self) -> bool {

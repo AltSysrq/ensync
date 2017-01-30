@@ -41,6 +41,7 @@ struct Config {
     hmac_secret: Vec<u8>,
     root: PathBuf,
     private_dir: PathBuf,
+    private_dir_dev: u64,
     block_size: usize,
     cache_generation: i64,
 }
@@ -169,7 +170,12 @@ impl Replica for PosixReplica {
     }
 
     fn root(&self) -> Result<DirHandle> {
-        Ok(DirHandle::root(self.config.root.clone()))
+        Ok(DirHandle::root(self.config.root.clone(),
+                           path_metadata(&self.config.root)
+                           .chain_err(|| format!("Error getting metadata \
+                                                  of '{}'",
+                                                 self.config.root.display()))?
+                           .dev()))
     }
 
     fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
@@ -390,13 +396,13 @@ impl Replica for PosixReplica {
         if !md.file_type().is_dir() {
             Err(ErrorKind::NotADirectory.into())
         } else {
-            Ok(dir.subdir(subdir, None))
+            Ok(dir.subdir(subdir, None, md.dev()))
         }
     }
 
     fn synthdir(&self, dir: &mut DirHandle, subdir: &OsStr, mode: FileMode)
                 -> DirHandle {
-        dir.subdir(subdir, Some(mode))
+        dir.subdir(subdir, Some(mode), dir.dev())
     }
 
     fn rmdir(&self, subdir: &mut DirHandle) -> Result<()> {
@@ -441,7 +447,7 @@ impl Replica for PosixReplica {
         })
     }
 
-    fn prepare (&self) -> Result<()> {
+    fn prepare(&self) -> Result<()> {
         // Reclaim any files left over from a crashed run
         self.clean_scratch()?;
 
@@ -450,7 +456,8 @@ impl Replica for PosixReplica {
         let dao = self.dao.lock().unwrap();
         for clean_dir in dao.iter_clean_dirs()? {
             let (path, expected_hash) = clean_dir?;
-            let dir = DirHandle::root(path.into());
+            // device doesn't matter here; just use 0
+            let dir = DirHandle::root(path.into(), 0);
 
             if let Ok(mut diriter) = fs::read_dir(dir.full_path()) {
                 while let Some(Ok(entry)) = diriter.next() {
@@ -510,17 +517,34 @@ impl PosixReplica {
                                private_dir.display()))?)?;
         let cache_generation = dao.next_generation()?;
 
+        let private_dir_dev = path_metadata(private_dir)?.dev();
+
         Ok(PosixReplica {
             config: Arc::new(Config {
                 hmac_secret: hmac_secret.to_vec(),
                 root: root.to_owned(),
                 private_dir: private_dir.to_owned(),
+                private_dir_dev: private_dir_dev,
                 block_size: block_size,
                 cache_generation: cache_generation,
             }),
             dao: Arc::new(Mutex::new(dao)),
             tmpix: AtomicUsize::new(0),
         })
+    }
+
+    fn named_temp_file(&self, dir: &DirHandle) -> io::Result<NamedTempFile> {
+        let mut opts = NamedTempFileOptions::new();
+        opts.prefix(INVASIVE_TMP_PREFIX);
+
+        // If possible, create temporary files non-invasively. But if it's on a
+        // different device, we have no choice but to create them in the target
+        // directory.
+        if self.config.private_dir_dev == dir.dev() {
+            opts.create_in(&self.config.private_dir)
+        } else {
+            opts.create_in(dir.path())
+        }
     }
 
     /// Atomically creates a new "scratch" file within the replica's private
@@ -640,7 +664,7 @@ impl PosixReplica {
                 // We can't atomically create a symlink on top of anything
                 // else, but we *can* create a symlink, then atomically rename
                 // it into a non-symlink.
-                let scratch_path = NamedTempFile::new_in(dir.path())
+                let scratch_path = self.named_temp_file(dir)
                     .chain_err(|| "Failed to create temporary name")?
                     .path().to_owned();
                 unix::fs::symlink(target, &scratch_path).chain_err(
@@ -654,10 +678,7 @@ impl PosixReplica {
             },
 
             FileData::Regular(mode, _, time, _) => {
-                let mut opts = NamedTempFileOptions::new();
-                opts.prefix(INVASIVE_TMP_PREFIX);
-
-                let mut scratch_file = opts.create_in(dir.path()).chain_err(
+                let mut scratch_file = self.named_temp_file(dir).chain_err(
                     || format!("Failed to create temporary file in '{}'",
                                dir.path().display()))?;
                 let scratch_path = scratch_file.path().to_owned();
