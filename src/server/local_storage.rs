@@ -373,6 +373,9 @@ impl LocalStorage {
     fn do_clean_up(&self) -> Result<()> {
         let db = self.db.lock().unwrap();
         sql::tx_gen(&db, || {
+            // Make sure we have a write lock.
+            db.prepare("DELETE FROM `lock`").run()?;
+
             let mut stmt = try!(db.prepare(
                 "SELECT `id` FROM `objs` WHERE `refs` = ?1")
                 .binding(1, &UNKNOWN_HASH[..]));
@@ -531,6 +534,9 @@ impl Storage for LocalStorage {
             // Atomically ensure that the transaction can be committed, then
             // commit it.
             match sql::tx_gen(&db, || {
+                // Take a write lock before issuing any reads
+                db.prepare("DELETE FROM `lock`").run()?;
+
                 match self.do_commit(&db, &mut txdat) {
                     Ok(true) => Ok(()),
                     Ok(false) => Err(CommitError::CommitFailed),
@@ -619,6 +625,8 @@ impl Storage for LocalStorage {
         {
             let db = self.db.lock().unwrap();
             try!(sql::tx(&db, || {
+                // No need to invoke the `lock` table since we only do an
+                // insert here.
                 db.prepare("INSERT OR IGNORE INTO `objs` (\
                             `id`, `refs`) VALUES (?1, ?2)")
                     .binding(1, &id[..])

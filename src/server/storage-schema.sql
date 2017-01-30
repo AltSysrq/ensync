@@ -1,5 +1,5 @@
 ---
--- Copyright (c) 2016, Jason Lingle
+-- Copyright (c) 2016, 2017, Jason Lingle
 --
 -- This file is part of Ensync.
 --
@@ -19,12 +19,19 @@
 -- Schema for the persistent SQLite database for server-side storage.
 
 PRAGMA foreign_keys = ON;
--- Don't use WAL mode since it doesn't guarantee that a read lock can be
--- promoted to a write lock in the presence of concurrent writers.
-PRAGMA journal_mode = PERSIST;
+PRAGMA journal_mode = WAL;
 PRAGMA journal_size_limit = 65536;
 -- Default locking mode; we need to support concurrent access.
 PRAGMA busy_timeout = 5000;
+
+-- This table is always empty.
+--
+-- It exists so that we can take a write lock on the database before performing
+-- any operations that eventually lead to a write, since in WAL mode it is not
+-- guaranteed to be able to upgrade a read lock to a write lock.
+CREATE TABLE IF NOT EXISTS "lock" (
+  "id"          INTEGER NOT NULL        PRIMARY KEY
+) WITHOUT ROWID;
 
 -- Stores the ids, versions, and committed lengths of all directories.
 --
