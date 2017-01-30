@@ -680,6 +680,9 @@ impl PosixReplica {
                         || format!("Failed to move '{}' to '{}'",
                                    scratch_path.display(),
                                    new_path.display()))?;
+                    scratch_file.sync_all().chain_err(
+                        || format!("Error fsync'ing '{}'",
+                                   new_path.display()))?;
                     // Cache the content of the file, assuming that nobody
                     // modified it between us renaming it there and `stat()`ing
                     // it now.
