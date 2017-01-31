@@ -331,6 +331,12 @@ fn send_frame<W : Write, T : fourleaf::Serialize>(mut out: W, obj: T)
     Ok(())
 }
 
+enum RequestResponse {
+    None,
+    AsyncError(Error),
+    SyncResponse(Response),
+}
+
 /// Runs the RPC server on the given input and output.
 ///
 /// Requests will be read from `unbuf_sin`, executed, and responses written to
@@ -340,6 +346,7 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
 {
     let mut sin = io::BufReader::new(unbuf_sin);
     let mut sout = io::BufWriter::new(unbuf_sout);
+    let mut fatal_error = None;
     loop {
         let request: Request = match read_frame(&mut sin) {
             Ok(Some(r)) => r,
@@ -351,109 +358,127 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
             },
         };
 
-        let response = process_frame(&storage, request, &mut sout);
-        if let Some(response) = response {
-            try!(write_response(&mut sout, response));
+        match process_frame(&storage, request, &mut sout) {
+            RequestResponse::None => { },
+            // We can't immediately send a `FatalError` when an async command
+            // fails, because the client might have more async commands to
+            // send, which would lead to deadlock if it blocked on the socket
+            // while we were waiting for it to notice the `FatalError` message,
+            // so instead save the error away.
+            RequestResponse::AsyncError(e) => if fatal_error.is_none() {
+                fatal_error = Some(e)
+            },
+            RequestResponse::SyncResponse(response) => {
+                if let Some(fatal_error) = fatal_error.take() {
+                    // Now that we know the client is paying attention and is
+                    // expecting some kind of response, we can return any
+                    // deferred error.
+                    //
+                    // It is admittedly kind of weird that we determine this
+                    // dynamically by actually processing the request and
+                    // inspecting whether it produced a result and then
+                    // discarding that result, but this keeps the code simpler
+                    // since these conditions do not happen with high
+                    // frequency.
+                    try!(write_response(&mut sout, Response::FatalError(
+                        format!("{}", fatal_error))));
+                } else {
+                    try!(write_response(&mut sout, response));
+                }
+            },
         }
     }
 
     fn process_frame<S : Storage, W : Write>(
         storage: &S, request: Request, sout: &mut W)
-        -> Option<Response>
+        -> RequestResponse
     {
         macro_rules! err {
-            ($e:expr) => { Some(Response::Error(format!("{}", $e))) }
+            ($e:expr) => { RequestResponse::SyncResponse(
+                Response::Error(format!("{}", $e))) }
         };
+
+        macro_rules! none_or_fatal {
+            ($e:expr) => { match $e {
+                Ok(_) => RequestResponse::None,
+                Err(e) => RequestResponse::AsyncError(e),
+            } }
+        }
 
         match request {
             Request::ClientInfo { .. } =>
-                Some(Response::ServerInfo {
+                RequestResponse::SyncResponse(Response::ServerInfo {
                     implementation: ImplementationInfo::this_implementation(),
                     motd: None,
                 }),
 
             Request::GetDir(id) => match storage.getdir(&id) {
                 Ok(Some((v, data))) =>
-                    Some(Response::DirData(v, data)),
-                Ok(None) => Some(Response::NotFound),
+                    RequestResponse::SyncResponse(Response::DirData(v, data)),
+                Ok(None) => RequestResponse::SyncResponse(Response::NotFound),
                 Err(err) => err!(err),
             },
 
             Request::GetObj(id) => match storage.getobj(&id) {
                 Ok(Some(data)) =>
-                    Some(Response::ObjData(data)),
-                Ok(None) => Some(Response::NotFound),
+                    RequestResponse::SyncResponse(Response::ObjData(data)),
+                Ok(None) => RequestResponse::SyncResponse(Response::NotFound),
                 Err(err) => err!(err),
             },
 
-            Request::CheckDirDirty(ref id, ref ver, len) => {
-                // TODO Here and below, the responseless messages need to
-                // handle errors in some way.
-                let _ = storage.check_dir_dirty(id, ver, len);
-                None
-            },
+            Request::CheckDirDirty(ref id, ref ver, len) =>
+                none_or_fatal!(storage.check_dir_dirty(id, ver, len)),
 
             Request::ForDirtyDir => {
                 match storage.for_dirty_dir(&mut |id| {
                     write_response(sout, Response::DirtyDir(*id))
                 }) {
-                    Ok(()) => Some(Response::Done),
+                    Ok(()) => RequestResponse::SyncResponse(Response::Done),
                     Err(err) => err!(err),
                 }
             },
 
-            Request::StartTx(tx) => {
-                let _ = storage.start_tx(tx);
-                None
-            },
+            Request::StartTx(tx) => none_or_fatal!(storage.start_tx(tx)),
 
             Request::Commit(tx) => match storage.commit(tx) {
-                Ok(true) => Some(Response::Done),
-                Ok(false) => Some(Response::Fail),
+                Ok(true) => RequestResponse::SyncResponse(Response::Done),
+                Ok(false) => RequestResponse::SyncResponse(Response::Fail),
                 Err(err) => err!(err),
             },
 
             Request::Abort(tx) => match storage.abort(tx) {
-                Ok(_) => Some(Response::Done),
+                Ok(_) => RequestResponse::SyncResponse(Response::Done),
                 Err(err) => err!(err),
             },
 
-            Request::Mkdir { tx, id, ver, data } => {
-                let _ = storage.mkdir(tx, &id, &ver, &data[..]);
-                None
-            },
+            Request::Mkdir { tx, id, ver, data } =>
+                none_or_fatal!(storage.mkdir(tx, &id, &ver, &data[..])),
 
-            Request::Updir { tx, id, ver, old_len, append } => {
-                let _ = storage.updir(tx, &id, &ver, old_len, &append[..]);
-                None
-            },
+            Request::Updir { tx, id, ver, old_len, append } =>
+                none_or_fatal!(storage.updir(tx, &id, &ver, old_len,
+                                             &append[..])),
 
-            Request::Rmdir { tx, id, ver, old_len } => {
-                let _ = storage.rmdir(tx, &id, &ver, old_len);
-                None
-            },
+            Request::Rmdir { tx, id, ver, old_len } =>
+                none_or_fatal!(storage.rmdir(tx, &id, &ver, old_len)),
 
             Request::Linkobj { tx, id, linkid } => {
                 match storage.linkobj(tx, &id, &linkid) {
-                    Ok(true) => Some(Response::Done),
-                    Ok(false) => Some(Response::NotFound),
+                    Ok(true) => RequestResponse::SyncResponse(Response::Done),
+                    Ok(false) =>
+                        RequestResponse::SyncResponse(Response::NotFound),
                     Err(err) => err!(err),
                 }
             },
 
-            Request::Putobj { tx, id, linkid, data } => {
-                let _ = storage.putobj(tx, &id, &linkid, &data[..]);
-                None
-            },
+            Request::Putobj { tx, id, linkid, data } =>
+                none_or_fatal!(storage.putobj(tx, &id, &linkid, &data[..])),
 
-            Request::Unlinkobj { tx, id, linkid } => {
-                let _ = storage.unlinkobj(tx, &id, &linkid);
-                None
-            },
+            Request::Unlinkobj { tx, id, linkid } =>
+                none_or_fatal!(storage.unlinkobj(tx, &id, &linkid)),
 
             Request::CleanUp => {
                 storage.clean_up();
-                Some(Response::Done)
+                RequestResponse::SyncResponse(Response::Done)
             },
         }
     }
