@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+use std::error::Error as StdError;
 use std::ffi;
 use std::io;
 
@@ -24,6 +25,7 @@ use sqlite;
 use tempfile;
 
 use defs::{DisplayHash, HashId};
+use log;
 use server;
 
 error_chain! {
@@ -131,6 +133,13 @@ error_chain! {
             description("Server error")
             display("Server error: {}", err)
         }
+        ServerFatalError(err: String) {
+            description("Server fatal error")
+            display("Server fatal error: {}", err)
+        }
+        ServerProtocolError {
+            description("Server communication/protocol error")
+        }
         UnexpectedServerResponse(response: server::rpc::Response) {
             description("Unexpected server response")
             display("Unexpected server response: {:?}", response)
@@ -235,5 +244,57 @@ error_chain! {
 impl From<tempfile::PersistError> for Error {
     fn from(e: tempfile::PersistError) -> Self {
         e.error.into()
+    }
+}
+
+impl Error {
+    /// Whether this error indicates a fatal condition from which syncing
+    /// cannot recover.
+    ///
+    /// Excludes things like usage errors that would simply prevent syncing
+    /// from even starting.
+    pub fn is_fatal(&self) -> bool {
+        match *self.kind() {
+            ErrorKind::ServerFatalError(_) => return true,
+            ErrorKind::ServerProtocolError => return true,
+            ErrorKind::ServerConnectionClosed => return true,
+            _ => (),
+        }
+
+        // XXX Reaching into `error_chain` internals because `downcast_ref`
+        // requires having an `&Error + 'static` but `Error::cause()` only
+        // returns `&Error`.
+        let cause: Option<&(StdError + Send + Sync + 'static)> =
+            self.1.next_error.as_ref().map(|e| &**e);
+        cause.and_then(|c| c.downcast_ref::<Error>())
+            .map(|c| c.is_fatal()).unwrap_or(false)
+    }
+
+    /// Returns the log level to use for this error.
+    pub fn level(&self) -> log::LogLevel {
+        if self.is_fatal() {
+            log::FATAL
+        } else {
+            log::ERROR
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use errors::*;
+
+    #[test]
+    fn nested_server_closed_is_fatal() {
+        fn first() -> Result<()> {
+            Err(ErrorKind::ServerConnectionClosed.into())
+        }
+
+        fn second() -> Result<()> {
+            first().chain_err(|| "Plugh")?;
+            Ok(())
+        }
+
+        assert!(second().err().unwrap().is_fatal());
     }
 }

@@ -7,7 +7,7 @@ authors = ["Jason Lingle <jason@lin.gl>"]
 chrono = { version = "0.2" }
 flate2 = "0.2.14"
 fourleaf = "0.1.0"
-error-chain = "0.7.1"
+error-chain = "0.8.1"
 libc = "0.2.18"
 num_cpus = "1.2.1"
 quick-error = "1.1.0"

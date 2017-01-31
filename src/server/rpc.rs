@@ -314,20 +314,22 @@ fn read_frame<R : BufRead,
               T : fourleaf::Deserialize<R, fourleaf::de::style::Copying> + ::std::fmt::Debug>
     (mut sin: R) -> Result<Option<T>>
 {
-    if sin.fill_buf()?.is_empty() {
+    if sin.fill_buf().chain_err(|| ErrorKind::ServerProtocolError)?.is_empty() {
         return Ok(None);
     }
 
     let mut config = fourleaf::DeConfig::default();
     config.max_blob = 128 * 1024 * 1024;
-    let value = fourleaf::from_reader(sin, &config)?;
+    let value = fourleaf::from_reader(sin, &config)
+        .chain_err(|| ErrorKind::ServerProtocolError)?;
     Ok(Some(value))
 }
 
 fn send_frame<W : Write, T : fourleaf::Serialize>(mut out: W, obj: T)
                                                   -> Result<()> {
-    fourleaf::to_writer(&mut out, obj)?;
-    out.flush()?;
+    fourleaf::to_writer(&mut out, obj)
+        .chain_err(|| ErrorKind::ServerProtocolError)?;
+    out.flush().chain_err(|| ErrorKind::ServerProtocolError)?;
     Ok(())
 }
 
@@ -508,8 +510,10 @@ pub struct RemoteStorage {
 macro_rules! handle_response {
     ($term:expr => { $($pat:pat => $res:expr,)* }) => {
         match $term {
-            Response::Error(e) | Response::FatalError(e) =>
+            Response::Error(e) =>
                 return Err(ErrorKind::ServerError(e).into()),
+            Response::FatalError(e) =>
+                return Err(ErrorKind::ServerFatalError(e).into()),
             $($pat => $res,)*
             r =>
                 return Err(ErrorKind::UnexpectedServerResponse(r).into()),

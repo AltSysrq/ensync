@@ -143,8 +143,8 @@ fn read_dir_contents<R : Replica, RB : DirRulesBuilder, LOG : Logger>(
     let list = match r.list(dir) {
         Ok(l) => l,
         Err(err) => {
-            log.log(log::ERROR, &Log::Error(side, dir_path,
-                                            log::ErrorOperation::List, &err));
+            log.log(err.level(), &Log::Error(
+                side, dir_path, log::ErrorOperation::List, &err));
             return Err(err)
         }
     };
@@ -259,7 +259,7 @@ fn try_chdir<R : Replica, LOG : Logger>(r: &R, parent: &R::Directory,
     match r.chdir(parent, name) {
         Ok(dir) => Some(dir),
         Err(error) => {
-            log.log(log::ERROR, &Log::Error(
+            log.log(error.level(), &Log::Error(
                 side, parent_name, log::ErrorOperation::Chdir(name), &error));
             None
         }
@@ -361,7 +361,7 @@ fn mark_clean<R : Replica, L : Logger>(
     match r.set_dir_clean(dir) {
         Ok(clean) => clean,
         Err(error) => {
-            log.log(log::ERROR, &Log::Error(
+            log.log(error.level(), &Log::Error(
                 side, dir_path, log::ErrorOperation::MarkClean, &error));
             false
         }
@@ -438,7 +438,7 @@ fn try_rmdir<R : Replica, LOG : Logger>(r: &R, dir: &mut R::Directory,
     match r.rmdir(dir) {
         Ok(_) => true,
         Err(error) => {
-            log.log(log::ERROR, &Log::Error(
+            log.log(error.level(), &Log::Error(
                 side, dir_path, log::ErrorOperation::Rmdir, &error));
             false
         }

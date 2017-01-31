@@ -122,7 +122,7 @@ fn try_replace_ancestor<A : Replica + NullTransfer, LOG : Logger>(
 {
     replace_ancestor(replica, in_dir, files, name, old, new)
         .to_bool(|error| log.log(
-            log::ERROR, &Log::Error(
+            error.level(), &Log::Error(
                 ReplicaSide::Ancestor, dir_name,
                 ErrorOperation::Update(name), &error)))
 }
@@ -169,7 +169,7 @@ fn replace_replica<DST : Replica,
                     Ok(None)
                 },
                 Err(error) => {
-                    log.log(log::ERROR, &Log::Error(
+                    log.log(error.level(), &Log::Error(
                         side, dir_name, ErrorOperation::Remove(name),
                         &error));
                     Err(error)
@@ -190,7 +190,7 @@ fn replace_replica<DST : Replica,
                     Ok(Some(r))
                 },
                 Err(error) => {
-                    log.log(log::ERROR, &Log::Error(
+                    log.log(error.level(), &Log::Error(
                         side, dir_name, ErrorOperation::Update(name),
                         &error));
                     Err(error)
@@ -210,7 +210,7 @@ fn replace_replica<DST : Replica,
                     Ok(Some(r))
                 },
                 Err(error) => {
-                    log.log(log::ERROR, &Log::Error(
+                    log.log(error.level(), &Log::Error(
                         side, dir_name, ErrorOperation::Create(name),
                         &error));
                     Err(error)
@@ -244,7 +244,7 @@ fn try_rename_replica<A : Replica, LOG : Logger>(
             true
         },
         Err(error) => {
-            log.log(log::ERROR, &Log::Error(
+            log.log(error.level(), &Log::Error(
                 side, dir_name, ErrorOperation::Rename(old_name), &error));
             false
         }
@@ -424,7 +424,7 @@ pub fn apply_reconciliation(
 
                 SplitAncestorState::Move =>
                     self.anc.condemn(&mut dir.anc.dir, name).to_bool(
-                        |error|  self.log.log(log::ERROR, &Log::Error(
+                        |error|  self.log.log(error.level(), &Log::Error(
                             ReplicaSide::Ancestor, dir_name,
                             ErrorOperation::Access(name), &error))),
             }
@@ -450,7 +450,7 @@ pub fn apply_reconciliation(
                          ReplicaSide::Ancestor))
 
                     && self.anc.uncondemn(&mut dir.anc.dir, name).to_bool(
-                        |error| self.log.log(log::ERROR, &Log::Error(
+                        |error| self.log.log(error.level(), &Log::Error(
                             ReplicaSide::Ancestor, dir_name,
                             ErrorOperation::Access(name), &error)))
                 },
