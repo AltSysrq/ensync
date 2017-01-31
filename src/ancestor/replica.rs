@@ -71,8 +71,6 @@ pub struct SynthDir {
     mode: FileMode,
 }
 
-// TODO Move most of this to a shared place, since the implementation will
-// basically be the same for all the real replica types.
 impl DirHandle {
     /// Gets the numeric handle for this directory.
     ///
