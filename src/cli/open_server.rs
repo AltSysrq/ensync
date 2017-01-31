@@ -35,6 +35,19 @@ pub fn open_server_storage(config: &ServerConfig) -> Result<Arc<Storage>> {
                 || "Failed to set up server in local filesystem")?)),
 
         ServerConfig::Shell(ref command, ref workdir) => {
+            // Running the process this way doesn't fully play nicely with our
+            // special handling of ^C (though it does work well enough). Like
+            // this, if the user hits ^C, the server command is immediately
+            // terminated, which causes `ssh` to hang up immediately
+            // (regardless of what the remote process does), thus interrupting
+            // any in-flight commands.
+            //
+            // We _could_ prefix `command` with `trap "" INT`, which fixes
+            // that, but means that if this process is killed with two ^C
+            // strokes, the server process continues running with no obvious
+            // way to stop it.
+            //
+            // The former option seems the lesser of these two evils.
             let mut process = process::Command::new("/bin/sh");
             process
                 .arg("-c")
