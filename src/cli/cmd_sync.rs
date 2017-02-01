@@ -169,9 +169,19 @@ impl LoggerImpl {
                     ReplicaSide::Ancestor => "ancest",
                 };
 
-                if ReplicaSide::Ancestor != side || self.include_ancestors ||
-                    level <= ERROR
-                {
+                // Only show errors in the ancestor store unless the user wants
+                // to know everything going on there.
+                let not_ancestor_or_allowed =
+                    ReplicaSide::Ancestor != side || self.include_ancestors ||
+                    level <= ERROR;
+                // Interrupting the process with ^C will generally kill the
+                // server process too, so don't log fatal errors from the
+                // server after interruption.
+                let not_interrupted_server_death =
+                    level != FATAL || ReplicaSide::Server != side ||
+                    !interrupt::is_interrupted();
+
+                if not_ancestor_or_allowed && not_interrupted_server_death {
                     perrln!(concat!("[{}{}{}] {} {}{}{}: ", $extra),
                             if self.colour { start_colour } else { "" },
                             level_name,
