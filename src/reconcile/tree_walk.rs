@@ -422,9 +422,6 @@ fn recursive_delete(
         }
     }
 
-    self.log.log(log::EDIT, &Log::RecursiveDelete(
-        side.into(), dir.cli.dir.full_path()));
-
     let cli_dir = chdir_or_synth(&self.cli, &mut dir.cli.dir,
                                  ReconciliationSide::Client, side,
                                  &self.log, parent_name, name, mode);
@@ -435,11 +432,15 @@ fn recursive_delete(
                                  &self.log, parent_name, name, mode);
 
     match (cli_dir, anc_dir, srv_dir) {
-        (Some(cli_dir), anc_dir, Some(srv_dir)) =>
+        (Some(cli_dir), anc_dir, Some(srv_dir)) => {
+            self.log.log(log::EDIT, &Log::RecursiveDelete(
+                side.into(), cli_dir.full_path()));
+
             self.recurse_and_then(
                 cli_dir, anc_dir, srv_dir, file_rules, state,
                 |this, mut dir, substate| this.delete_or_mark_clean(
-                    &mut dir, substate)),
+                    &mut dir, substate));
+        },
 
         _ => state.fail("recursive_delete chdir failed"),
     }

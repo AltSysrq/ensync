@@ -289,13 +289,12 @@ impl LoggerImpl {
 
                 if let FileData::Directory(..) = *state {
                     self.created_directories.write().unwrap()
-                        .insert(Path::new(path).to_owned());
+                        .insert(Path::new(path).join(name));
                 }
 
                 if self.include_ops_under_opped_directory ||
-                    Path::new(path).parent().map_or(
-                        true, |p| !self.created_directories.read()
-                            .unwrap().contains(p))
+                    !self.created_directories.read().unwrap().contains(
+                        Path::new(path))
                 {
                     say!((path, name), side, "create\
                                               \n        + {}", FDD(state))
@@ -342,9 +341,8 @@ impl LoggerImpl {
                     }
                 });
                 if self.include_ops_under_opped_directory ||
-                    Path::new(path).parent().map_or(
-                        true, |p| !self.recdel_directories.read()
-                            .unwrap().contains(p))
+                    !self.recdel_directories.read().unwrap().contains(
+                        Path::new(path))
                 {
                     say!((path, name), side, "delete\
                                               \n        - {}", FDD(state));
@@ -368,9 +366,8 @@ impl LoggerImpl {
                 // there is an actual directory being deleted.
 
                 if self.include_ops_under_opped_directory ||
-                    Path::new(path).parent().map_or(
-                        true, |p| !self.recdel_directories.read()
-                            .unwrap().contains(p))
+                    !self.recdel_directories.read().unwrap().contains(
+                        Path::new(path))
                 {
                     say!(path, side, "remove directory");
                 }
