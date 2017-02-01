@@ -61,13 +61,8 @@ pub enum ErrorOperation<'a> {
     Access(&'a OsStr),
 }
 
-// TODO We need to either actually emit `EnterDirectory` and `LeaveDirectory`
-// or remove them.
-#[allow(dead_code)]
 #[derive(Clone,Copy,Debug)]
 pub enum Log<'a> {
-    EnterDirectory(&'a OsStr),
-    LeaveDirectory(&'a OsStr),
     Inspect(&'a OsStr, &'a OsStr, Reconciliation, Conflict),
     Create(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
     Update(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData, &'a FileData),

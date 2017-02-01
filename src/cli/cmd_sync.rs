@@ -196,11 +196,6 @@ impl LoggerImpl {
         }
 
         match *what {
-            Log::EnterDirectory(dir) =>
-                say!(dir, ReplicaSide::Client, "entering directory"),
-            Log::LeaveDirectory(dir) =>
-                say!(dir, ReplicaSide::Client, "leaving directory"),
-
             Log::Inspect(dir, name, reconciliation, conflict) => {
                 let recon_str = match reconciliation {
                     Reconciliation::InSync =>
@@ -433,8 +428,6 @@ impl LoggerImpl {
         }
 
         match *what {
-            Log::EnterDirectory(_) |
-            Log::LeaveDirectory(_) |
             Log::Error(..) => { },
 
             Log::Inspect(parent, name, Reconciliation::InSync, _) |
