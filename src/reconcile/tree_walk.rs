@@ -422,6 +422,9 @@ fn recursive_delete(
         }
     }
 
+    self.log.log(log::EDIT, &Log::RecursiveDelete(
+        side.into(), dir.cli.dir.full_path()));
+
     let cli_dir = chdir_or_synth(&self.cli, &mut dir.cli.dir,
                                  ReconciliationSide::Client, side,
                                  &self.log, parent_name, name, mode);

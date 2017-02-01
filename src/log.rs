@@ -69,6 +69,7 @@ pub enum Log<'a> {
     Rename(ReplicaSide, &'a OsStr, &'a OsStr, &'a OsStr),
     Remove(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
     Rmdir(ReplicaSide, &'a OsStr),
+    RecursiveDelete(ReplicaSide, &'a OsStr),
     Error(ReplicaSide, &'a OsStr, ErrorOperation<'a>, &'a Error),
 }
 

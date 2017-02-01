@@ -79,11 +79,12 @@ impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, &'a OsStr)> {
 struct LoggerImpl {
     client_root: PathBuf,
     verbose_level: LogLevel,
-    include_creations_under_created_directory: bool,
+    include_ops_under_opped_directory: bool,
     itemise_level: LogLevel,
     include_ancestors: bool,
     colour: bool,
     created_directories: RwLock<HashSet<PathBuf>>,
+    recdel_directories: RwLock<HashSet<PathBuf>>,
     spin: Option<Mutex<SpinState>>,
 }
 
@@ -291,7 +292,7 @@ impl LoggerImpl {
                         .insert(Path::new(path).to_owned());
                 }
 
-                if self.include_creations_under_created_directory ||
+                if self.include_ops_under_opped_directory ||
                     Path::new(path).parent().map_or(
                         true, |p| !self.created_directories.read()
                             .unwrap().contains(p))
@@ -340,12 +341,40 @@ impl LoggerImpl {
                         ReplicaSide::Ancestor => (),
                     }
                 });
-                say!((path, name), side, "delete\
-                                          \n        - {}", FDD(state));
+                if self.include_ops_under_opped_directory ||
+                    Path::new(path).parent().map_or(
+                        true, |p| !self.recdel_directories.read()
+                            .unwrap().contains(p))
+                {
+                    say!((path, name), side, "delete\
+                                              \n        - {}", FDD(state));
+                }
             },
 
-            Log::Rmdir(side, path) =>
-                say!(path, side, "remove directory"),
+            Log::RecursiveDelete(side, path) => {
+                self.recdel_directories.write().unwrap()
+                    .insert(Path::new(path).to_owned());
+                if self.include_ops_under_opped_directory ||
+                    Path::new(path).parent().map_or(
+                        true, |p| !self.recdel_directories.read()
+                            .unwrap().contains(p))
+                {
+                    say!(path, side, "delete recursively");
+                }
+            },
+
+            Log::Rmdir(side, path) => {
+                // Don't update the spinner here, since we don't know whether
+                // there is an actual directory being deleted.
+
+                if self.include_ops_under_opped_directory ||
+                    Path::new(path).parent().map_or(
+                        true, |p| !self.recdel_directories.read()
+                            .unwrap().contains(p))
+                {
+                    say!(path, side, "remove directory");
+                }
+            },
 
             Log::Error(side, path, ref op, err) => {
                 match *op {
@@ -529,6 +558,7 @@ impl LoggerImpl {
 
         match *what {
             Log::Error(..) => { },
+            Log::RecursiveDelete(..) => { },
 
             Log::Inspect(parent, name, Reconciliation::InSync, _) |
             Log::Inspect(parent, name, Reconciliation::Unsync, _) |
@@ -652,12 +682,12 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
     // Virtual log level between EDIT and INFO in which creations under new
     // directories are also logged.
-    let include_creations_under_created_directory;
+    let include_ops_under_opped_directory;
     if nominal_log_level > (EDIT as i32) {
-        include_creations_under_created_directory = true;
+        include_ops_under_opped_directory = true;
         nominal_log_level -= 1;
     } else {
-        include_creations_under_created_directory = false;
+        include_ops_under_opped_directory = false;
     }
 
     let level = max(FATAL as i32, min(255, nominal_log_level)) as LogLevel;
@@ -665,8 +695,8 @@ pub fn run(config: &Config, storage: Arc<Storage>,
     let log = LoggerImpl {
         client_root: config.client_root.to_owned(),
         verbose_level: level,
-        include_creations_under_created_directory:
-            include_creations_under_created_directory,
+        include_ops_under_opped_directory:
+            include_ops_under_opped_directory,
         itemise_level: if !itemise {
             0
         } else if !itemise_unchanged {
@@ -677,6 +707,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         include_ancestors: include_ancestors,
         colour: colour,
         created_directories: RwLock::new(HashSet::new()),
+        recdel_directories: RwLock::new(HashSet::new()),
         spin: if spin {
             Some(Mutex::new(SpinState::default()))
         } else {
