@@ -371,21 +371,27 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
                 fatal_error = Some(e)
             },
             RequestResponse::SyncResponse(response) => {
-                if let Some(fatal_error) = fatal_error.take() {
-                    // Now that we know the client is paying attention and is
-                    // expecting some kind of response, we can return any
-                    // deferred error.
-                    //
-                    // It is admittedly kind of weird that we determine this
-                    // dynamically by actually processing the request and
-                    // inspecting whether it produced a result and then
-                    // discarding that result, but this keeps the code simpler
-                    // since these conditions do not happen with high
-                    // frequency.
-                    try!(write_response(&mut sout, Response::FatalError(
-                        format!("{}", fatal_error))));
+                // Now that we know the client is paying attention and is
+                // expecting some kind of response, we can return any deferred
+                // error.
+                //
+                // It is admittedly kind of weird that we determine this
+                // dynamically by actually processing the request and
+                // inspecting whether it produced a result and then discarding
+                // that result, but this keeps the code simpler since these
+                // conditions do not happen with high frequency.
+                let response = fatal_error.take()
+                    .map(|e| Response::FatalError(e.to_string()))
+                    .unwrap_or(response);
+                let fatal = if let Response::FatalError(_) = response {
+                    true
                 } else {
-                    try!(write_response(&mut sout, response));
+                    false
+                };
+                try!(write_response(&mut sout, response));
+
+                if fatal {
+                    return Ok(());
                 }
             },
         }
