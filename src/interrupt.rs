@@ -27,8 +27,8 @@ pub fn is_interrupted() -> bool {
 }
 
 unsafe extern "C" fn handle_sigint(_: libc::c_int) {
-    let message = b"Sync interrupted, stopping gracefully.\n\
-                    Press ^C again to terminate gracelessly.\n";
+    let message = b"\nSync interrupted, stopping gracefully.\n\
+                    Press ^C again to terminate immediately.\n";
     libc::write(2, message.as_ptr() as *const libc::c_void,
                 message.len() as libc::size_t);
     INTERRUPTED.store(true, Relaxed);
