@@ -170,7 +170,16 @@ fn main_impl() -> Result<()> {
                          .takes_value(true)
                          .default_value("auto")
                          .possible_values(&["auto", "always", "never"])
-                         .help("Control colourisation of stderr log")))
+                         .help("Control colourisation of stderr log"))
+                    .arg(Arg::with_name("spin")
+                         .long("spin")
+                         .alias("spinner")
+                         .required(false)
+                         .takes_value(true)
+                         .default_value("auto")
+                         .possible_values(&["auto", "always", "never"])
+                         .help("Control whether the progress spinner \
+                                is shown")))
         .subcommand(SubCommand::with_name("init-keys")
                     .about("Initialise the key store")
                     .setting(AppSettings::DontCollapseArgsInUsage)
@@ -443,6 +452,7 @@ fn main_impl() -> Result<()> {
                            matches.is_present("itemise"),
                            matches.is_present("itemise-unchanged"),
                            matches.value_of("colour").unwrap(),
+                           matches.value_of("spin").unwrap(),
                            matches.is_present("include-ancestors"),
                            num_threads)
     } else if let Some(matches) = matches.subcommand_matches("ls") {

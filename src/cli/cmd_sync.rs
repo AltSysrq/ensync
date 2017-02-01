@@ -24,7 +24,7 @@ use std::fmt;
 use std::fs;
 use std::io::{Write, stdout, stderr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::Ordering::SeqCst;
 use std::thread;
 use libc::isatty;
@@ -84,6 +84,22 @@ struct LoggerImpl {
     include_ancestors: bool,
     colour: bool,
     created_directories: RwLock<HashSet<PathBuf>>,
+    spin: Option<Mutex<SpinState>>,
+}
+
+#[derive(Debug, Default)]
+struct SpinState {
+    cycle: u8,
+    cli: ReplicaSpinState,
+    srv: ReplicaSpinState,
+}
+
+#[derive(Debug, Default)]
+struct ReplicaSpinState {
+    created: u64,
+    updated: u64,
+    deleted: u64,
+    transfer: u64,
 }
 
 impl Logger for LoggerImpl {
@@ -101,6 +117,12 @@ impl LoggerImpl {
     fn write_human_readable(&self, level: LogLevel, what: &Log) {
         let stderr_handle = stderr();
         let mut stderr_lock = stderr_handle.lock();
+
+        macro_rules! perr {
+            ($($arg:expr),+) => {
+                let _ = write!(stderr_lock, $($arg),+);
+            }
+        }
 
         macro_rules! perrln {
             ($($arg:expr),+) => {
@@ -123,24 +145,28 @@ impl LoggerImpl {
             }
         }
 
+        fn pretty_size(mut size: u64) -> String {
+            let suffixes = ["bytes", "kB", "MB", "GB",
+                            "TB", "PB", "EB", "ZB", "YB"];
+            let mut suffix_ix = 0usize;
+            while size > 10000 {
+                size /= 1024;
+                suffix_ix += 1;
+            }
+
+            format!("{} {}", size, suffixes[suffix_ix])
+        }
+
         struct FDD<'a>(&'a FileData);
         impl<'a> fmt::Display for FDD<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match *self.0 {
                     FileData::Directory(mode) =>
                         write!(f, "directory (mode {:04o})", mode),
-                    FileData::Regular(mode, mut size, time, _) => {
-                        let suffixes = ["bytes", "kB", "MB", "GB",
-                                        "TB", "PB", "EB", "ZB", "YB"];
-                        let mut suffix_ix = 0usize;
-                        while size > 10000 {
-                            size /= 1024;
-                            suffix_ix += 1;
-                        }
-
-                        write!(f, "regular file (mode {:04o}, size {} {}, \
+                    FileData::Regular(mode, size, time, _) => {
+                        write!(f, "regular file (mode {:04o}, size {}, \
                                    modified {})",
-                               mode, size, suffixes[suffix_ix],
+                               mode, pretty_size(size),
                                format_date::format_timestamp(time))
                     },
                     FileData::Symlink(ref target) =>
@@ -150,6 +176,15 @@ impl LoggerImpl {
                 }
             }
         }
+
+        fn spin_size(fd: &FileData) -> u64 {
+            match *fd {
+                FileData::Regular(_, size, _, _) => size,
+                _ => 0,
+            }
+        }
+
+        let mut reprint_spin = false;
 
         macro_rules! say {
             ($path:expr, $side:expr, $extra:tt $(, $arg:expr)*) => {{
@@ -191,8 +226,18 @@ impl LoggerImpl {
                             PathDisplay(&self.client_root, $path),
                             if self.colour { "\x1B[0m" } else { "" }
                             $(, $arg)*);
+                    reprint_spin = true;
                 }
             }}
+        }
+        macro_rules! update_spin {
+            (|$spin:ident| $body:block) => {
+                if let Some(ref spin) = self.spin {
+                    let mut $spin = spin.lock().unwrap();
+                    $body;
+                    reprint_spin = true;
+                }
+            }
         }
 
         match *what {
@@ -227,6 +272,20 @@ impl LoggerImpl {
             },
 
             Log::Create(side, path, name, state) => {
+                update_spin!(|spin| {
+                    match side {
+                        ReplicaSide::Client => {
+                            spin.cli.created += 1;
+                            spin.cli.transfer += spin_size(state);
+                        },
+                        ReplicaSide::Server => {
+                            spin.srv.created += 1;
+                            spin.srv.transfer += spin_size(state);
+                        },
+                        ReplicaSide::Ancestor => { },
+                    }
+                });
+
                 if let FileData::Directory(..) = *state {
                     self.created_directories.write().unwrap()
                         .insert(Path::new(path).to_owned());
@@ -242,20 +301,48 @@ impl LoggerImpl {
                 }
             },
 
-            Log::Update(side, path, name, old, new) =>
+            Log::Update(side, path, name, old, new) => {
+                let content_change = !old.matches_content(new);
+                update_spin!(|spin| {
+                    match side {
+                        ReplicaSide::Client => {
+                            spin.cli.updated += 1;
+                            if content_change {
+                                spin.cli.transfer += spin_size(new);
+                            }
+                        },
+                        ReplicaSide::Server => {
+                            spin.srv.updated += 1;
+                            if content_change {
+                                spin.srv.transfer += spin_size(new);
+                            }
+                        },
+                        ReplicaSide::Ancestor => { },
+                    }
+                });
+
                 say!((path, name), side, "update\
                                           \n        - {}\
                                           \n        + {}",
-                     FDD(old), FDD(new)),
+                     FDD(old), FDD(new));
+            },
 
             Log::Rename(side, path, old, new) =>
                 say!((path, old), side, "rename\
                                          \n        -> {}",
                      new.as_path().display()),
 
-            Log::Remove(side, path, name, state) =>
+            Log::Remove(side, path, name, state) => {
+                update_spin!(|spin| {
+                    match side {
+                        ReplicaSide::Client => spin.cli.deleted += 1,
+                        ReplicaSide::Server => spin.srv.deleted += 1,
+                        ReplicaSide::Ancestor => (),
+                    }
+                });
                 say!((path, name), side, "delete\
-                                          \n        - {}", FDD(state)),
+                                          \n        - {}", FDD(state));
+            },
 
             Log::Rmdir(side, path) =>
                 say!(path, side, "remove directory"),
@@ -304,6 +391,19 @@ impl LoggerImpl {
                     perrln!("{:?}", bt);
                 }
             },
+        }
+
+        if reprint_spin {
+            if let Some(ref spin) = self.spin {
+                let mut spin = spin.lock().unwrap();
+                spin.cycle = (spin.cycle + 1) % 4;
+                perr!("\x1B[K{} in: +{} *{} -{} {}, out: +{} *{} -{} {}\r",
+                      ['-', '\\', '|', '/'][spin.cycle as usize],
+                      spin.cli.created, spin.cli.updated, spin.cli.deleted,
+                      pretty_size(spin.cli.transfer),
+                      spin.srv.created, spin.srv.updated, spin.srv.deleted,
+                      pretty_size(spin.srv.transfer));
+            }
         }
     }
 
@@ -506,9 +606,16 @@ impl LoggerImpl {
 pub fn run(config: &Config, storage: Arc<Storage>,
            verbosity: i32, quietness: i32,
            itemise: bool, itemise_unchanged: bool,
-           colour: &str, include_ancestors: bool,
+           colour: &str, spin: &str,
+           include_ancestors: bool,
            num_threads: u32) -> Result<()> {
     let colour = match colour {
+        "never" => false,
+        "always" => true,
+        "auto" => 1 == unsafe { isatty(2) },
+        _ => false,
+    };
+    let spin = match spin {
         "never" => false,
         "always" => true,
         "auto" => 1 == unsafe { isatty(2) },
@@ -570,6 +677,11 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         include_ancestors: include_ancestors,
         colour: colour,
         created_directories: RwLock::new(HashSet::new()),
+        spin: if spin {
+            Some(Mutex::new(SpinState::default()))
+        } else {
+            None
+        },
     };
 
     // For some reason the type parms on `Context` are required
@@ -624,6 +736,9 @@ pub fn run(config: &Config, storage: Arc<Storage>,
     context.run_work();
     for thread in threads {
         let _ = thread.join().expect("Child thread panicked");
+    }
+    if context.log.spin.is_some() {
+        println!("");
     }
 
     if interrupt::is_interrupted() {
