@@ -218,7 +218,7 @@ impl LoggerImpl {
                     !interrupt::is_interrupted();
 
                 if not_ancestor_or_allowed && not_interrupted_server_death {
-                    perrln!(concat!("[{}{}{}] {} {}{}{}: ", $extra),
+                    perrln!(concat!("\x1B[K[{}{}{}] {} {}{}{}: ", $extra),
                             if self.colour { start_colour } else { "" },
                             level_name,
                             if self.colour { "\x1B[0m" } else { "" },
