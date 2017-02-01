@@ -169,7 +169,9 @@ impl LoggerImpl {
                     ReplicaSide::Ancestor => "ancest",
                 };
 
-                if ReplicaSide::Ancestor != side || self.include_ancestors {
+                if ReplicaSide::Ancestor != side || self.include_ancestors ||
+                    level <= ERROR
+                {
                     perrln!(concat!("[{}{}{}] {} {}{}{}: ", $extra),
                             if self.colour { start_colour } else { "" },
                             level_name,
