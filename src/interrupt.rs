@@ -16,19 +16,14 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::mem;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, ATOMIC_BOOL_INIT};
 use std::sync::atomic::Ordering::Relaxed;
 use libc;
 
-static mut INTERRUPTED_RAW: usize = 0;
-
-fn interrupted() -> &'static AtomicUsize {
-    unsafe { mem::transmute(&INTERRUPTED_RAW) }
-}
+static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
 
 pub fn is_interrupted() -> bool {
-    0 != interrupted().load(Relaxed)
+    INTERRUPTED.load(Relaxed)
 }
 
 unsafe extern "C" fn handle_sigint(_: libc::c_int) {
@@ -36,7 +31,7 @@ unsafe extern "C" fn handle_sigint(_: libc::c_int) {
                     Press ^C again to terminate gracelessly.\n";
     libc::write(2, message.as_ptr() as *const libc::c_void,
                 message.len() as libc::size_t);
-    interrupted().store(1, Relaxed);
+    INTERRUPTED.store(true, Relaxed);
     libc::signal(libc::SIGTERM, libc::SIG_DFL);
 }
 
