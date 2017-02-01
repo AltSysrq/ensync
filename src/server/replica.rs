@@ -113,6 +113,10 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     type TransferIn = Option<Box<StreamSource>>;
     type TransferOut = Option<ContentAddressableSource>;
 
+    fn is_fatal(&self) -> bool {
+        self.storage.is_fatal()
+    }
+
     fn is_dir_dirty(&self, dir: &Arc<Dir<S>>) -> bool {
         let db = self.db.lock().unwrap();
         let clean = db.prepare("SELECT 1 FROM `clean_dir` WHERE `id` = ?1")

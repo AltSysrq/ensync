@@ -18,6 +18,7 @@
 
 use std::io::{self, BufRead, Read, Write};
 use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use fourleaf;
 
@@ -511,20 +512,38 @@ pub struct RemoteStorage {
     sout: Mutex<(Box<Write + Send>, u64)>,
     sin: Mutex<(Box<BufRead + Send>, u64)>,
     cond: Condvar,
+    fatal: AtomicBool,
 }
 
 macro_rules! handle_response {
-    ($term:expr => { $($pat:pat => $res:expr,)* }) => {
+    ($this:expr, $term:expr => { $($pat:pat => $res:expr,)* }) => {
         match $term {
             Response::Error(e) =>
                 return Err(ErrorKind::ServerError(e).into()),
-            Response::FatalError(e) =>
-                return Err(ErrorKind::ServerFatalError(e).into()),
+            Response::FatalError(e) => {
+                $this.fatal.store(true, Ordering::Relaxed);
+                return Err(ErrorKind::ServerFatalError(e).into());
+            },
             $($pat => $res,)*
-            r =>
-                return Err(ErrorKind::UnexpectedServerResponse(r).into()),
+            r => {
+                $this.fatal.store(true, Ordering::Relaxed);
+                return Err(ErrorKind::UnexpectedServerResponse(r).into());
+            },
         }
     }
+}
+
+macro_rules! tryf {
+    ($this:expr, $e:expr) => { match $e {
+        Ok(v) => v,
+        Err(e) => {
+            let error: Error = e.into();
+            if error.is_fatal() {
+                $this.fatal.store(true, Ordering::Relaxed);
+            }
+            return Err(error);
+        },
+    } }
 }
 
 impl RemoteStorage {
@@ -535,13 +554,14 @@ impl RemoteStorage {
             sout: Mutex::new((Box::new(io::BufWriter::new(sout)), 0)),
             sin: Mutex::new((Box::new(io::BufReader::new(sin)), 0)),
             cond: Condvar::new(),
+            fatal: AtomicBool::new(false),
         }
     }
 
     fn send_async_request(&self, req: Request) -> Result<()> {
         let mut sout = self.sout.lock().unwrap();
-        send_frame(&mut sout.0, req).chain_err(
-            || "Error writing request to server")?;
+        tryf!(self, send_frame(&mut sout.0, req).chain_err(
+            || "Error writing request to server"));
         Ok(())
     }
 
@@ -550,8 +570,8 @@ impl RemoteStorage {
     {
         let ticket = {
             let mut sout = self.sout.lock().unwrap();
-            send_frame(&mut sout.0, req).chain_err(
-                || "Error writing request to server")?;
+            tryf!(self, send_frame(&mut sout.0, req).chain_err(
+                || "Error writing request to server"));
             let t = sout.1;
             sout.1 += 1;
             t
@@ -581,7 +601,7 @@ impl RemoteStorage {
     pub fn exchange_client_info
         (&self) -> Result<(ImplementationInfo, Option<String>)>
     {
-        handle_response!(try!(self.send_single_sync_request(
+        handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::ClientInfo {
                 implementation: ImplementationInfo::this_implementation()
             }
@@ -593,8 +613,12 @@ impl RemoteStorage {
 }
 
 impl Storage for RemoteStorage {
+    fn is_fatal(&self) -> bool {
+        self.fatal.load(Ordering::Relaxed)
+    }
+
     fn getdir(&self, id: &HashId) -> Result<Option<(HashId, Vec<u8>)>> {
-        handle_response!(try!(self.send_single_sync_request(
+        handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::GetDir(*id)
         )) => {
             Response::DirData(v, data) =>
@@ -604,7 +628,7 @@ impl Storage for RemoteStorage {
     }
 
     fn getobj(&self, id: &HashId) -> Result<Option<Vec<u8>>> {
-        handle_response!(try!(self.send_single_sync_request(
+        handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::GetObj(*id)
         )) => {
             Response::ObjData(data) => Ok(Some(data.into())),
@@ -622,7 +646,7 @@ impl Storage for RemoteStorage {
         self.send_sync_request(Request::ForDirtyDir, |mut sin| {
             let mut error = None;
             loop {
-                handle_response!(try!(read_frame(&mut sin).and_then(
+                handle_response!(self, tryf!(self, read_frame(&mut sin).and_then(
                     |r| r.ok_or(ErrorKind::ServerConnectionClosed.into())
                 )) => {
                     Response::Done => break,
@@ -648,7 +672,7 @@ impl Storage for RemoteStorage {
     }
 
     fn abort(&self, tx: Tx) -> Result<()> {
-        handle_response!(try!(self.send_single_sync_request(
+        handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::Abort(tx)
         )) => {
             Response::Done => Ok(()),
@@ -656,7 +680,7 @@ impl Storage for RemoteStorage {
     }
 
     fn commit(&self, tx: Tx) -> Result<bool> {
-        handle_response!(try!(self.send_single_sync_request(
+        handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::Commit(tx)
         )) => {
             Response::Done => Ok(true),
@@ -688,7 +712,7 @@ impl Storage for RemoteStorage {
 
     fn linkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
                -> Result<bool> {
-        handle_response!(try!(self.send_single_sync_request(
+        handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::Linkobj { tx: tx, id: *id, linkid: *linkid }
         )) => {
             Response::Done => Ok(true),

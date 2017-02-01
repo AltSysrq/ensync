@@ -69,8 +69,7 @@ impl DirState {
 
 impl Drop for DirState {
     fn drop(&mut self) {
-        debug_assert!(is_interrupted() || self.quiet ||
-                      0 == self.pending.load(SeqCst),
+        debug_assert!(self.quiet || 0 == self.pending.load(SeqCst),
                       "DirState dropped while it still had a pending \
                        count of {}", self.pending.load(SeqCst));
     }
@@ -175,7 +174,8 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
     mut rules_builder: <RULES as DirRules>::Builder,
     on_complete_supplier: F) -> Result<()>
 {
-    if is_interrupted() { return Ok(()); }
+    self.check_stop()?;
+
     let dir_path = cli_dir.full_path().to_owned();
 
     let cli_files = try!(read_dir_contents(
@@ -223,7 +223,6 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
     }
 
     while let Some(Reversed(name)) = dir.todo.pop() {
-        if is_interrupted() { return Ok(()); }
         self.process_file(&mut dir, &dir_path, &name, &dirstate);
     }
 
@@ -231,6 +230,19 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
         on_complete_supplier(dir, dirstate.clone())), SeqCst);
     self.finish_task_in_dir(&dirstate, &dirstate);
     Ok(())
+}
+
+pub fn should_stop(&self) -> bool {
+    is_interrupted() || self.cli.is_fatal() ||
+        self.anc.is_fatal() || self.srv.is_fatal()
+}
+
+pub fn check_stop(&self) -> Result<()> {
+    if self.should_stop() {
+        Err(ErrorKind::ReconciliationStopped.into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Wraps process_dir_impl() to return whether the result was successful or

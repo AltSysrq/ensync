@@ -18,8 +18,6 @@
 
 use std::sync::{Condvar,Mutex};
 
-use interrupt::is_interrupted;
-
 struct WorkStackData<T> {
     tasks: Vec<T>,
     in_flight: u32,
@@ -75,7 +73,7 @@ impl<T> WorkStack<T> {
     pub fn run<F : FnMut (T)>(&self, mut f: F) {
         let mut lock = self.data.lock().unwrap();
 
-        while !is_interrupted() {
+        loop {
             if let Some(task) = lock.tasks.pop() {
                 // We got a task. Increment the in-flight counter so other
                 // threads know we might be adding something later, then unlock

@@ -38,6 +38,9 @@ pub type Tx = u64;
 /// HMAC. The server has no way to determine itself whether a block is in use;
 /// instead, the client works with the server to maintain a reference count.
 pub trait Storage : Send + Sync {
+    /// Returns whether the storage system is in a fatal state.
+    fn is_fatal(&self) -> bool { false }
+
     /// Fetches the full content of the directory with the given surrogate id.
     /// If such a directory currently exists, returns the version id and the
     /// committed binary content of the directory. Otherwise, returns

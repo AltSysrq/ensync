@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -48,6 +48,9 @@ pub trait Replica : Sync + Send {
     type TransferIn;
     /// Type which this replica uses to transfer data out to the other replica.
     type TransferOut;
+
+    /// Returns whether any fatal errors have occurred.
+    fn is_fatal(&self) -> bool { false }
 
     /// Returns whether the given directory has been marked dirty for this
     /// session.

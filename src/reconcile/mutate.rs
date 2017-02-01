@@ -338,6 +338,10 @@ pub fn apply_reconciliation(
 {
     use super::compute::Reconciliation::*;
 
+    if self.should_stop() {
+        return ApplyResult::Fail;
+    }
+
     // Mutate the replicas as appropriate and determine what the new state of
     // the ancestor should be.
     //

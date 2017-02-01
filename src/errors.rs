@@ -201,6 +201,9 @@ error_chain! {
             description("Content changed on server")
             display("Content changed on server")
         }
+        ReconciliationStopped {
+            description("Reconciliation stopped")
+        }
 
         // Errors related to setup/usage
         KdfListAlreadyExists {
