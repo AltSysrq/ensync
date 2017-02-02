@@ -106,25 +106,25 @@ pub fn open_server_storage(config: &ServerConfig) -> Result<Arc<Storage>> {
 /// Opens a `ServerReplica` on top of the given storage, using parameters from
 /// the given config.
 ///
-/// If the caller already knows the master key, it may pass it in so that the
-/// user is not prompted again. If `None`, the passphrase will be read within
-/// this call.
+/// If the caller already has a key chain, it may pass it in so that the user
+/// is not prompted again. If `None`, the passphrase will be read within this
+/// call.
 pub fn open_server_replica(config: &Config, storage: Arc<Storage>,
-                           master_key: Option<Arc<MasterKey>>)
+                           key_chain: Option<Arc<KeyChain>>)
                            -> Result<ServerReplica<Storage>> {
-    let master_key = if let Some(master_key) = master_key {
-        master_key
+    let key_chain = if let Some(key_chain) = key_chain {
+        key_chain
     } else {
         let passphrase = config.passphrase.read_passphrase(
             "passphrase", false)?;
-        Arc::new(keymgmt::derive_master_key(&*storage, &passphrase[..])?)
+        Arc::new(keymgmt::derive_key_chain(&*storage, &passphrase[..])?)
     };
 
     Ok(ServerReplica::new(
         config.private_root.join("server-state.sqlite").to_str()
             .ok_or_else(|| format!("Path '{}' is not valid UTF-8",
                                    config.private_root.display()))?,
-        master_key, storage, &config.server_root, config.block_size as usize,
+        key_chain, storage, &config.server_root, config.block_size as usize,
         config.compression)
        .chain_err(|| "Failed to set up server replica")?)
 }

@@ -28,7 +28,7 @@ use defs::*;
 use errors::*;
 use replica::*;
 use sql::{SendConnection, StatementEx};
-use super::crypt::{MasterKey, encrypt_dir_ver};
+use super::crypt::{KeyChain, encrypt_dir_ver};
 use super::dir::*;
 use super::storage::*;
 
@@ -40,7 +40,7 @@ impl<S : Storage + ?Sized + 'static> ReplicaDirectory for Arc<Dir<S>> {
 
 pub struct ServerReplica<S : Storage + ?Sized + 'static> {
     db: Arc<Mutex<SendConnection>>,
-    key: Arc<MasterKey>,
+    key: Arc<KeyChain>,
     storage: Arc<S>,
     pseudo_root: Arc<Dir<S>>,
     root_name: OsString,
@@ -52,7 +52,7 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
     /// `path` indicates the path to use for the client-side SQLite database.
     /// It is passed directly to SQLite, so things like `:memory:` work.
     ///
-    /// `key` is the master key to use for all encryption.
+    /// `key` is the key chain to use for all encryption.
     ///
     /// `storage` provides the underlying data store.
     ///
@@ -61,7 +61,7 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
     ///
     /// `block_size` indicates the block size to use for all new file blocking
     /// operations.
-    pub fn new(path: &str, key: Arc<MasterKey>,
+    pub fn new(path: &str, key: Arc<KeyChain>,
                storage: Arc<S>, root_name: &str,
                block_size: usize, compression: flate2::Compression)
                -> Result<Self> {
@@ -102,8 +102,8 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
         self.pseudo_root.clone()
     }
 
-    /// Returns the master key being used by this replica.
-    pub fn master_key(&self) -> &Arc<MasterKey> {
+    /// Returns the key chain being used by this replica.
+    pub fn key_chain(&self) -> &Arc<KeyChain> {
         &self.key
     }
 }
@@ -306,21 +306,21 @@ mod test {
     use defs::test_helpers::*;
     use errors::*;
     use replica::*;
-    use server::crypt::MasterKey;
+    use server::crypt::KeyChain;
     use server::local_storage::LocalStorage;
     use super::*;
 
     macro_rules! init {
         ($replica:ident, $root:ident) => {
-            init!($replica, $root, master_key);
+            init!($replica, $root, key_chain);
         };
 
-        ($replica:ident, $root:ident, $master_key:ident) => {
+        ($replica:ident, $root:ident, $key_chain:ident) => {
             let dir = TempDir::new("storage").unwrap();
             let storage = LocalStorage::open(dir.path()).unwrap();
-            let $master_key = Arc::new(MasterKey::generate_new());
+            let $key_chain = Arc::new(KeyChain::generate_new());
             let $replica = ServerReplica::new(
-                ":memory:", $master_key.clone(),
+                ":memory:", $key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
                 flate2::Compression::Fast).unwrap();
             $replica.create_root().unwrap();
@@ -441,7 +441,7 @@ mod test {
 
     #[test]
     fn create_file() {
-        init!(replica, root, master_key);
+        init!(replica, root, key_chain);
 
         let file_data = gen_file(65536);
         let created = replica.create(&mut root, File(
@@ -462,7 +462,7 @@ mod test {
         let mut actual_data = Vec::<u8>::new();
         block_xfer::blocks_to_stream(
             &xfer.blocks, &mut actual_data,
-            master_key.hmac_secret(),
+            key_chain.hmac_secret(),
             |h| xfer.fetch.fetch(h)).unwrap();
 
         assert_eq!(file_data, actual_data);
@@ -597,7 +597,7 @@ mod test {
 
     #[test]
     fn update_regular() {
-        init!(replica, root, master_key);
+        init!(replica, root, key_chain);
 
         let file_data_a = gen_file(1024);
         let created = replica.create(&mut root, File(
@@ -635,7 +635,7 @@ mod test {
         let mut actual_data = Vec::<u8>::new();
         block_xfer::blocks_to_stream(
             &xfer.blocks, &mut actual_data,
-            master_key.hmac_secret(),
+            key_chain.hmac_secret(),
             |h| xfer.fetch.fetch(h)).unwrap();
 
         assert_eq!(file_data_b, actual_data);
@@ -951,7 +951,7 @@ mod test {
 
     #[test]
     fn cleanup_removes_orphaned_blobs() {
-        init!(replica, root, master_key);
+        init!(replica, root, key_chain);
 
         let file_data = gen_file(65536);
         let file_uh = FileData::Regular(0o666, 65536, 0, UNKNOWN_HASH);
@@ -967,50 +967,50 @@ mod test {
             .unwrap().unwrap();
 
         macro_rules! test {
-            ($master_key:expr, $xfer:expr, $which:ident) => { {
+            ($key_chain:expr, $xfer:expr, $which:ident) => { {
                 let mut actual_data: Vec<u8> = Vec::new();
                 assert!(block_xfer::blocks_to_stream(
                     &xfer.blocks, &mut actual_data,
-                    master_key.hmac_secret(),
+                    key_chain.hmac_secret(),
                     |h| xfer.fetch.fetch(h)).$which());
             } }
         }
 
-        test!(master_key, xfer, is_ok);
+        test!(key_chain, xfer, is_ok);
         replica.clean_up().unwrap();
-        test!(master_key, xfer, is_ok);
+        test!(key_chain, xfer, is_ok);
 
         // Increase the link count to 2
         replica.create(
             &mut root, File(&oss("b"), &file_uh),
             Some(Box::new(Cursor::new(file_data.clone())))).unwrap();
-        test!(master_key, xfer, is_ok);
+        test!(key_chain, xfer, is_ok);
         replica.clean_up().unwrap();
-        test!(master_key, xfer, is_ok);
+        test!(key_chain, xfer, is_ok);
 
         // Delete a, reducing the link count to 1 (and thus the transfer
         // remains valid).
         replica.remove(&mut root, File(&oss("a"), &created)).unwrap();
-        test!(master_key, xfer, is_ok);
+        test!(key_chain, xfer, is_ok);
         replica.clean_up().unwrap();
-        test!(master_key, xfer, is_ok);
+        test!(key_chain, xfer, is_ok);
 
         // Delete b, reducing the link count to 0. The object lingers until
         // cleanup is run.
         replica.remove(&mut root, File(&oss("b"), &created)).unwrap();
-        test!(master_key, xfer, is_ok);
+        test!(key_chain, xfer, is_ok);
         replica.clean_up().unwrap();
-        test!(master_key, xfer, is_err);
+        test!(key_chain, xfer, is_err);
     }
 
     #[test]
     fn clean_dirty_tracking() {
         let dir = TempDir::new("storage").unwrap();
-        let master_key = Arc::new(MasterKey::generate_new());
+        let key_chain = Arc::new(KeyChain::generate_new());
 
         let storage1 = LocalStorage::open(dir.path()).unwrap();
         let replica1 = ServerReplica::new(
-            ":memory:", master_key.clone(),
+            ":memory:", key_chain.clone(),
             Arc::new(storage1), "r00t", 1024,
             flate2::Compression::Fast).unwrap();
         replica1.create_root().unwrap();
@@ -1018,7 +1018,7 @@ mod test {
 
         let storage2 = LocalStorage::open(dir.path()).unwrap();
         let replica2 = ServerReplica::new(
-            ":memory:", master_key.clone(),
+            ":memory:", key_chain.clone(),
             Arc::new(storage2), "r00t", 1024,
             flate2::Compression::Fast).unwrap();
         let root2 = replica1.root().unwrap();
@@ -1075,7 +1075,7 @@ mod test {
         let storage_dir = dir.path().join("storage");
         let copy_dir = dir.path().join("copy");
 
-        let master_key = Arc::new(MasterKey::generate_new());
+        let key_chain = Arc::new(KeyChain::generate_new());
 
         let sym1 = FileData::Symlink(oss("target"));
         let sym2 = FileData::Symlink(oss("tegrat"));
@@ -1083,7 +1083,7 @@ mod test {
         {
             let storage = LocalStorage::open(&storage_dir).unwrap();
             let replica = ServerReplica::new(
-                sqlite_file.to_str().unwrap(), master_key.clone(),
+                sqlite_file.to_str().unwrap(), key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
                 flate2::Compression::Fast).unwrap();
             replica.create_root().unwrap();
@@ -1109,7 +1109,7 @@ mod test {
             // Now open the out-of-date copy we made and try to navigate it.
             let storage = LocalStorage::open(&copy_dir).unwrap();
             let replica = ServerReplica::new(
-                sqlite_file.to_str().unwrap(), master_key.clone(),
+                sqlite_file.to_str().unwrap(), key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
                 flate2::Compression::Fast).unwrap();
 

@@ -232,7 +232,7 @@ pub struct Dir<S : Storage + ?Sized + 'static> {
 
     // Lock hierarchy: Lock may not be acquired while lock on `content` is held.
     db: Arc<Mutex<SendConnection>>,
-    key: Arc<MasterKey>,
+    key: Arc<KeyChain>,
     storage: Arc<S>,
     tx_ctr: Arc<AtomicUsize>,
     block_size: usize,
@@ -278,7 +278,7 @@ impl<S : Storage + ?Sized + 'static> ReplicaDirectory for Dir<S> {
 
 impl<S : Storage + ?Sized + 'static> Dir<S> {
     /// Initialises the pseudo-root directory.
-    pub fn root(db: Arc<Mutex<SendConnection>>, key: Arc<MasterKey>,
+    pub fn root(db: Arc<Mutex<SendConnection>>, key: Arc<KeyChain>,
                 storage: Arc<S>, block_size: usize,
                 compression: flate2::Compression) -> Result<Self> {
         let this = Dir {

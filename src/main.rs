@@ -189,8 +189,8 @@ fn main_impl() -> Result<()> {
                          .required(false))
                     .after_help("This command is used to initialise the key \
                                  store in the server. It generates a new \
-                                 master key and associates one user key with \
-                                 it, corresponding to the passphrase defined \
+                                 internal key set and associates one user key with \
+                                 them, corresponding to the passphrase defined \
                                  in the configuration. You should specify the \
                                  key name if you plan on using multiple keys. \
                                  This cannot be used after the key store has \

@@ -651,11 +651,11 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
     let passphrase = config.passphrase.read_passphrase(
         "passphrase", false)?;
-    let master_key = Arc::new(
-        keymgmt::derive_master_key(&*storage, &passphrase)?);
+    let key_chain = Arc::new(
+        keymgmt::derive_key_chain(&*storage, &passphrase)?);
 
     let server_replica = open_server_replica(
-        config, storage.clone(), Some(master_key.clone()))?;
+        config, storage.clone(), Some(key_chain.clone()))?;
 
     let client_private_dir = config.private_root.join("client");
     fs::create_dir_all(&client_private_dir).chain_err(
@@ -663,7 +663,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
                    client_private_dir.display()))?;
     let client_replica = PosixReplica::new(
         config.client_root.clone(), client_private_dir,
-        master_key.hmac_secret(), config.block_size as usize)
+        key_chain.hmac_secret(), config.block_size as usize)
         .chain_err(|| "Failed to set up client replica")?;
 
     let ancestor_replica = AncestorReplica::open(

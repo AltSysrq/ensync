@@ -222,11 +222,13 @@ use errors::*;
 
 const SCRYPT_18_8_1: &'static str = "scrypt-18-8-1";
 pub const BLKSZ: usize = 16;
+pub const GROUP_EVERYONE: &'static str = "everyone";
+pub const GROUP_ROOT: &'static str = "root";
 
 /// Stored in cleartext fourleaf as directory `[0u8;32]`.
 ///
 /// This stores the parameters used for the key-derivation function of each
-/// passphrase and how to move from a derived key to the master key.
+/// passphrase and how to move from a derived key to the internal keys.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdfList {
     pub keys: BTreeMap<String, KdfEntry>,
@@ -240,14 +242,14 @@ fourleaf_retrofit!(struct KdfList : {} {} {
     { Ok(KdfList { keys: keys, unknown: unknown.0 }) }
 });
 
-/// A single passphrase which may be used to derive the master key.
+/// A single passphrase which may be used to derive internal keys
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdfEntry {
     /// The time this (logical) entry was created.
     pub created: DateTime<UTC>,
     /// The time this (logical) entry was last updated.
     pub updated: Option<DateTime<UTC>>,
-    /// The time this entry was last used to derive the master key.
+    /// The time this entry was last used to derive keys
     pub used: Option<DateTime<UTC>>,
     /// The algorithm used.
     ///
@@ -261,9 +263,10 @@ pub struct KdfEntry {
     /// The SHA3 hash of the derived key, to determine whether the key is
     /// correct.
     pub hash: HashId,
-    /// The pairwise XOR of the master key with this derived key, allowing
-    /// the master key to be derived once this derived key is known.
-    pub master_diff: HashId,
+    /// The groups to which this entry is associated. Each key is a group name,
+    /// and the value is the XOR of the internal key of the group with the HMAC
+    /// of the group name and the derived key.
+    pub groups: BTreeMap<String, HashId>,
     pub unknown: UnknownFields<'static>,
 }
 
@@ -287,13 +290,13 @@ fourleaf_retrofit!(struct KdfEntry : {} {} {
     [4] algorithm: String = &this.algorithm,
     [5] salt: HashId = this.salt,
     [6] hash: HashId = this.hash,
-    [7] master_diff: HashId = this.master_diff,
+    [7] groups: BTreeMap<String, HashId> = &this.groups,
     (?) unknown: Copied<UnknownFields<'static>> = &this.unknown,
     { Ok(KdfEntry { created: created.0,
                     updated: updated.map(|v| v.0),
                     used: used.map(|v| v.0),
                     algorithm: algorithm, salt: salt, hash: hash,
-                    master_diff: master_diff,
+                    groups: groups,
                     unknown: unknown.0 }) }
 });
 
@@ -312,13 +315,47 @@ pub fn rand_hashid() -> HashId {
     h
 }
 
-#[derive(Clone,Copy,PartialEq,Eq)]
-pub struct MasterKey(HashId);
+/// A set of internal keys derived from a passphrase.
+#[derive(Debug, PartialEq, Eq)]
+pub struct KeyChain {
+    /// Map from group names to internal keys associated with this key chain.
+    pub keys: BTreeMap<String, InternalKey>,
+}
 
-impl MasterKey {
-    /// Generates a new, random master key.
+impl KeyChain {
+    /// Generate a new key chain with the default groups bound to new internal
+    /// keys.
     pub fn generate_new() -> Self {
-        let mut this = MasterKey(Default::default());
+        let mut keys = BTreeMap::new();
+        keys.insert(GROUP_ROOT.to_owned(), InternalKey::generate_new());
+        keys.insert(GROUP_EVERYONE.to_owned(), InternalKey::generate_new());
+
+        KeyChain {
+            keys: keys,
+        }
+    }
+
+    // TODO Remove these
+    pub fn dir_key(&self) -> &[u8] {
+        self.keys[GROUP_EVERYONE].dir_key()
+    }
+
+    pub fn obj_key(&self) -> &[u8] {
+        self.keys[GROUP_EVERYONE].obj_key()
+    }
+
+    pub fn hmac_secret(&self) -> &[u8] {
+        self.keys[GROUP_EVERYONE].hmac_secret()
+    }
+}
+
+#[derive(PartialEq,Eq)]
+pub struct InternalKey(HashId);
+
+impl InternalKey {
+    /// Generates a new, random internal key.
+    pub fn generate_new() -> Self {
+        let mut this = InternalKey(Default::default());
         rand(&mut this.0);
         this
     }
@@ -327,20 +364,21 @@ impl MasterKey {
         &self.0[0..BLKSZ]
     }
 
+    // TODO Remove
     pub fn obj_key(&self) -> &[u8] {
         &self.0[BLKSZ..BLKSZ*2]
     }
 
     pub fn hmac_secret(&self) -> &[u8] {
-        &self.0[..]
+        &self.0[BLKSZ..BLKSZ*2]
     }
 }
 
-impl fmt::Debug for MasterKey {
+impl fmt::Debug for InternalKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Write the SHA3 instead of the actual key so this can't be leaked out
         // accidentally.
-        write!(f, "MasterKey(sha3={:?})", sha3(&self.0))
+        write!(f, "InternalKey(sha3={:?})", sha3(&self.0))
     }
 }
 
@@ -365,7 +403,16 @@ fn scrypt_18_8_1(passphrase: &[u8], salt: &[u8]) -> HashId {
 fn sha3(data: &[u8]) -> HashId {
     let mut hash = HashId::default();
     let mut kc = keccak::Keccak::new_sha3_256();
-    kc.update(&data);
+    kc.update(data);
+    kc.finalize(&mut hash);
+    hash
+}
+
+fn hmac(data: &[u8], secret: &[u8]) -> HashId {
+    let mut hash = HashId::default();
+    let mut kc = keccak::Keccak::new_sha3_256();
+    kc.update(data);
+    kc.update(secret);
     kc.finalize(&mut hash);
     hash
 }
@@ -381,19 +428,28 @@ fn hixor(a: &HashId, b: &HashId) -> HashId {
 }
 
 /// Creates a new key entry keyed off of the given passphrase which can be used
-/// to derive the master key.
+/// to derive the internal keys.
+///
+/// The new entry will have the same groups as the key chain.
 ///
 /// The caller must provide the logic for determining the various date-time
 /// fields itself.
-pub fn create_key(passphrase: &[u8], master: &MasterKey,
+pub fn create_key(passphrase: &[u8], chain: &KeyChain,
                   created: DateTime<UTC>,
                   updated: Option<DateTime<UTC>>,
                   used: Option<DateTime<UTC>>)
                   -> KdfEntry {
     let mut salt = HashId::default();
     rand(&mut salt);
-
     let derived = scrypt_18_8_1(passphrase, &salt);
+
+    let mut groups = BTreeMap::new();
+    for (name, internal_key) in &chain.keys {
+        groups.insert(name.to_owned(),
+                      hixor(&hmac(name.as_bytes(), &derived),
+                            &internal_key.0));
+    }
+
     KdfEntry {
         created: created,
         updated: updated,
@@ -401,32 +457,41 @@ pub fn create_key(passphrase: &[u8], master: &MasterKey,
         algorithm: SCRYPT_18_8_1.to_owned(),
         salt: salt,
         hash: sha3(&derived),
-        master_diff: hixor(&derived, &master.0),
+        groups: groups,
         unknown: UnknownFields::default(),
     }
 }
 
 
-/// Attempts to derive the master key from the given single KDF entry.
+/// Attempts to derive the internal keys from the given single KDF entry.
 pub fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
-                             -> Option<MasterKey> {
+                             -> Option<KeyChain> {
     match entry.algorithm.as_str() {
         SCRYPT_18_8_1 => Some(scrypt_18_8_1(passphrase, &entry.salt)),
         _ => None,
     }.and_then(|derived| {
         if sha3(&derived) == entry.hash {
-            Some(MasterKey(hixor(&derived, &entry.master_diff)))
+            let mut keys = BTreeMap::new();
+            for (name, diff) in &entry.groups {
+                keys.insert(name.to_owned(), InternalKey(
+                    hixor(&hmac(name.as_bytes(), &derived), diff)));
+            }
+
+            Some(KeyChain {
+                keys: keys
+            })
         } else {
             None
         }
     })
 }
 
-/// Attempts to derive the master key from the given passphrase and key list.
+/// Attempts to derive the internal keys from the given passphrase and key
+/// list.
 ///
-/// If successful, returns the derived master key. Otherwise, returns `None`.
+/// If successful, returns the derived key chain. Otherwise, returns `None`.
 pub fn try_derive_key(passphrase: &[u8], keys: &BTreeMap<String, KdfEntry>)
-                      -> Option<MasterKey> {
+                      -> Option<KeyChain> {
     keys.iter()
         .filter_map(|(_, k)| try_derive_key_single(passphrase, k))
         .next()
@@ -559,12 +624,12 @@ fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
     Ok(split_key_and_iv(&key_and_iv))
 }
 
-/// Encrypts the object data in `src` using the key from `master`, writing the
+/// Encrypts the object data in `src` using the key from `key`, writing the
 /// encrypted result to `dst`.
 pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R,
-                                        master: &MasterKey)
+                                        key: &KeyChain)
                                         -> Result<()> {
-    let (key, iv) = try!(write_cbc_prefix(&mut dst, master.obj_key()));
+    let (key, iv) = try!(write_cbc_prefix(&mut dst, key.obj_key()));
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
@@ -574,9 +639,9 @@ pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R,
 
 /// Reverses `encrypt_obj()`.
 pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R,
-                                        master: &MasterKey)
+                                        key: &KeyChain)
                                         -> Result<()> {
-    let (key, iv) = try!(read_cbc_prefix(&mut src, master.obj_key()));
+    let (key, iv) = try!(read_cbc_prefix(&mut src, key.obj_key()));
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
@@ -591,9 +656,9 @@ pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R,
 ///
 /// `src` must produce data which is a multiple of BLKSZ bytes long.
 pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
-                                              master: &MasterKey)
+                                              key: &KeyChain)
                                               -> Result<[u8;BLKSZ]> {
-    let (key, iv) = try!(write_cbc_prefix(&mut dst, master.dir_key()));
+    let (key, iv) = try!(write_cbc_prefix(&mut dst, key.dir_key()));
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
@@ -617,9 +682,9 @@ pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
 /// Inverts `encrypt_whole_dir()` and any subsequent calls to
 /// `encrypt_append_dir()`.
 pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
-                                              master: &MasterKey)
+                                              key: &KeyChain)
                                               -> Result<[u8;BLKSZ]> {
-    let (key, iv) = try!(read_cbc_prefix(&mut src, master.dir_key()));
+    let (key, iv) = try!(read_cbc_prefix(&mut src, key.dir_key()));
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
@@ -645,7 +710,7 @@ fn dir_ver_iv(dir: &HashId) -> [u8;BLKSZ] {
 }
 
 /// Encrypts the version of the given directory.
-pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, master: &MasterKey)
+pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, key: &KeyChain)
                        -> HashId {
     let mut cleartext = HashId::default();
     for ix in 0..8 {
@@ -655,7 +720,7 @@ pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, master: &MasterKey)
 
     let mut res = HashId::default();
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
-        aes::KeySize::KeySize128, master.dir_key(),
+        aes::KeySize::KeySize128, key.dir_key(),
         &dir_ver_iv(dir),
         blockmodes::NoPadding));
     crypt_stream(&mut res[..], &cleartext[..], &mut cryptor, true)
@@ -667,12 +732,12 @@ pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, master: &MasterKey)
 /// Inverts `encrypt_dir_ver()`.
 ///
 /// If `ciphertext` is invalid, 0 is silently returned instead.
-pub fn decrypt_dir_ver(dir: &HashId, ciphertext: &HashId, master: &MasterKey)
+pub fn decrypt_dir_ver(dir: &HashId, ciphertext: &HashId, key: &KeyChain)
                        -> u64 {
     // Initialise to something that we'd reject below
     let mut cleartext = [255u8;32];
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
-        aes::KeySize::KeySize128, master.dir_key(),
+        aes::KeySize::KeySize128, key.dir_key(),
         &dir_ver_iv(dir),
         blockmodes::NoPadding));
     // Ignore any errors and simply leave `cleartext` initialised to the
@@ -706,17 +771,17 @@ mod test {
 
     #[test]
     fn generate_and_derive_keys() {
-        fn ck(passphrase: &[u8], master: &MasterKey) -> KdfEntry {
-            create_key(passphrase, master, UTC::now(), None, None)
+        fn ck(passphrase: &[u8], keychain: &KeyChain) -> KdfEntry {
+            create_key(passphrase, keychain, UTC::now(), None, None)
         }
 
-        let master = MasterKey::generate_new();
+        let keychain = KeyChain::generate_new();
         let mut keys = BTreeMap::new();
-        keys.insert("a".to_owned(), ck(b"plugh", &master));
-        keys.insert("b".to_owned(), ck(b"xyzzy", &master));
+        keys.insert("a".to_owned(), ck(b"plugh", &keychain));
+        keys.insert("b".to_owned(), ck(b"xyzzy", &keychain));
 
-        assert_eq!(Some(master), try_derive_key(b"plugh", &keys));
-        assert_eq!(Some(master), try_derive_key(b"xyzzy", &keys));
+        assert_eq!(Some(&keychain), try_derive_key(b"plugh", &keys).as_ref());
+        assert_eq!(Some(&keychain), try_derive_key(b"xyzzy", &keys).as_ref());
         assert_eq!(None, try_derive_key(b"foo", &keys));
     }
 }
@@ -729,13 +794,13 @@ mod fast_test {
     use super::*;
 
     fn test_crypt_obj(data: &[u8]) {
-        let master = MasterKey::generate_new();
+        let keychain = KeyChain::generate_new();
 
         let mut ciphertext = Vec::new();
-        encrypt_obj(&mut ciphertext, data, &master).unwrap();
+        encrypt_obj(&mut ciphertext, data, &keychain).unwrap();
 
         let mut cleartext = Vec::new();
-        decrypt_obj(&mut cleartext, &ciphertext[..], &master).unwrap();
+        decrypt_obj(&mut cleartext, &ciphertext[..], &keychain).unwrap();
 
         assert_eq!(data, &cleartext[..]);
     }
@@ -783,16 +848,16 @@ mod fast_test {
 
     #[test]
     fn crypt_dir_oneshot() {
-        let master = MasterKey::generate_new();
+        let keychain = KeyChain::generate_new();
 
         let orig = b"0123456789abcdef0123456789ABCDEF";
         let mut ciphertext = Vec::new();
         let sk1 =
-            encrypt_whole_dir(&mut ciphertext, &orig[..], &master).unwrap();
+            encrypt_whole_dir(&mut ciphertext, &orig[..], &keychain).unwrap();
 
         let mut cleartext = Vec::new();
         let sk2 = decrypt_whole_dir(&mut cleartext, &ciphertext[..],
-                                    &master).unwrap();
+                                    &keychain).unwrap();
 
         assert_eq!(orig, &cleartext[..]);
         assert_eq!(sk1, sk2);
@@ -800,37 +865,37 @@ mod fast_test {
 
     #[test]
     fn crypt_dir_appended() {
-        let master = MasterKey::generate_new();
+        let keychain = KeyChain::generate_new();
 
         let mut ciphertext = Vec::new();
         let sk = encrypt_whole_dir(
-            &mut ciphertext, &b"0123456789abcdef"[..], &master).unwrap();
+            &mut ciphertext, &b"0123456789abcdef"[..], &keychain).unwrap();
         let iv = dir_append_iv(&ciphertext);
         encrypt_append_dir(
             &mut ciphertext, &b"0123456789ABCDEF"[..], &sk, &iv).unwrap();
 
         let mut cleartext = Vec::new();
-        decrypt_whole_dir(&mut cleartext, &ciphertext[..], &master).unwrap();
+        decrypt_whole_dir(&mut cleartext, &ciphertext[..], &keychain).unwrap();
 
         assert_eq!(&b"0123456789abcdef0123456789ABCDEF"[..], &cleartext[..]);
     }
 
     #[test]
     fn crypt_dir_version() {
-        let master = MasterKey::generate_new();
+        let keychain = KeyChain::generate_new();
 
         let mut dir = HashId::default();
         rand(&mut dir);
 
         assert_eq!(42u64, decrypt_dir_ver(
-            &dir, &encrypt_dir_ver(&dir, 42u64, &master), &master));
+            &dir, &encrypt_dir_ver(&dir, 42u64, &keychain), &keychain));
     }
 
     #[test]
     fn corrupt_dir_version_decrypted_to_0() {
-        let master = MasterKey::generate_new();
+        let keychain = KeyChain::generate_new();
 
         assert_eq!(0u64, decrypt_dir_ver(
-            &HashId::default(), &HashId::default(), &master));
+            &HashId::default(), &HashId::default(), &keychain));
     }
 }

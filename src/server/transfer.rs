@@ -24,16 +24,16 @@ use flate2;
 use block_xfer::BlockFetch;
 use defs::HashId;
 use errors::*;
-use server::crypt::{MasterKey, decrypt_obj};
+use server::crypt::{KeyChain, decrypt_obj};
 use server::storage::Storage;
 
 pub struct ServerTransferOut<S : Storage + ?Sized> {
     storage: Arc<S>,
-    key: Arc<MasterKey>,
+    key: Arc<KeyChain>,
 }
 
 impl<S : Storage + ?Sized> ServerTransferOut<S> {
-    pub fn new(storage: Arc<S>, key: Arc<MasterKey>) -> Self {
+    pub fn new(storage: Arc<S>, key: Arc<KeyChain>) -> Self {
         ServerTransferOut {
             storage: storage,
             key: key,

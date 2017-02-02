@@ -29,4 +29,4 @@ pub use self::replica::ServerReplica;
 pub use self::storage::Storage;
 pub use self::local_storage::LocalStorage;
 pub use self::rpc::RemoteStorage;
-pub use self::crypt::MasterKey;
+pub use self::crypt::KeyChain;

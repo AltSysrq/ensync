@@ -92,7 +92,8 @@ fn edit_kdflist<S : Storage + ?Sized, R, F : FnMut (&mut KdfList) -> Result<R>>
     })
 }
 
-/// Initialises the KDF List with a new master key and the given passphrase.
+/// Initialises the KDF List with a new internal key set and the given
+/// passphrase associated with the default groups.
 pub fn init_keys<S : Storage + ?Sized>(
     storage: &S, passphrase: &[u8], key_name: &str)
     -> Result<()>
@@ -102,14 +103,14 @@ pub fn init_keys<S : Storage + ?Sized>(
             return Err(ErrorKind::KdfListAlreadyExists.into());
         }
 
-        let master_key = MasterKey::generate_new();
+        let key_chain = KeyChain::generate_new();
         let mut kdflist = KdfList {
             keys: BTreeMap::new(),
             unknown: Default::default(),
         };
         kdflist.keys.insert(
             key_name.to_owned(),
-            create_key(passphrase, &master_key,
+            create_key(passphrase, &key_chain,
                        UTC::now(), None, None));
 
         put_kdflist(storage, &kdflist, tx, None)?;
@@ -118,16 +119,18 @@ pub fn init_keys<S : Storage + ?Sized>(
 }
 
 /// Adds `new_passphrase` as a new key named `new_name` to the key store, using
-/// `old_passphrase` to derive the master key.
+/// `old_passphrase` to derive the key chain.
+///
+/// The new key will inherit the same groups as the old one.
 pub fn add_key<S : Storage + ?Sized>(storage: &S, old_passphrase: &[u8],
                                      new_passphrase: &[u8], new_name: &str)
                                      -> Result<()> {
     edit_kdflist(storage, |kdflist| {
-        let master_key = try_derive_key(old_passphrase, &kdflist.keys)
+        let key_chain = try_derive_key(old_passphrase, &kdflist.keys)
             .ok_or(ErrorKind::PassphraseNotInKdfList)?;
         if kdflist.keys.insert(
             new_name.to_owned(),
-            create_key(new_passphrase, &master_key,
+            create_key(new_passphrase, &key_chain,
                        UTC::now(), None, None))
             .is_some()
         {
@@ -140,12 +143,13 @@ pub fn add_key<S : Storage + ?Sized>(storage: &S, old_passphrase: &[u8],
 
 /// Deletes the key identified by `name`.
 ///
-/// This does not require being able to derive the master key. We explicitly do
+/// This does not require being able to derive the key chain. We explicitly do
 /// not require doing so here so as not to create the illusion that an attacker
 /// would need to do so.
 ///
 /// This fails if `name` identifies the last key in the key store, since
-/// removing it would make it impossible to ever derive the master key again.
+/// removing it would make it impossible to ever derive any internal keys
+/// again.
 pub fn del_key<S : Storage + ?Sized>(storage: &S, name: &str) -> Result<()> {
     edit_kdflist(storage, |kdflist| {
         kdflist.keys.remove(name).ok_or_else(
@@ -185,7 +189,7 @@ pub fn change_key<S : Storage + ?Sized>(
         let old_entry = kdflist.keys.remove(&real_name)
             .ok_or_else(|| ErrorKind::KeyNotInKdfList(real_name.clone()))?;
 
-        let master_key = if let Some(mk) =
+        let key_chain = if let Some(mk) =
             try_derive_key_single(old_passphrase, &old_entry)
         {
             mk
@@ -200,7 +204,7 @@ pub fn change_key<S : Storage + ?Sized>(
         };
 
         kdflist.keys.insert(real_name,
-                            create_key(new_passphrase, &master_key,
+                            create_key(new_passphrase, &key_chain,
                                        old_entry.created,
                                        Some(UTC::now()),
                                        old_entry.used));
@@ -208,16 +212,16 @@ pub fn change_key<S : Storage + ?Sized>(
     })
 }
 
-/// Fetches the KDF list and uses `passphrase` to derive the master key.
+/// Fetches the KDF list and uses `passphrase` to derive the key chain.
 ///
 /// This will also update the last-used time of the matched entry.
-pub fn derive_master_key<S : Storage + ?Sized>(storage: &S, passphrase: &[u8])
-                                               -> Result<MasterKey> {
+pub fn derive_key_chain<S : Storage + ?Sized>(storage: &S, passphrase: &[u8])
+                                              -> Result<KeyChain> {
     edit_kdflist(storage, |kdflist| {
         for (_, e) in &mut kdflist.keys {
-            if let Some(master_key) = try_derive_key_single(passphrase, e) {
+            if let Some(key_chain) = try_derive_key_single(passphrase, e) {
                 e.used = Some(UTC::now());
-                return Ok(master_key);
+                return Ok(key_chain);
             }
         }
 
@@ -298,9 +302,9 @@ mod test {
         init_keys(&storage, b"hunter2", "name").unwrap();
         assert_err!(ErrorKind::KdfListAlreadyExists,
                     init_keys(&storage, b"hunter3", "name"));
-        derive_master_key(&storage, b"hunter2").unwrap();
+        derive_key_chain(&storage, b"hunter2").unwrap();
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    derive_master_key(&storage, b"hunter3"));
+                    derive_key_chain(&storage, b"hunter3"));
     }
 
     #[test]
@@ -310,8 +314,8 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
 
-        let mk = derive_master_key(&storage, b"hunter2").unwrap();
-        let mk2 = derive_master_key(&storage, b"hunter3").unwrap();
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
+        let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
         assert_eq!(mk, mk2);
     }
 
@@ -338,14 +342,14 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        let mk = derive_master_key(&storage, b"hunter2").unwrap();
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
 
         change_key(&storage, b"hunter2", b"hunter3", None, false).unwrap();
-        let mk2 = derive_master_key(&storage, b"hunter3").unwrap();
+        let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
         assert_eq!(mk, mk2);
 
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    derive_master_key(&storage, b"hunter2"));
+                    derive_key_chain(&storage, b"hunter2"));
     }
 
     #[test]
@@ -368,16 +372,16 @@ mod test {
         change_key(&storage, b"hunter2", b"hunter22", Some("original"), false)
             .unwrap();
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    derive_master_key(&storage, b"hunter2"));
-        derive_master_key(&storage, b"hunter22").unwrap();
-        derive_master_key(&storage, b"hunter3").unwrap();
+                    derive_key_chain(&storage, b"hunter2"));
+        derive_key_chain(&storage, b"hunter22").unwrap();
+        derive_key_chain(&storage, b"hunter3").unwrap();
 
         change_key(&storage, b"hunter3", b"hunter33", Some("new"), false)
             .unwrap();
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    derive_master_key(&storage, b"hunter3"));
-        derive_master_key(&storage, b"hunter22").unwrap();
-        derive_master_key(&storage, b"hunter33").unwrap();
+                    derive_key_chain(&storage, b"hunter3"));
+        derive_key_chain(&storage, b"hunter22").unwrap();
+        derive_key_chain(&storage, b"hunter33").unwrap();
     }
 
     #[test]
@@ -412,11 +416,11 @@ mod test {
         change_key(&storage, b"hunter2", b"hunter33",
                    Some("new"), true).unwrap();
 
-        let mk = derive_master_key(&storage, b"hunter2").unwrap();
-        let mk2 = derive_master_key(&storage, b"hunter33").unwrap();
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
+        let mk2 = derive_key_chain(&storage, b"hunter33").unwrap();
         assert_eq!(mk, mk2);
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    derive_master_key(&storage, b"hunter3"));
+                    derive_key_chain(&storage, b"hunter3"));
     }
 
     #[test]
@@ -454,15 +458,15 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
 
-        let mk = derive_master_key(&storage, b"hunter2").unwrap();
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
 
         del_key(&storage, "original").unwrap();
 
-        let mk2 = derive_master_key(&storage, b"hunter3").unwrap();
+        let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
         assert_eq!(mk, mk2);
 
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    derive_master_key(&storage, b"hunter2"));
+                    derive_key_chain(&storage, b"hunter2"));
     }
 
     #[test]
@@ -481,7 +485,7 @@ mod test {
         assert!(list[0].updated.is_some());
         assert!(list[0].used.is_none());
 
-        derive_master_key(&storage, b"hunter3").unwrap();
+        derive_key_chain(&storage, b"hunter3").unwrap();
         let list = list_keys(&storage).unwrap();
         assert_eq!(1, list.len());
         assert!(list[0].updated.is_some());
