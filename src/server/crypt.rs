@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -71,11 +71,18 @@
 //! Supporting multiple passphrases is important. There are some use-cases for
 //! using multiple in tandem; but more importantly, this support also provides
 //! a way to _change_ the passphrase without needing to rebuild the entire data
-//! store. To do this, when we initialise the key store, we generate a random
-//! master key. Each passphrase as already described produces a secondary key.
-//! In the key store, we store the XOR of the master key with each secondary
-//! key. In effect, each secondary key is used as a one-time pad to encrypt the
-//! master key.
+//! store.
+//!
+//! We also want to support multiple internal keys, which can be used to
+//! isolate parts of the system. Each internal key a name and a randomly
+//! generated 32-byte value. Each passphrase can be bound to any number of
+//! internal keys, though in practise all passphrases must at least be bound to
+//! the `everyone` internal key.
+//!
+//! Obviously, there needs to be a way to go from a secondary key to each
+//! associated internal key. Thus each passphrase entry stores a 32-byte value
+//! which is the XOR of the internal key with the HMAC of the internal key name
+//! and the secondary key.
 //!
 //! To put it all together:
 //!
@@ -89,29 +96,65 @@
 //! - Hash the derived key. If it does not match the stored hash, move to the
 //! next entry.
 //!
-//! - XOR the derived key with the master key diff and we have the master key.
+//! - For each internal key bound to the entry, take the HMAC of the internal
+//! key name and the derived key, then XOR it with the internal key diff.
 //!
 //! Note that the keys here are actually 256 bits wide, twice the size of an
-//! AES key. We thus actually have *two* independent master keys. The first 128
-//! bits are used for encryption operations on directories; the second 128 bits
-//! are used for encryption operations on objects. The full 256 bits is used as
-//! the HMAC secret.
+//! AES key. We thus actually have *two* independent internal keys. The first
+//! 128 bits are used for encryption operations on directories. The second 128
+//! bits is used as the HMAC secret.
+//!
+//! # Groups
+//!
+//! Internal keys are exposed in the CLI as a more abstract "group" concept.
+//! Each group is essentially an internal key, though there are additional
+//! semantics ascribed below.
+//!
+//! By default, there is an `everyone` group which all passphrases are a member
+//! of, and a `root` group which one passphrase must be a member of.
+//!
+//! Every directory has a read group and a write group. For the root directory,
+//! these are `everyone` and `root`, respectively. The read group determines
+//! which internal key is used to encrypt directory contents. As discussed
+//! below, this also by proxy determines which objects can be read. The write
+//! group is used by the server to restrict writes to the directory.
+//!
+//! Groups are switched when entering a directory containing specific syntax in
+//! its *name* (TODO define). This may seem like a hacky choice, since it's
+//! loud, sticky, and infectious. This is in fact exactly why it is done this
+//! way, rather than as some kind of metadata. It means, for example, that an
+//! attacker with sufficient access to edit a parent directory but insufficient
+//! to read a child cannot replace the child directory with one without
+//! protection, as the only way to do so would be to change its name, which a
+//! potential victim would handle at worst by deleting its files and at best by
+//! simply recreating the child with the same name (and thus the same
+//! protection).
 //!
 //! # Encrypting objects
 //!
-//! Since objects are immutable, opaque blobs, their handling is reasonably
-//! simple:
+//! Since objects are immutable, opaque blobs, their handling is for the most
+//! part reasonably simple. The main consideration is how the encryption should
+//! play with access control. What we need to guarantee is:
 //!
-//! - Generate a random 128-bit key and IV.
+//! - If you write an object to the server, you can be sure that all other
+//! clients that do the same thing would use the same key.
 //!
-//! - Encrypt those two (two AES blocks) with the object master key in CBC mode
-//! with IV 0 (the mode and IV here don't matter since the cleartext is pure
-//! entropy) and write that at the beginning of the object. Encrypt the object
-//! data in CBC mode using the saved key and IV.
+//! - If you can read a directory referencing an object, you can reference that
+//! object.
 //!
-//! Generating a random key for each object ensures that objects with similar
-//! prefices are nonetheless different. The random IV may make this stronger,
-//! but definitely does not hurt.
+//! The solution is to derive the from the object content and the `everyone`
+//! internal key. Specifically:
+//!
+//! - Take the HMAC of the object content with the `everyone` HMAC secret
+//! concatenated with itself. The first 16 bytes are the AES key, the second 16
+//! bytes are the AES IV.
+//!
+//! - Encrypt the object data in CBC mode using the that key and IV.
+//!
+//! For writers, this system is easy. For readers, there's the conundrum that
+//! they don't know the object content, and so cannot determine the key to
+//! decrypt the content. However, the key HMAC can be stored directly in the
+//! directory entry, thus granting access to anyone who can read the directory.
 //!
 //! Objects are padded to the block size with PKCS.
 //!
@@ -140,10 +183,18 @@
 //! version number than what clients have seen before, which could be used to
 //! create an infinite directory tree as part of a padding oracle attack, etc.
 //!
+//! Every directory version additionally has a secret value which is used to
+//! protect writes. This is simply the HMAC of the encrypted id and the HMAC
+//! secret of the write group. Note that this protection mechanism does not
+//! have inherent cryptographic value, in that anyone with filesystem access
+//! can trivially bypass the check, but it prevents an attacker with access to
+//! only an ensync server socket from corrupting directories.
+//!
 //! # Directory Contents
 //!
-//! The contents of a directory are prefixed with an encrypted key and IV in
-//! the same way as objects, except that the directory master key is used.
+//! The content of a directory is prefixed with 32 bytes, encrypted in CBC mode
+//! with the directory key of the read group, using an IV of 0. These 32 bytes
+//! specify the key and IV with which the rest of the data is encrypted.
 //!
 //! The directory itself is encrypted in CBC mode. Since directory edits
 //! require simply appending data to the file, each chunk of data is padded
