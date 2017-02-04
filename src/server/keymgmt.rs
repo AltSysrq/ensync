@@ -420,7 +420,7 @@ pub fn list_keys<S : Storage + ?Sized>(storage: &S) -> Result<Vec<KeyInfo>> {
 mod test {
     use tempdir::TempDir;
 
-    use errors::*;
+    #[allow(unused_imports)] use errors::*;
     use server::local_storage::LocalStorage;
     use super::*;
 

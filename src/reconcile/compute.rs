@@ -386,9 +386,9 @@ mod test {
     use std::collections::HashSet;
 
     use super::*;
-    use defs::*;
+    #[allow(unused_imports)] use defs::*;
     use defs::test_helpers::*;
-    use rules::*;
+    #[allow(unused_imports)] use rules::*;
 
     #[test]
     fn simple_gen_alternate_name() {

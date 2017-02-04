@@ -659,7 +659,7 @@ fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
 
 /// Encrypts the object data in `src` using the key from the object's id,
 /// writing the encrypted result to `dst`.
-pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R, id: &HashId)
+pub fn encrypt_obj<W : Write, R : Read>(dst: W, src: R, id: &HashId)
                                         -> Result<()> {
     let mut key = [0u8;BLKSZ];
     let mut iv = [0u8;BLKSZ];
@@ -673,7 +673,7 @@ pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R, id: &HashId)
 }
 
 /// Reverses `encrypt_obj()`.
-pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R, id: &HashId)
+pub fn decrypt_obj<W : Write, R : Read>(dst: W, src: R, id: &HashId)
                                         -> Result<()> {
     let mut key = [0u8;BLKSZ];
     let mut iv = [0u8;BLKSZ];

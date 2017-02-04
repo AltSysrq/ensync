@@ -514,7 +514,7 @@ pub mod test {
     use super::super::compute::{SplitAncestorState};
     use super::*;
     use super::{replace_ancestor,replace_replica,try_rename_replica};
-    use super::super::context::*;
+    #[allow(unused_imports)] use super::super::context::*;
 
     #[derive(Clone,Debug)]
     pub struct ConstantRules(SyncMode);

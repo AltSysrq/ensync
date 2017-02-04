@@ -411,7 +411,7 @@ impl Condemn for AncestorReplica {
 mod test {
     use defs::*;
     use defs::test_helpers::*;
-    use errors::*;
+    #[allow(unused_imports)] use errors::*;
     use replica::*;
     use super::*;
 

@@ -13,8 +13,8 @@ use std::path::Path;
 
 use tempdir::TempDir;
 
-use defs::*;
-use server::storage::*;
+#[allow(unused_imports)] use defs::*;
+#[allow(unused_imports)] use server::storage::*;
 
 macro_rules! init {
     ($dir:ident, $storage:ident) => {

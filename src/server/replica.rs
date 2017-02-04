@@ -304,7 +304,7 @@ mod test {
     use block_xfer;
     use defs::*;
     use defs::test_helpers::*;
-    use errors::*;
+    #[allow(unused_imports)] use errors::*;
     use replica::*;
     use server::crypt::KeyChain;
     use server::local_storage::LocalStorage;

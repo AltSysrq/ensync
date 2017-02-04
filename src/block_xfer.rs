@@ -266,7 +266,7 @@ mod test {
     use std::collections::HashMap;
 
     use defs::*;
-    use errors::*;
+    #[allow(unused_imports)] use errors::*;
     use super::*;
 
     fn to_blocklist(text: &[u8], secret: &[u8])
