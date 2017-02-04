@@ -48,7 +48,11 @@ pub fn list_keys(storage: &Storage) -> Result<()> {
 
     let keys = keymgmt::list_keys(storage)?;
     for key in keys {
-        println!("{}:", key.name);
+        print!("{}:", key.name);
+        for group in &key.groups {
+            print!(" {}", group);
+        }
+        println!("");
         println!("  algorithm:    {}", key.algorithm);
         println!("  created:      {}", format_date(Some(&key.created)));
         println!("  last changed: {}", format_date(key.updated.as_ref()));

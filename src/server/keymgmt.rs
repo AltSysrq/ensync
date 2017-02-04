@@ -238,6 +238,7 @@ pub struct KeyInfo {
     pub created: DateTime<UTC>,
     pub updated: Option<DateTime<UTC>>,
     pub used: Option<DateTime<UTC>>,
+    pub groups: Vec<String>,
 }
 
 /// Fetches the list of keys in the storage.
@@ -252,6 +253,7 @@ pub fn list_keys<S : Storage + ?Sized>(storage: &S) -> Result<Vec<KeyInfo>> {
                created: e.created,
                updated: e.updated,
                used: e.used,
+               groups: e.groups.keys().map(|s| s.to_owned()).collect(),
            }).collect())
     } else {
         Ok(vec![])
