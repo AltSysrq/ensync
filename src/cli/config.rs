@@ -26,7 +26,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use flate2;
-#[cfg(passphrase_prompt)] use rpassword;
+#[cfg(feature = "passphrase-prompt")] use rpassword;
 use toml;
 
 use defs::PRIVATE_DIR_NAME;
@@ -316,7 +316,7 @@ impl FromStr for PassphraseConfig {
     }
 }
 
-#[cfg(passphrase_prompt)]
+#[cfg(feature = "passphrase-prompt")]
 fn do_prompt_passphrase(what: &str, confirm: bool) -> Result<Vec<u8>> {
     let first = rpassword::prompt_password_stdout(
         &format!("Enter {}: ", what))?;
@@ -330,7 +330,7 @@ fn do_prompt_passphrase(what: &str, confirm: bool) -> Result<Vec<u8>> {
     Ok(first.into())
 }
 
-#[cfg(not(passphrase_prompt))]
+#[cfg(not(feature = "passphrase-prompt"))]
 fn do_prompt_passphrase(_: &str, _: bool) -> Result<Vec<u8>> {
     Err("Reading the passphrase from the terminal is not supported in this \
          build of Ensync (requires the `passphrase_prompt` feature)".into())

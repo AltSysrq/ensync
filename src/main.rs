@@ -26,7 +26,7 @@ extern crate libc;
 extern crate num_cpus;
 extern crate rand;
 extern crate regex;
-#[cfg(passphrase_prompt)] extern crate rpassword;
+#[cfg(feature = "passphrase-prompt")] extern crate rpassword;
 extern crate sqlite;
 extern crate tempfile;
 extern crate tiny_keccak as keccak;
