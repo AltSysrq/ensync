@@ -177,8 +177,8 @@
 //!
 //! - Pad it with 24 zero bytes (to make it the size of a `HashId`).
 //!
-//! - Encrypt it with AES in CBC mode using the directory key and an IV equal
-//! to the two halves of the directory id XORed with each other.
+//! - Encrypt it with AES in CBC mode using the `everyone` directory key and an
+//! IV equal to the two halves of the directory id XORed with each other.
 //!
 //! Encrypting the integers this way obfuscates how often a directory is
 //! usually updated. It does not alone prevent tampering since an attacker
@@ -192,6 +192,9 @@
 //! contents by making an educated guess as to what might have a greater
 //! version number than what clients have seen before, which could be used to
 //! create an infinite directory tree as part of a padding oracle attack, etc.
+//!
+//! Versions need to be encrypted with the `everyone` key because there is not
+//! always enough context to know what key should actually be used.
 //!
 //! Every directory version additionally has a secret value which is used to
 //! protect writes. This is simply the HMAC of the encrypted id and the HMAC
@@ -366,15 +369,6 @@ impl KeyChain {
     /// Returns the HMAC secret to use for object hashing.
     pub fn obj_hmac_secret(&self) -> Result<&[u8]> {
         self.key(GROUP_EVERYONE).map(InternalKey::hmac_secret)
-    }
-
-    // TODO Remove these
-    pub fn dir_key(&self) -> &[u8] {
-        self.keys[GROUP_EVERYONE].dir_key()
-    }
-
-    pub fn hmac_secret(&self) -> &[u8] {
-        self.keys[GROUP_EVERYONE].hmac_secret()
     }
 }
 
@@ -700,7 +694,7 @@ pub fn xform_obj_id(id: &HashId) -> HashId {
 ///
 /// `src` must produce data which is a multiple of BLKSZ bytes long.
 pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
-                                              key: &KeyChain)
+                                              key: &InternalKey)
                                               -> Result<[u8;BLKSZ]> {
     let (key, iv) = try!(write_cbc_prefix(&mut dst, key.dir_key()));
 
@@ -726,7 +720,7 @@ pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
 /// Inverts `encrypt_whole_dir()` and any subsequent calls to
 /// `encrypt_append_dir()`.
 pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
-                                              key: &KeyChain)
+                                              key: &InternalKey)
                                               -> Result<[u8;BLKSZ]> {
     let (key, iv) = try!(read_cbc_prefix(&mut src, key.dir_key()));
 
@@ -756,6 +750,9 @@ fn dir_ver_iv(dir: &HashId) -> [u8;BLKSZ] {
 /// Encrypts the version of the given directory.
 pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, key: &KeyChain)
                        -> HashId {
+    let key = key.key(GROUP_EVERYONE).expect(
+        "Key chain does not have `everyone` group");
+
     let mut cleartext = HashId::default();
     for ix in 0..8 {
         cleartext[ix] = (ver & 0xFF) as u8;
@@ -778,6 +775,9 @@ pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, key: &KeyChain)
 /// If `ciphertext` is invalid, 0 is silently returned instead.
 pub fn decrypt_dir_ver(dir: &HashId, ciphertext: &HashId, key: &KeyChain)
                        -> u64 {
+    let key = key.key(GROUP_EVERYONE).expect(
+        "Key chain does not have `everyone` group");
+
     // Initialise to something that we'd reject below
     let mut cleartext = [255u8;32];
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
@@ -895,16 +895,15 @@ mod fast_test {
 
     #[test]
     fn crypt_dir_oneshot() {
-        let keychain = KeyChain::generate_new();
+        let key = InternalKey::generate_new();
 
         let orig = b"0123456789abcdef0123456789ABCDEF";
         let mut ciphertext = Vec::new();
-        let sk1 =
-            encrypt_whole_dir(&mut ciphertext, &orig[..], &keychain).unwrap();
+        let sk1 = encrypt_whole_dir(&mut ciphertext, &orig[..], &key).unwrap();
 
         let mut cleartext = Vec::new();
         let sk2 = decrypt_whole_dir(&mut cleartext, &ciphertext[..],
-                                    &keychain).unwrap();
+                                    &key).unwrap();
 
         assert_eq!(orig, &cleartext[..]);
         assert_eq!(sk1, sk2);
@@ -912,17 +911,17 @@ mod fast_test {
 
     #[test]
     fn crypt_dir_appended() {
-        let keychain = KeyChain::generate_new();
+        let key = InternalKey::generate_new();
 
         let mut ciphertext = Vec::new();
         let sk = encrypt_whole_dir(
-            &mut ciphertext, &b"0123456789abcdef"[..], &keychain).unwrap();
+            &mut ciphertext, &b"0123456789abcdef"[..], &key).unwrap();
         let iv = dir_append_iv(&ciphertext);
         encrypt_append_dir(
             &mut ciphertext, &b"0123456789ABCDEF"[..], &sk, &iv).unwrap();
 
         let mut cleartext = Vec::new();
-        decrypt_whole_dir(&mut cleartext, &ciphertext[..], &keychain).unwrap();
+        decrypt_whole_dir(&mut cleartext, &ciphertext[..], &key).unwrap();
 
         assert_eq!(&b"0123456789abcdef0123456789ABCDEF"[..], &cleartext[..]);
     }

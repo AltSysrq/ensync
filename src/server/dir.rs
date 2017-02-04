@@ -615,6 +615,15 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             let entry = self.lookup_opt(content, old)?
                 .ok_or(ErrorKind::NotFound)?.clone();
 
+            if let v0::Entry::Directory { .. } = entry {
+                let old_config = self.config.sub(&*old.to_string_lossy())
+                    .unwrap_or_else(|_| self.config.clone());
+                let new_config = self.config.sub(&*new.to_string_lossy())?;
+                if old_config != new_config {
+                    return Err(ErrorKind::RenameChangesDirConfig.into());
+                }
+            }
+
             self.add_entry(tx, content, old.to_owned(), v0::Entry::Deleted {
                 unknown: UnknownFields::default()
             })?;
@@ -675,6 +684,11 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         }
     }
 
+    /// Returns the internal key to be used for directory operations.
+    fn dir_key(&self) -> Result<&InternalKey> {
+        self.key.key(&self.config.read_group)
+    }
+
     fn refresh_if_needed(&self, content: &mut DirContent) -> Result<()> {
         if !content.is_valid() {
             self.refresh(content)
@@ -696,7 +710,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             // because propagating `NotFound` out of the callers of `refresh()`
             // would have different meaning.
             .ok_or(ErrorKind::DirectoryMissing)?;
-        let version = decrypt_dir_ver(&self.id, &cipher_version, &*self.key);
+        let version = decrypt_dir_ver(&self.id, &cipher_version, &self.key);
 
         // Validate that the version has not recessed from the latest thing we
         // ever successfully parsed.
@@ -720,7 +734,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         // Ok, now decrypt and read the header
         let mut data = Vec::<u8>::new();
         let session_key = decrypt_whole_dir(
-            &mut data, &cipher_data[..], &*self.key)?;
+            &mut data, &cipher_data[..], self.dir_key()?)?;
 
         let mut data_reader = &data[..];
         let mut chunk_hmac = UNKNOWN_HASH;
@@ -834,7 +848,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         let mut kc = keccak::Keccak::new_sha3_256();
         kc.update(hmac_data);
         kc.update(prev_hmac);
-        kc.update(self.key.hmac_secret());
+        kc.update(self.dir_key()?.hmac_secret());
 
         let mut calculated_hmac = UNKNOWN_HASH;
         kc.finalize(&mut calculated_hmac);
@@ -943,12 +957,12 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
 
         let mut cleartext = Vec::new();
         content.prev_hmac = UNKNOWN_HASH;
-        self.encode_chunk(&mut cleartext, &header, &mut content.prev_hmac);
-        self.encode_chunk(&mut cleartext, &entries, &mut content.prev_hmac);
+        self.encode_chunk(&mut cleartext, &header, &mut content.prev_hmac)?;
+        self.encode_chunk(&mut cleartext, &entries, &mut content.prev_hmac)?;
 
         let mut ciphertext = Vec::<u8>::new();
         content.session_key = encrypt_whole_dir(
-            &mut ciphertext, &mut&cleartext[..], &self.key)?;
+            &mut ciphertext, &mut&cleartext[..], self.dir_key()?)?;
         content.length = ciphertext.len() as u32;
         content.iv = dir_append_iv(&ciphertext);
 
@@ -963,7 +977,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         let mut cleartext = Vec::new();
         self.encode_chunk(&mut cleartext,
                           &[(name.as_bytes().to_owned(), entry)],
-                          &mut content.prev_hmac);
+                          &mut content.prev_hmac)?;
 
         let mut ciphertext = Vec::<u8>::new();
         encrypt_append_dir(&mut ciphertext, &cleartext[..],
@@ -977,7 +991,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
     }
 
     fn encode_chunk<T : Serialize>(&self, dst: &mut Vec<u8>, value: T,
-                                   prev_hmac: &mut HashId) {
+                                   prev_hmac: &mut HashId) -> Result<()> {
         let start = dst.len();
         // Allocate space for the header
         dst.extend(&UNKNOWN_HASH);
@@ -1002,9 +1016,10 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         let mut kc = keccak::Keccak::new_sha3_256();
         kc.update(&dst[start + UNKNOWN_HASH.len() ..]);
         kc.update(prev_hmac);
-        kc.update(self.key.hmac_secret());
+        kc.update(self.dir_key()?.hmac_secret());
         kc.finalize(&mut dst[start .. start + UNKNOWN_HASH.len()]);
         prev_hmac.copy_from_slice(&dst[start .. start + UNKNOWN_HASH.len()]);
+        Ok(())
     }
 
     fn create_directory(&self, tx: Tx, name: &OsStr) -> Result<HashId> {

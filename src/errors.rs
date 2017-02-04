@@ -213,6 +213,9 @@ error_chain! {
             display("Invalid server directory configuration key '{}' \
                      in '{}'", key, config)
         }
+        RenameChangesDirConfig {
+            description("Rename would change directory configuration")
+        }
 
         // Errors related to setup/usage
         KdfListAlreadyExists {
