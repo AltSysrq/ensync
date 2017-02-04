@@ -805,6 +805,14 @@ pub fn decrypt_dir_ver(dir: &HashId, ciphertext: &HashId, key: &KeyChain)
     ver
 }
 
+/// Returns the secret version corresponding to the encrypted version `v`.
+///
+/// The secret version is simply the HMAC of the normal version with the key's
+/// HMAC secret.
+pub fn secret_dir_ver(v: &HashId, key: &InternalKey) -> HashId {
+    hmac(v, key.hmac_secret())
+}
+
 #[cfg(test)]
 mod test {
     use chrono::UTC;

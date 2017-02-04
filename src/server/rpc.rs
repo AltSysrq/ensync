@@ -131,16 +131,16 @@ pub enum Request {
     /// `Storage::mkdir`
     ///
     /// No response.
-    Mkdir { tx: Tx, id: HashId, ver: HashId, data: Vec<u8>, },
+    Mkdir { tx: Tx, id: HashId, ver: HashId, sver: HashId, data: Vec<u8>, },
     /// `Storage::updir`
     ///
     /// No response.
-    Updir { tx: Tx, id: HashId, ver: HashId, old_len: u32,
+    Updir { tx: Tx, id: HashId, sver: HashId, old_len: u32,
             append: Vec<u8>, },
     /// `Storage::rmdir`
     ///
     /// No response.
-    Rmdir { tx: Tx, id: HashId, ver: HashId, old_len: u32, },
+    Rmdir { tx: Tx, id: HashId, sver: HashId, old_len: u32, },
     /// `Storage::linkobj`
     ///
     /// Response: One `Done` | `NotFound` | `Error`
@@ -194,28 +194,29 @@ fourleaf_retrofit!(enum Request : {} {} {
         [1] tx: Tx = tx,
         { Ok(Request::Abort(tx)) }
     },
-    [9] Request::Mkdir { tx, ref id, ref ver, ref data } => {
+    [9] Request::Mkdir { tx, ref id, ref ver, ref sver, ref data } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
         [3] ver: HashId = ver,
-        [4] data: Vec<u8> = data,
-        { Ok(Request::Mkdir { tx: tx, id: id, ver: ver, data: data }) }
+        [4] sver: HashId = sver,
+        [5] data: Vec<u8> = data,
+        { Ok(Request::Mkdir { tx: tx, id: id, ver: ver, sver: sver, data: data }) }
     },
-    [10] Request::Updir { tx, ref id, ref ver, old_len, ref append } => {
+    [10] Request::Updir { tx, ref id, ref sver, old_len, ref append } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
-        [3] ver: HashId = ver,
+        [3] sver: HashId = sver,
         [4] old_len: u32 = old_len,
         [5] append: Vec<u8> = append,
-        { Ok(Request::Updir { tx: tx, id: id, ver: ver,
+        { Ok(Request::Updir { tx: tx, id: id, sver: sver,
                               old_len: old_len, append: append }) }
     },
-    [11] Request::Rmdir { tx, ref id, ref ver, old_len } => {
+    [11] Request::Rmdir { tx, ref id, ref sver, old_len } => {
         [1] tx: Tx = tx,
         [2] id: HashId = id,
-        [3] ver: HashId = ver,
+        [3] sver: HashId = sver,
         [4] old_len: u32 = old_len,
-        { Ok(Request::Rmdir { tx: tx, id: id, ver: ver, old_len: old_len }) }
+        { Ok(Request::Rmdir { tx: tx, id: id, sver: sver, old_len: old_len }) }
     },
     [12] Request::Linkobj { tx, ref id, ref linkid } => {
         [1] tx: Tx = tx,
@@ -460,15 +461,15 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
                 Err(err) => err!(err),
             },
 
-            Request::Mkdir { tx, id, ver, data } =>
-                none_or_fatal!(storage.mkdir(tx, &id, &ver, &data[..])),
+            Request::Mkdir { tx, id, ver, sver, data } =>
+                none_or_fatal!(storage.mkdir(tx, &id, &ver, &sver, &data[..])),
 
-            Request::Updir { tx, id, ver, old_len, append } =>
-                none_or_fatal!(storage.updir(tx, &id, &ver, old_len,
+            Request::Updir { tx, id, sver, old_len, append } =>
+                none_or_fatal!(storage.updir(tx, &id, &sver, old_len,
                                              &append[..])),
 
-            Request::Rmdir { tx, id, ver, old_len } =>
-                none_or_fatal!(storage.rmdir(tx, &id, &ver, old_len)),
+            Request::Rmdir { tx, id, sver, old_len } =>
+                none_or_fatal!(storage.rmdir(tx, &id, &sver, old_len)),
 
             Request::Linkobj { tx, id, linkid } => {
                 match storage.linkobj(tx, &id, &linkid) {
@@ -688,25 +689,25 @@ impl Storage for RemoteStorage {
         })
     }
 
-    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, data: &[u8])
+    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, sv: &HashId, data: &[u8])
              -> Result<()> {
         self.send_async_request(Request::Mkdir {
-            tx: tx, id: *id, ver: *v, data: data.to_owned()
+            tx: tx, id: *id, ver: *v, sver: *sv, data: data.to_owned()
         })
     }
 
-    fn updir(&self, tx: Tx, id: &HashId, v: &HashId, old_len: u32,
+    fn updir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32,
              data: &[u8]) -> Result<()> {
         self.send_async_request(Request::Updir {
-            tx: tx, id: *id, ver: *v, old_len: old_len,
+            tx: tx, id: *id, sver: *sv, old_len: old_len,
             append: data.to_owned()
         })
     }
 
-    fn rmdir(&self, tx: Tx, id: &HashId, v: &HashId, old_len: u32)
+    fn rmdir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32)
              -> Result<()> {
         self.send_async_request(Request::Rmdir {
-            tx: tx, id: *id, ver: *v, old_len: old_len
+            tx: tx, id: *id, sver: *sv, old_len: old_len
         })
     }
 

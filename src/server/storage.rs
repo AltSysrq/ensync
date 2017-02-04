@@ -32,7 +32,10 @@ pub type Tx = u64;
 /// directory. Concurrent modifications on a directory are handled by testing
 /// the length of the directory as well as a "version id" regenerated each time
 /// the directory is rewritten. Note that the version id has additional
-/// semantics at the higher layer to detect revert attacks.
+/// semantics at the higher layer to detect revert attacks. There is also a
+/// "secret version id" which is specified when the directory is created; write
+/// operations to a directory specify the secret version, whereas read
+/// operations only return the normal version.
 ///
 /// - "Objects", which hold blocks produced by `block_xfer`, identified by
 /// HMAC. The server has no way to determine itself whether a block is in use;
@@ -84,35 +87,35 @@ pub trait Storage : Send + Sync {
     /// Aborts a transaction.
     fn abort(&self, tx: Tx) -> Result<()>;
 
-    /// Schedules a directory to be created with the id `id`, version `v`, and
-    /// content `data`.
+    /// Schedules a directory to be created with the id `id`, version `v`,
+    /// secret version `sv`, and content `data`.
     ///
     /// The transaction will fail if a directory with the given id exists,
     /// regardless of version or content. The transaction will also fail if a
     /// directory with that id and version exists anywhere globally, including
     /// outside the transaction or possibly in uncommitted transactions.
-    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, data: &[u8])
+    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, sv: &HashId, data: &[u8])
              -> Result<()>;
     /// Schedules `append` to be appended to the directory with id `id`,
-    /// version `v`, and length in bytes `old_len`.
+    /// secret version `sv`, and length in bytes `old_len`.
     ///
     /// The transaction will fail if no directory with that id exists, or if it
     /// exists but has a differing version or length.
     ///
     /// The length of the directory is increased by `append.len()` when the
     /// transaction successfully commits.
-    fn updir(&self, tx: Tx, id: &HashId, v: &HashId,
+    fn updir(&self, tx: Tx, id: &HashId, sv: &HashId,
              old_len: u32, append: &[u8])
              -> Result<()>;
     /// Schedules the directory identified by `id` to be removed if it still
-    /// has version `v` and length in bytes `old_len`.
+    /// has secret version `sv` and length in bytes `old_len`.
     ///
     /// The transaction will fail if no directory with that id exists, or if it
     /// exists but has a differing version or length.
     ///
     /// An `rmdir` followed by a `mkdir` of the same directory in one
     /// transaction is fully atomic.
-    fn rmdir(&self, tx: Tx, id: &HashId, v: &HashId, old_len: u32)
+    fn rmdir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32)
              -> Result<()>;
     /// Adds a link to an object.
     ///

@@ -98,17 +98,18 @@ enum TxOp {
     Mkdir {
         id: HashId,
         ver: HashId,
+        sver: HashId,
         data: Vec<u8>,
     },
     Updir {
         id: HashId,
-        ver: HashId,
+        sver: HashId,
         old_len: u32,
         append: Vec<u8>,
     },
     Rmdir {
         id: HashId,
-        ver: HashId,
+        sver: HashId,
         old_len: u32,
     },
     LinkObj {
@@ -197,18 +198,19 @@ impl LocalStorage {
     fn do_commit(&self, db: &sqlite::Connection, tx: &mut TxData)
                  -> Result<bool> {
         for op in &mut tx.ops { match *op {
-            TxOp::Mkdir { ref id, ref ver, ref data } => {
+            TxOp::Mkdir { ref id, ref ver, ref sver, ref data } => {
                 if try!(db.prepare("SELECT 1 FROM `dirs` WHERE `id` = ?1")
                         .binding(1, &id[..])
                         .exists()) {
                     return Ok(false);
                 }
 
-                try!(db.prepare("INSERT INTO `dirs` (`id`, `ver`, `length`)\
-                                 VALUES (?1, ?2, ?3)")
+                try!(db.prepare("INSERT INTO `dirs` (`id`, `ver`, `sver`, `length`)\
+                                 VALUES (?1, ?2, ?3, ?4)")
                      .binding(1, &id[..])
                      .binding(2, &ver[..])
-                     .binding(3, data.len() as i64)
+                     .binding(3, &sver[..])
+                     .binding(4, data.len() as i64)
                      .run());
                 let mut tmpfile = try!(NamedTempFile::new_in(&self.tmpdir));
                 try!(tmpfile.write_all(data));
@@ -225,16 +227,12 @@ impl LocalStorage {
                 }
             },
 
-            TxOp::Updir { ref id, ref ver, old_len, ref append } => {
-                if !try!(db.prepare("SELECT 1 FROM `dirs` \
-                                     WHERE `id` = ?1 AND `ver` = ?2 \
-                                     AND   `length` = ?3")
-                         .binding(1, &id[..])
-                         .binding(2, &ver[..])
-                         .binding(3, old_len as i64)
-                         .exists()) {
-                    return Ok(false);
-                }
+            TxOp::Updir { ref id, ref sver, old_len, ref append } => {
+                let ver = match self.get_ver_for_modify(db, id, sver,
+                                                        old_len)? {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
 
                 if (u32::MAX as u64) - (old_len as u64) <
                     (append.len() as u64)
@@ -264,16 +262,12 @@ impl LocalStorage {
                 try!(file.sync_data());
             },
 
-            TxOp::Rmdir { ref id, ref ver, old_len } => {
-                if !try!(db.prepare("SELECT 1 FROM `dirs` \
-                                     WHERE `id` = ?1 AND `ver` = ?2 \
-                                     AND   `length` = ?3")
-                         .binding(1, &id[..])
-                         .binding(2, &ver[..])
-                         .binding(3, old_len as i64)
-                         .exists()) {
-                    return Ok(false);
-                }
+            TxOp::Rmdir { ref id, ref mut sver, old_len } => {
+                let ver = match self.get_ver_for_modify(db, id, sver,
+                                                        old_len)? {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
 
                 try!(db.prepare("DELETE FROM `dirs` \
                                  WHERE `id` = ?1")
@@ -283,6 +277,10 @@ impl LocalStorage {
                 // postexecute so that readers can see the fact that the
                 // entry has been deleted and because we wouldn't be able
                 // to undo that should the transaction roll back.
+                //
+                // But we do need to store the normal version, which we do by
+                // stashing it in the `sver` field (kind of hackish, oh well).
+                *sver = ver;
             },
 
             TxOp::LinkObj { ref id, ref linkid, ref mut handle } => {
@@ -362,10 +360,35 @@ impl LocalStorage {
         Ok(())
     }
 
+    fn get_ver_for_modify(&self, db: &sqlite::Connection,
+                          id: &HashId, sver: &HashId, old_len: u32)
+                          -> Result<Option<HashId>> {
+        let vver: Option<Vec<u8>> =
+            db.prepare("SELECT `ver` FROM `dirs` \
+                        WHERE `id` = ?1 AND `sver` = ?2 \
+                        AND   `length` = ?3")
+            .binding(1, &id[..])
+            .binding(2, &sver[..])
+            .binding(3, old_len as i64)
+            .first(|r| r.read(0))?;
+
+        let vver = match vver {
+            Some(ver) => ver,
+            None => return Ok(None),
+        };
+        let mut ver = UNKNOWN_HASH;
+        if vver.len() != ver.len() {
+            return Err(ErrorKind::InvalidHash.into());
+        }
+        ver.copy_from_slice(&vver);
+        Ok(Some(ver))
+    }
+
     fn postcommit_cleanup(&self, tx: &TxData) {
         for op in &tx.ops { match *op {
-            TxOp::Rmdir { ref id, ref ver, .. } => {
-                let _ = fs::remove_file(self.dir_path(id, ver));
+            TxOp::Rmdir { ref id, ref sver, .. } => {
+                // `sver` has been overwritten with the normal version.
+                let _ = fs::remove_file(self.dir_path(id, sver));
             },
 
             _ => { },
@@ -564,30 +587,31 @@ impl Storage for LocalStorage {
         Ok(())
     }
 
-    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, data: &[u8])
+    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, sv: &HashId, data: &[u8])
              -> Result<()> {
         self.tx_add(tx, TxOp::Mkdir {
             id: *id,
             ver: *v,
+            sver: *sv,
             data: data.to_vec(),
         })
     }
 
-    fn updir(&self, tx: Tx, id: &HashId, v: &HashId, old_len: u32,
+    fn updir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32,
              append: &[u8]) -> Result<()> {
         self.tx_add(tx, TxOp::Updir {
             id: *id,
-            ver: *v,
+            sver: *sv,
             old_len: old_len,
             append: append.to_vec(),
         })
     }
 
-    fn rmdir(&self, tx: Tx, id: &HashId, v: &HashId, old_len: u32)
+    fn rmdir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32)
              -> Result<()> {
         self.tx_add(tx, TxOp::Rmdir {
             id: *id,
-            ver: *v,
+            sver: *sv,
             old_len: old_len,
         })
     }
@@ -669,8 +693,8 @@ mod test {
     fn adding_ops_to_nx_transaction_is_err() {
         init!(dir, storage);
 
-        assert!(storage.mkdir(42, &hashid(1), &hashid(2), b"hello world")
-                .is_err());
+        assert!(storage.mkdir(42, &hashid(1), &hashid(2), &hashid(3),
+                              b"hello world").is_err());
         assert!(storage.updir(42, &hashid(1), &hashid(2), 99, b"hello world")
                 .is_err());
         assert!(storage.rmdir(42, &hashid(1), &hashid(2), 99).is_err());

@@ -1198,6 +1198,75 @@ mod test {
     }
 
     #[test]
+    fn write_protected_dirs_not_writable_by_non_group_members() {
+        use server::keymgmt;
+
+        let dir = TempDir::new("storage").unwrap();
+        // We need a real SQLite file since there will be multiple replica
+        // instances here.
+        let sqlite_file = dir.path().join("state.sqlite");
+        let storage_dir = dir.path().join("storage");
+
+        let storage = Arc::new(LocalStorage::open(&storage_dir).unwrap());
+
+        // Set up two keys, putting the first one into a unique group.
+        keymgmt::init_keys(&*storage, b"hunter2", "privileged").unwrap();
+        keymgmt::add_key(&*storage, b"hunter2", b"hunter3", "restricted")
+            .unwrap();
+        keymgmt::create_group(&*storage, b"hunter2", ["private"].iter())
+            .unwrap();
+
+        let subdir_name = oss("priv.ensync[w=private]");
+
+        {
+            let key_chain = keymgmt::derive_key_chain(&*storage, b"hunter2")
+                .unwrap();
+
+            let replica = ServerReplica::new(
+                sqlite_file.to_str().unwrap(), Arc::new(key_chain),
+                storage.clone(), "r00t", 1024,
+                flate2::Compression::Fast).unwrap();
+            replica.create_root().unwrap();
+
+            let mut root = replica.root().unwrap();
+            replica.create(&mut root, File(&subdir_name,
+                                           &FileData::Directory(0o700)),
+                           None).unwrap();
+            let mut subdir = replica.chdir(&root, &subdir_name).unwrap();
+            replica.create(&mut subdir,
+                           File(&oss("secret"),
+                                &FileData::Symlink(oss("plugh"))),
+                           None).unwrap();
+
+            let list = replica.list(&mut subdir).unwrap();
+            assert_eq!(1, list.len());
+        }
+
+        {
+            let key_chain = keymgmt::derive_key_chain(&*storage, b"hunter3")
+                .unwrap();
+
+            let replica = ServerReplica::new(
+                sqlite_file.to_str().unwrap(), Arc::new(key_chain),
+                storage.clone(), "r00t", 1024,
+                flate2::Compression::Fast).unwrap();
+
+            let mut root = replica.root().unwrap();
+            let list = replica.list(&mut root).unwrap();
+            assert_eq!(1, list.len());
+            assert_eq!(subdir_name, list[0].0);
+            assert_eq!(FileData::Directory(0o700), list[0].1);
+
+            let mut subdir = replica.chdir(&root, &subdir_name).unwrap();
+            let list = replica.list(&mut subdir).unwrap();
+            assert_eq!(1, list.len());
+
+            assert!(replica.create(&mut subdir, File(
+                &oss("newdir"), &FileData::Directory(0o600)), None).is_err());
+        }
+    }
+
+    #[test]
     fn rename_cannot_change_dir_config() {
         init!(replica, root);
 

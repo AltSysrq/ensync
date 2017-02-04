@@ -76,7 +76,8 @@ fn put_kdflist<S : Storage + ?Sized>(storage: &S, kdf: &KdfList,
     if let Some((old_ver, old_len)) = old {
         storage.rmdir(tx, &DIRID_KEYS, old_ver, old_len)?;
     }
-    storage.mkdir(tx, &DIRID_KEYS, &new_ver, &new_data)?;
+    // TODO Need to HMAC new_ver to get write protection.
+    storage.mkdir(tx, &DIRID_KEYS, &new_ver, &new_ver, &new_data)?;
     Ok((new_ver, new_data.len() as u32))
 }
 

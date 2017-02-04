@@ -1,3 +1,22 @@
+//-
+// Copyright (c) 2016, 2017 Jason Lingle
+//
+// This file is part of Ensync.
+//
+// Ensync is free software: you can  redistribute it and/or modify it under the
+// terms of  the GNU General Public  License as published by  the Free Software
+// Foundation, either version  3 of the License, or (at  your option) any later
+// version.
+//
+// Ensync is distributed  in the hope that  it will be useful,  but WITHOUT ANY
+// WARRANTY; without  even the implied  warranty of MERCHANTABILITY  or FITNESS
+// FOR  A PARTICULAR  PURPOSE.  See the  GNU General  Public  License for  more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// Ensync. If not, see <http://www.gnu.org/licenses/>.
+
+
 // This is not a separate module, but an include file which defines all the
 // tests for `server::Storage` implementations.
 //
@@ -83,7 +102,8 @@ fn mkdir_becomes_visible_after_commit_but_not_before() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello world").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello world").unwrap();
 
     assert!(storage.getdir(&hashid(1)).unwrap().is_none());
 
@@ -99,11 +119,13 @@ fn mkdir_wont_replace_existing_dir() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello world").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello world").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
-    storage.mkdir(2, &hashid(1), &hashid(3), b"goodbye world").unwrap();
+    storage.mkdir(2, &hashid(1), &hashid(4), &hashid(5),
+                  b"goodbye world").unwrap();
     assert!(!storage.commit(2).unwrap());
 }
 
@@ -112,7 +134,8 @@ fn transaction_rolled_back_if_fails() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello world").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello world").unwrap();
     storage.updir(1, &hashid(42), &hashid(43), 99, b"blah").unwrap();
     assert!(!storage.commit(1).unwrap());
 
@@ -124,11 +147,12 @@ fn updir_visible_after_commit_but_not_before() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
-    storage.updir(2, &hashid(1), &hashid(2), 5, b" world").unwrap();
+    storage.updir(2, &hashid(1), &hashid(3), 5, b" world").unwrap();
 
     assert_eq!(b"hello", &storage.getdir(&hashid(1)).unwrap().unwrap().1[..]);
 
@@ -143,11 +167,12 @@ fn updir_fails_if_length_mismatch() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
-    storage.updir(2, &hashid(1), &hashid(2), 2, b" world").unwrap();
+    storage.updir(2, &hashid(1), &hashid(3), 2, b" world").unwrap();
     assert!(!storage.commit(2).unwrap());
 
     assert_eq!(b"hello", &storage.getdir(&hashid(1)).unwrap().unwrap().1[..]);
@@ -158,7 +183,8 @@ fn updir_fails_if_version_mismatch() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
@@ -169,20 +195,38 @@ fn updir_fails_if_version_mismatch() {
 }
 
 #[test]
+fn updir_fails_if_normal_version_not_secret_version() {
+    init!(dir, storage);
+
+    storage.start_tx(1).unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
+    assert!(storage.commit(1).unwrap());
+
+    storage.start_tx(2).unwrap();
+    storage.updir(2, &hashid(1), &hashid(2), 5, b" world").unwrap();
+    assert!(!storage.commit(2).unwrap());
+
+    assert_eq!(b"hello", &storage.getdir(&hashid(1)).unwrap().unwrap().1[..]);
+}
+
+#[test]
 fn updir_overwrites_stray_trailing_data() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
-    storage.updir(2, &hashid(1), &hashid(2), 5, b" there").unwrap();
-    storage.mkdir(2, &hashid(1), &hashid(2), b"blah").unwrap();
+    storage.updir(2, &hashid(1), &hashid(3), 5, b" there").unwrap();
+    storage.mkdir(2, &hashid(1), &hashid(2), &hashid(3),
+                  b"blah").unwrap();
     assert!(!storage.commit(2).unwrap());
 
     storage.start_tx(3).unwrap();
-    storage.updir(3, &hashid(1), &hashid(2), 5, b" world").unwrap();
+    storage.updir(3, &hashid(1), &hashid(3), 5, b" world").unwrap();
     assert!(storage.commit(3).unwrap());
 
     assert_eq!(b"hello world",
@@ -194,11 +238,12 @@ fn rmdir_fails_if_length_mismatch() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
-    storage.rmdir(2, &hashid(1), &hashid(2), 4).unwrap();
+    storage.rmdir(2, &hashid(1), &hashid(3), 4).unwrap();
     assert!(!storage.commit(2).unwrap());
 }
 
@@ -207,7 +252,8 @@ fn rmdir_fails_if_version_mismatch() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
@@ -216,15 +262,30 @@ fn rmdir_fails_if_version_mismatch() {
 }
 
 #[test]
-fn rmdir_visible_after_commit_but_not_before() {
+fn rmdir_fails_if_version_normal_instead_of_secret() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
     storage.rmdir(2, &hashid(1), &hashid(2), 5).unwrap();
+    assert!(!storage.commit(2).unwrap());
+}
+
+#[test]
+fn rmdir_visible_after_commit_but_not_before() {
+    init!(dir, storage);
+
+    storage.start_tx(1).unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
+    assert!(storage.commit(1).unwrap());
+
+    storage.start_tx(2).unwrap();
+    storage.rmdir(2, &hashid(1), &hashid(3), 5).unwrap();
 
     assert_eq!(b"hello", &storage.getdir(&hashid(1)).unwrap().unwrap().1[..]);
     assert!(storage.commit(2).unwrap());
@@ -236,16 +297,18 @@ fn rmdir_then_mkdir_in_same_commit_permitted() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"hello").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(3),
+                  b"hello").unwrap();
     assert!(storage.commit(1).unwrap());
 
     storage.start_tx(2).unwrap();
-    storage.rmdir(2, &hashid(1), &hashid(2), 5).unwrap();
-    storage.mkdir(2, &hashid(1), &hashid(3), b"new").unwrap();
+    storage.rmdir(2, &hashid(1), &hashid(3), 5).unwrap();
+    storage.mkdir(2, &hashid(1), &hashid(4), &hashid(5),
+                  b"new").unwrap();
     assert!(storage.commit(2).unwrap());
 
     let (ver, data) = storage.getdir(&hashid(1)).unwrap().unwrap();
-    assert_eq!(hashid(3), ver);
+    assert_eq!(hashid(4), ver);
     assert_eq!(b"new", &data[..]);
 }
 
@@ -255,9 +318,12 @@ fn check_dirty_dir_handles_nx_length_mismatch_and_ver_mismatch() {
     init!(dir, storage);
 
     storage.start_tx(1).unwrap();
-    storage.mkdir(1, &hashid(1), &hashid(2), b"unchanged").unwrap();
-    storage.mkdir(1, &hashid(3), &hashid(4), b"length mismatch").unwrap();
-    storage.mkdir(1, &hashid(5), &hashid(6), b"version mismatch").unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(0),
+                  b"unchanged").unwrap();
+    storage.mkdir(1, &hashid(3), &hashid(4), &hashid(0),
+                  b"length mismatch").unwrap();
+    storage.mkdir(1, &hashid(5), &hashid(6), &hashid(0),
+                  b"version mismatch").unwrap();
     storage.commit(1).unwrap();
 
     storage.check_dir_dirty(&hashid(1), &hashid(2), 9).unwrap(); // clean

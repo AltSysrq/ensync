@@ -445,7 +445,9 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                         return Err(ErrorKind::DirNotEmpty.into());
                     }
                     self.storage.rmdir(tx, &child.id,
-                                       &child_content.cipher_version,
+                                       &secret_dir_ver(
+                                           &child_content.cipher_version,
+                                           child.write_key()?),
                                        child_content.length)?;
                 }
                 self.add_entry(tx, content, name, v0::Entry::Deleted {
@@ -687,6 +689,11 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
     /// Returns the internal key to be used for directory operations.
     fn dir_key(&self) -> Result<&InternalKey> {
         self.key.key(&self.config.read_group)
+    }
+
+    /// Returns the internal key to be used for write protection.
+    fn write_key(&self) -> Result<&InternalKey> {
+        self.key.key(&self.config.write_group)
     }
 
     fn refresh_if_needed(&self, content: &mut DirContent) -> Result<()> {
@@ -936,8 +943,8 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
     fn rewrite(&self, tx: Tx, content: &mut DirContent, rmdir: bool)
                -> Result<()> {
         if rmdir {
-            self.storage.rmdir(tx, &self.id,
-                               &content.cipher_version, content.length)?;
+            self.storage.rmdir(tx, &self.id, &secret_dir_ver(
+                &content.cipher_version, self.write_key()?), content.length)?;
         }
 
         content.version += 1;
@@ -967,7 +974,8 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         content.iv = dir_append_iv(&ciphertext);
 
         self.storage.mkdir(tx, &self.id, &content.cipher_version,
-                           &ciphertext)?;
+                           &secret_dir_ver(&content.cipher_version,
+                                           self.write_key()?), &ciphertext)?;
         Ok(())
     }
 
@@ -982,7 +990,9 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         let mut ciphertext = Vec::<u8>::new();
         encrypt_append_dir(&mut ciphertext, &cleartext[..],
                            &content.session_key, &content.iv)?;
-        self.storage.updir(tx, &self.id, &content.cipher_version,
+        self.storage.updir(tx, &self.id,
+                           &secret_dir_ver(&content.cipher_version,
+                                           self.write_key()?),
                            content.length, &ciphertext)?;
 
         content.length += ciphertext.len() as u32;

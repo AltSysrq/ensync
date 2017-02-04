@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS "lock" (
 CREATE TABLE IF NOT EXISTS "dirs" (
   "id"          BLOB    NOT NULL        PRIMARY KEY,
   "ver"         BLOB    NOT NULL,
+  "sver"        BLOB    NOT NULL,
   "length"      INTEGER NOT NULL
 ) WITHOUT ROWID;
 
