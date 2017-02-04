@@ -208,11 +208,11 @@ error_chain! {
         // Errors related to setup/usage
         KdfListAlreadyExists {
             description("Key store already initialised \
-                         (use `add-key` if you want to add more keys)")
+                         (use `key add` if you want to add more keys)")
         }
         KdfListNotExists {
             description("Key store not yet initialised \
-                         (use `init` to do that)")
+                         (use `key init` to do that)")
         }
         KeyNotInKdfList(name: String) {
             description("Key not found in key store")
@@ -226,7 +226,7 @@ error_chain! {
                          it cannot be removed")
         }
         AnonChangeKeyButMultipleKdfEntries {
-            description("`change-key` requires the name of the key \
+            description("`key change` requires the name of the key \
                          to change because there are multiple keys in \
                          the key store")
         }
@@ -239,7 +239,7 @@ error_chain! {
         KeyNameAlreadyInUse(name: String) {
             description("Key name already in use")
             display("Key name '{}' already in use \
-                     (use `change-key` if you want to edit it)", name)
+                     (use `key change` if you want to edit it)", name)
         }
     }
 }

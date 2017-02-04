@@ -180,58 +180,59 @@ fn main_impl() -> Result<()> {
                          .possible_values(&["auto", "always", "never"])
                          .help("Control whether the progress spinner \
                                 is shown")))
-        .subcommand(SubCommand::with_name("init-keys")
-                    .about("Initialise the key store")
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("key-name")
-                         .help("Name for the first key in the key store")
-                         .required(false))
-                    .after_help("This command is used to initialise the key \
-                                 store in the server. It generates a new \
-                                 internal key set and associates one user key with \
-                                 them, corresponding to the passphrase defined \
-                                 in the configuration. You should specify the \
-                                 key name if you plan on using multiple keys. \
-                                 This cannot be used after the key store has \
-                                 been initialised; see `add-key` for that \
-                                 instead."))
-        .subcommand(SubCommand::with_name("add-key")
-                    .about("Add a new key to the key store")
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(&old_key_arg)
-                    .arg(&new_key_arg)
-                    .arg(Arg::with_name("key-name")
-                         .required(true)
-                         .help("The name of the key to add")))
-        .subcommand(SubCommand::with_name("change-key")
-                    .about("Change a key in the key store")
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(&old_key_arg)
-                    .arg(&new_key_arg)
-                    .arg(Arg::with_name("key-name")
-                         .required(false)
-                         .help("The name of the key to edit"))
-                    .arg(Arg::with_name("force")
-                         .long("force")
-                         .short("f")
-                         .takes_value(false)
-                         .required(false)
-                         .help("Change <key-name> even if the old passphrase \
-                                does not correspond to that key")))
-        .subcommand(SubCommand::with_name("del-key")
-                    .about("Delete a key from the key store")
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("key-name")
-                         .required(true)
-                         .help("The name of the key to delete")))
-        .subcommand(SubCommand::with_name("list-keys")
-                    .about("List the keys in the key store")
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg))
+        .subcommand(
+            SubCommand::with_name("key")
+            .about("Perform key management operations")
+            .subcommand(SubCommand::with_name("init")
+                        .about("Initialise the key store")
+                        .setting(AppSettings::DontCollapseArgsInUsage)
+                        .arg(&config_arg)
+                        .arg(Arg::with_name("key-name")
+                             .help("Name for the first key in the key store")
+                             .required(false))
+                        .after_help("\
+This command is used to initialise the key store in the server. It generates
+a new internal key set and associates one user key withthem, corresponding
+to the passphrase defined in the configuration. You should specify thekey
+name if you plan on using multiple keys.This cannot be used after the key
+store hasbeen initialised; see `key add` for that instead."))
+            .subcommand(SubCommand::with_name("add")
+                        .about("Add a new key to the key store")
+                        .setting(AppSettings::DontCollapseArgsInUsage)
+                        .arg(&config_arg)
+                        .arg(&old_key_arg)
+                        .arg(&new_key_arg)
+                        .arg(Arg::with_name("key-name")
+                             .required(true)
+                             .help("The name of the key to add")))
+            .subcommand(SubCommand::with_name("change")
+                        .about("Change a key in the key store")
+                        .setting(AppSettings::DontCollapseArgsInUsage)
+                        .arg(&config_arg)
+                        .arg(&old_key_arg)
+                        .arg(&new_key_arg)
+                        .arg(Arg::with_name("key-name")
+                             .required(false)
+                             .help("The name of the key to edit"))
+                        .arg(Arg::with_name("force")
+                             .long("force")
+                             .short("f")
+                             .takes_value(false)
+                             .required(false)
+                             .help("Change <key-name> even if the old \
+                                    passphrase does not correspond to \
+                                    that key")))
+            .subcommand(SubCommand::with_name("del")
+                        .about("Delete a key from the key store")
+                        .setting(AppSettings::DontCollapseArgsInUsage)
+                        .arg(&config_arg)
+                        .arg(Arg::with_name("key-name")
+                             .required(true)
+                             .help("The name of the key to delete")))
+            .subcommand(SubCommand::with_name("list")
+                        .about("List the keys in the key store")
+                        .setting(AppSettings::DontCollapseArgsInUsage)
+                        .arg(&config_arg)))
         .subcommand(SubCommand::with_name("ls")
                     .alias("dir")
                     .about("List directory contents on server")
@@ -405,30 +406,35 @@ fn main_impl() -> Result<()> {
 
     if let Some(matches) = matches.subcommand_matches("server") {
         cli::cmd_server::run(matches.value_of("path").unwrap())
-    } else if let Some(matches) = matches.subcommand_matches("init-keys") {
-        set_up!(matches, config, storage);
-        cli::cmd_keymgmt::init_keys(&config, &*storage,
-                                    matches.value_of("key-name"))
-    } else if let Some(matches) = matches.subcommand_matches("add-key") {
-        set_up!(matches, config, storage);
-        let old = passphrase_or_config!(matches, config, "old-key");
-        let new = passphrase_or_prompt!(matches, config, "new-key");
-        cli::cmd_keymgmt::add_key(&*storage, &old, &new,
-                                  matches.value_of("key-name").unwrap())
-    } else if let Some(matches) = matches.subcommand_matches("list-keys") {
-        set_up!(matches, config, storage);
-        cli::cmd_keymgmt::list_keys(&*storage)
-    } else if let Some(matches) = matches.subcommand_matches("change-key") {
-        set_up!(matches, config, storage);
-        let old = passphrase_or_config!(matches, config, "old-key");
-        let new = passphrase_or_prompt!(matches, config, "new-key");
-        cli::cmd_keymgmt::change_key(&config, &*storage, &old, &new,
-                                     matches.value_of("key-name"),
-                                     matches.is_present("force"))
-    } else if let Some(matches) = matches.subcommand_matches("del-key") {
-        set_up!(matches, config, storage);
-        cli::cmd_keymgmt::del_key(
-            &*storage, matches.value_of("key-name").unwrap())
+    } else if let Some(matches) = matches.subcommand_matches("key") {
+        if let Some(matches) = matches.subcommand_matches("init") {
+            set_up!(matches, config, storage);
+            cli::cmd_keymgmt::init_keys(&config, &*storage,
+                                        matches.value_of("key-name"))
+        } else if let Some(matches) = matches.subcommand_matches("add") {
+            set_up!(matches, config, storage);
+            let old = passphrase_or_config!(matches, config, "old-key");
+            let new = passphrase_or_prompt!(matches, config, "new-key");
+            cli::cmd_keymgmt::add_key(&*storage, &old, &new,
+                                      matches.value_of("key-name").unwrap())
+        } else if let Some(matches) = matches.subcommand_matches("list") {
+            set_up!(matches, config, storage);
+            cli::cmd_keymgmt::list_keys(&*storage)
+        } else if let Some(matches) = matches.subcommand_matches("change") {
+            set_up!(matches, config, storage);
+            let old = passphrase_or_config!(matches, config, "old-key");
+            let new = passphrase_or_prompt!(matches, config, "new-key");
+            cli::cmd_keymgmt::change_key(&config, &*storage, &old, &new,
+                                         matches.value_of("key-name"),
+                                         matches.is_present("force"))
+        } else if let Some(matches) = matches.subcommand_matches("del") {
+            set_up!(matches, config, storage);
+            cli::cmd_keymgmt::del_key(
+                &*storage, matches.value_of("key-name").unwrap())
+        } else {
+            panic!("Unhandled `key` subcommand: {}",
+                   matches.subcommand_name().unwrap());
+        }
     } else if let Some(matches) = matches.subcommand_matches("sync") {
         set_up!(matches, config, storage);
 
