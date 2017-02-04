@@ -20,7 +20,7 @@ rust-crypto = "0.2.36"
 sqlite = "0.23.2"
 tempfile = "2.1.4"
 tiny-keccak = "1.1.1"
-toml = "0.2.1"
+toml = { version = "0.2.1", default-features = false }
 
 [dependencies.clap]
 version = "2.20"
