@@ -551,7 +551,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                     xfer.reset()?;
                     let mut blocks = Vec::new();
                     let blocklist = stream_to_blocks(
-                        &mut xfer, self.block_size, self.key.hmac_secret(),
+                        &mut xfer, self.block_size, self.key.obj_hmac_secret()?,
                         |blockid, block_data| {
                             let linkid = rand_hashid();
                             blocks.push((*blockid, linkid));

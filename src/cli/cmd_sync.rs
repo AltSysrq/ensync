@@ -663,7 +663,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
                    client_private_dir.display()))?;
     let client_replica = PosixReplica::new(
         config.client_root.clone(), client_private_dir,
-        key_chain.hmac_secret(), config.block_size as usize)
+        key_chain.obj_hmac_secret()?, config.block_size as usize)
         .chain_err(|| "Failed to set up client replica")?;
 
     let ancestor_replica = AncestorReplica::open(

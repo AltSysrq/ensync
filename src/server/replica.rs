@@ -462,7 +462,7 @@ mod test {
         let mut actual_data = Vec::<u8>::new();
         block_xfer::blocks_to_stream(
             &xfer.blocks, &mut actual_data,
-            key_chain.hmac_secret(),
+            key_chain.obj_hmac_secret().unwrap(),
             |h| xfer.fetch.fetch(h)).unwrap();
 
         assert_eq!(file_data, actual_data);
@@ -635,7 +635,7 @@ mod test {
         let mut actual_data = Vec::<u8>::new();
         block_xfer::blocks_to_stream(
             &xfer.blocks, &mut actual_data,
-            key_chain.hmac_secret(),
+            key_chain.obj_hmac_secret().unwrap(),
             |h| xfer.fetch.fetch(h)).unwrap();
 
         assert_eq!(file_data_b, actual_data);
@@ -971,7 +971,7 @@ mod test {
                 let mut actual_data: Vec<u8> = Vec::new();
                 assert!(block_xfer::blocks_to_stream(
                     &xfer.blocks, &mut actual_data,
-                    key_chain.hmac_secret(),
+                    key_chain.obj_hmac_secret().unwrap(),
                     |h| xfer.fetch.fetch(h)).$which());
             } }
         }

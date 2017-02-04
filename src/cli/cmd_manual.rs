@@ -201,7 +201,8 @@ pub fn cat<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
         block_xfer::blocks_to_stream(
             &xfer.blocks,
             stdout_handle.lock(),
-            replica.key_chain().hmac_secret(),
+            replica.key_chain().obj_hmac_secret().chain_err(
+                || format!("Error transferring '{}'", path.display()))?,
             |id| xfer.fetch.fetch(id))
             .chain_err(|| format!("Error transferring '{}'", path.display()))?;
     }
@@ -278,7 +279,9 @@ pub fn get<S : Storage + ?Sized, P1 : AsRef<Path>, P2 : AsRef<Path>>
                     block_xfer::blocks_to_stream(
                         &xfer.blocks,
                         &mut tmpfile,
-                        replica.key_chain().hmac_secret(),
+                        replica.key_chain().obj_hmac_secret().chain_err(
+                            || format!("Failed to start transfer of '{}'",
+                                       sub_src.display()))?,
                         |id| xfer.fetch.fetch(id))
                         .chain_err(|| format!("Error transferring '{}'",
                                               sub_src.display()))?;
