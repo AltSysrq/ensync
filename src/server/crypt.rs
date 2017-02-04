@@ -120,15 +120,15 @@
 //! group is used by the server to restrict writes to the directory.
 //!
 //! Groups are switched when entering a directory containing specific syntax in
-//! its *name* (TODO define). This may seem like a hacky choice, since it's
-//! loud, sticky, and infectious. This is in fact exactly why it is done this
-//! way, rather than as some kind of metadata. It means, for example, that an
-//! attacker with sufficient access to edit a parent directory but insufficient
-//! to read a child cannot replace the child directory with one without
-//! protection, as the only way to do so would be to change its name, which a
-//! potential victim would handle at worst by deleting its files and at best by
-//! simply recreating the child with the same name (and thus the same
-//! protection).
+//! its *name* (as defined by `dir_config.rs`). This may seem like a hacky
+//! choice, since it's loud, sticky, and infectious. This is in fact exactly
+//! why it is done this way, rather than as some kind of metadata. It means,
+//! for example, that an attacker with sufficient access to edit a parent
+//! directory but insufficient to read a child cannot replace the child
+//! directory with one without protection, as the only way to do so would be to
+//! change its name, which a potential victim would handle at worst by deleting
+//! its files and at best by simply recreating the child with the same name
+//! (and thus the same protection).
 //!
 //! # Encrypting objects
 //!

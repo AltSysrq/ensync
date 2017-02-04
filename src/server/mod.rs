@@ -21,6 +21,7 @@ mod local_storage;
 pub mod rpc;
 mod crypt;
 mod dir;
+mod dir_config;
 mod replica;
 mod transfer;
 pub mod keymgmt;

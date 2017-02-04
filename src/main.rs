@@ -34,6 +34,7 @@ extern crate toml;
 #[macro_use] extern crate clap;
 #[macro_use] extern crate fourleaf;
 #[macro_use] extern crate error_chain;
+#[macro_use] extern crate lazy_static;
 #[macro_use] extern crate quick_error;
 
 #[cfg(test)] extern crate quickcheck;

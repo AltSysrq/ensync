@@ -204,6 +204,15 @@ error_chain! {
         ReconciliationStopped {
             description("Reconciliation stopped")
         }
+        BadServerDirConfig(config: String) {
+            description("Invalid server directory configuration")
+            display("Invalid server directory configuration '{}'", config)
+        }
+        BadServerDirConfigKey(config: String, key: String) {
+            description("Invalid server directory configuration key")
+            display("Invalid server directory configuration key '{}' \
+                     in '{}'", key, config)
+        }
 
         // Errors related to setup/usage
         KdfListAlreadyExists {
