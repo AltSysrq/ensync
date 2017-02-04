@@ -93,6 +93,7 @@ use block_xfer::*;
 use replica::ReplicaDirectory;
 use sql::{SendConnection, StatementEx};
 use server::crypt::*;
+use server::dir_config::DirConfig;
 use server::storage::*;
 use server::transfer::ServerTransferOut;
 
@@ -229,6 +230,7 @@ pub struct Dir<S : Storage + ?Sized + 'static> {
     pub id: HashId,
     pub parent: Option<Arc<Dir<S>>>,
     pub path: OsString,
+    pub config: DirConfig,
 
     // Lock hierarchy: Lock may not be acquired while lock on `content` is held.
     db: Arc<Mutex<SendConnection>>,
@@ -285,6 +287,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             id: DIRID_PROOT,
             parent: None,
             path: "".into(),
+            config: DirConfig::default(),
             db: db,
             key: key,
             storage: storage,
@@ -318,6 +321,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             id: id,
             path: parent.subdir_path(name),
             db: parent.db.clone(),
+            config: parent.config.sub(&*name.to_string_lossy())?,
             key: parent.key.clone(),
             storage: parent.storage.clone(),
             tx_ctr: parent.tx_ctr.clone(),
@@ -337,6 +341,11 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             id: rand_hashid(),
             path: parent.subdir_path(name),
             db: parent.db.clone(),
+            // If the name is not valid, just use the parent configuration. It
+            // ultimately doesn't matter because `materialise()` will check
+            // this again and fail if the configuration is invalid.
+            config: parent.config.sub(&*name.to_string_lossy()).unwrap_or_else(
+                |_| parent.config.clone()),
             key: parent.key.clone(),
             storage: parent.storage.clone(),
             tx_ctr: parent.tx_ctr.clone(),
@@ -416,6 +425,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                     id: child_id.unwrap(),
                     parent: None, // Not relevant
                     path: self.subdir_path(&name),
+                    config: self.config.sub(&*name.to_string_lossy())?,
                     db: self.db.clone(),
                     key: self.key.clone(),
                     storage: self.storage.clone(),
@@ -536,7 +546,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                     let id = if let Some(subdir_id) = subdir_id {
                         subdir_id
                     } else {
-                        self.create_directory(tx)?
+                        self.create_directory(tx, name)?
                     };
                     v0::Entry::Directory { mode: mode, id: id, unknown:
                                            UnknownFields::default() }
@@ -997,11 +1007,12 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         prev_hmac.copy_from_slice(&dst[start .. start + UNKNOWN_HASH.len()]);
     }
 
-    fn create_directory(&self, tx: Tx) -> Result<HashId> {
+    fn create_directory(&self, tx: Tx, name: &OsStr) -> Result<HashId> {
         let child = Dir {
             id: rand_hashid(),
             parent: None, // Not needed
             path: OsString::new(), // Not needed
+            config: self.config.sub(&*name.to_string_lossy())?,
             db: self.db.clone(),
             key: self.key.clone(),
             storage: self.storage.clone(),
@@ -1020,6 +1031,10 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
     fn materialise(&self, content: &mut DirContent) -> Result<()> {
         if let Some((name, mode)) = content.synth.clone() {
             let parent = self.parent.as_ref().expect("Synthetic root dir");
+            // Make sure that the configuration is valid, since `synthdir` has
+            // no opportunity to fail.
+            parent.config.sub(&*name.to_string_lossy())?;
+
             let mut parent_content = parent.content.lock().unwrap();
             parent.materialise(&mut parent_content)?;
             parent.do_tx(&mut parent_content, |tx, parent_content| {

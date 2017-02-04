@@ -950,6 +950,17 @@ mod test {
     }
 
     #[test]
+    fn synthdir_with_invalid_config_cannot_materialise() {
+        init!(replica, root);
+
+        let mut subone = replica.synthdir(
+            &mut root, &oss("one.ensync[invalid]"), 0o700);
+        assert!(replica.create(&mut subone,
+                               File(&oss("dir"), &FileData::Directory(0o700)),
+                               None).is_err());
+    }
+
+    #[test]
     fn cleanup_removes_orphaned_blobs() {
         init!(replica, root, key_chain);
 
