@@ -145,16 +145,26 @@
 //! The solution is to derive the from the object content and the `everyone`
 //! internal key. Specifically:
 //!
-//! - Take the HMAC of the object content with the `everyone` HMAC secret
-//! concatenated with itself. The first 16 bytes are the AES key, the second 16
-//! bytes are the AES IV.
+//! - Object HMACs always use the HMAC secret of the `everyone` internal key.
+//!
+//! - Use the first 16 bytes of the object id as the AES key, and the second 16
+//! bytes as the IV.
 //!
 //! - Encrypt the object data in CBC mode using the that key and IV.
 //!
+//! - Pass object ids through SHA-3 before passing them to the server so that
+//! the server cannot derive the encryption keys.
+//!
 //! For writers, this system is easy. For readers, there's the conundrum that
 //! they don't know the object content, and so cannot determine the key to
-//! decrypt the content. However, the key HMAC can be stored directly in the
-//! directory entry, thus granting access to anyone who can read the directory.
+//! decrypt the content. However, the HMAC is actually stored in the directory
+//! already as the client-side object id.
+//!
+//! Note that this does mean that the client ends up with a bunch of encryption
+//! keys strewn about in cleartext. This is not too much of an issue, though,
+//! as the cleartext of the objects they protect is also available on the same
+//! file system, and the latter are more likely to be accessible to attackers
+//! than the contents of the ensync private directory.
 //!
 //! Objects are padded to the block size with PKCS.
 //!
@@ -353,13 +363,14 @@ impl KeyChain {
             || ErrorKind::KeyNotInGroup(name.to_owned()).into())
     }
 
+    /// Returns the HMAC secret to use for object hashing.
+    pub fn obj_hmac_secret(&self) -> Result<&[u8]> {
+        self.key(GROUP_EVERYONE).map(InternalKey::hmac_secret)
+    }
+
     // TODO Remove these
     pub fn dir_key(&self) -> &[u8] {
         self.keys[GROUP_EVERYONE].dir_key()
-    }
-
-    pub fn obj_key(&self) -> &[u8] {
-        self.keys[GROUP_EVERYONE].obj_key()
     }
 
     pub fn hmac_secret(&self) -> &[u8] {
@@ -380,11 +391,6 @@ impl InternalKey {
 
     pub fn dir_key(&self) -> &[u8] {
         &self.0[0..BLKSZ]
-    }
-
-    // TODO Remove
-    pub fn obj_key(&self) -> &[u8] {
-        &self.0[BLKSZ..BLKSZ*2]
     }
 
     pub fn hmac_secret(&self) -> &[u8] {
@@ -651,12 +657,14 @@ fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
     Ok(split_key_and_iv(&key_and_iv))
 }
 
-/// Encrypts the object data in `src` using the key from `key`, writing the
-/// encrypted result to `dst`.
-pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R,
-                                        key: &KeyChain)
+/// Encrypts the object data in `src` using the key from the object's id,
+/// writing the encrypted result to `dst`.
+pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R, id: &HashId)
                                         -> Result<()> {
-    let (key, iv) = try!(write_cbc_prefix(&mut dst, key.obj_key()));
+    let mut key = [0u8;BLKSZ];
+    let mut iv = [0u8;BLKSZ];
+    key.copy_from_slice(&id[..BLKSZ]);
+    iv.copy_from_slice(&id[BLKSZ..]);
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
@@ -665,15 +673,24 @@ pub fn encrypt_obj<W : Write, R : Read>(mut dst: W, src: R,
 }
 
 /// Reverses `encrypt_obj()`.
-pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R,
-                                        key: &KeyChain)
+pub fn decrypt_obj<W : Write, R : Read>(dst: W, mut src: R, id: &HashId)
                                         -> Result<()> {
-    let (key, iv) = try!(read_cbc_prefix(&mut src, key.obj_key()));
+    let mut key = [0u8;BLKSZ];
+    let mut iv = [0u8;BLKSZ];
+    key.copy_from_slice(&id[..BLKSZ]);
+    iv.copy_from_slice(&id[BLKSZ..]);
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
     try!(crypt_stream(dst, src, &mut cryptor, false));
     Ok(())
+}
+
+/// Transforms the given object id to be safe to send to the server.
+///
+/// This is not reversible.
+pub fn xform_obj_id(id: &HashId) -> HashId {
+    sha3(id)
 }
 
 /// Encrypt a whole directory file.
@@ -824,12 +841,13 @@ mod fast_test {
 
     fn test_crypt_obj(data: &[u8]) {
         let keychain = KeyChain::generate_new();
+        let id = hmac(data, keychain.obj_hmac_secret().unwrap());
 
         let mut ciphertext = Vec::new();
-        encrypt_obj(&mut ciphertext, data, &keychain).unwrap();
+        encrypt_obj(&mut ciphertext, data, &id).unwrap();
 
         let mut cleartext = Vec::new();
-        decrypt_obj(&mut cleartext, &ciphertext[..], &keychain).unwrap();
+        decrypt_obj(&mut cleartext, &ciphertext[..], &id).unwrap();
 
         assert_eq!(data, &cleartext[..]);
     }

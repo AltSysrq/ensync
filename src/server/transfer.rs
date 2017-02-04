@@ -24,30 +24,28 @@ use flate2;
 use block_xfer::BlockFetch;
 use defs::HashId;
 use errors::*;
-use server::crypt::{KeyChain, decrypt_obj};
+use server::crypt::{decrypt_obj, xform_obj_id};
 use server::storage::Storage;
 
 pub struct ServerTransferOut<S : Storage + ?Sized> {
     storage: Arc<S>,
-    key: Arc<KeyChain>,
 }
 
 impl<S : Storage + ?Sized> ServerTransferOut<S> {
-    pub fn new(storage: Arc<S>, key: Arc<KeyChain>) -> Self {
+    pub fn new(storage: Arc<S>) -> Self {
         ServerTransferOut {
             storage: storage,
-            key: key,
         }
     }
 }
 
 impl<S : Storage + ?Sized> BlockFetch for ServerTransferOut<S> {
     fn fetch(&self, block: &HashId) -> Result<Box<io::Read>> {
-        let ciphertext = self.storage.getobj(block)?
+        let ciphertext = self.storage.getobj(&xform_obj_id(block))?
             .ok_or(ErrorKind::ServerContentDeleted)?;
         let mut cleartext = Vec::<u8>::with_capacity(
             ciphertext.len() * 3 / 2);
-        decrypt_obj(&mut cleartext, &ciphertext[..], &self.key)?;
+        decrypt_obj(&mut cleartext, &ciphertext[..], block)?;
 
         Ok(Box::new(flate2::read::GzDecoder::new(
             io::Cursor::new(cleartext))?))

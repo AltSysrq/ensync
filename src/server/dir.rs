@@ -504,7 +504,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                     // Prepare to replace this file by unlinking its
                     // constituents
                     for &(ref id, ref linkid) in blocks {
-                        self.storage.unlinkobj(tx, id, linkid)?;
+                        self.storage.unlinkobj(tx, &xform_obj_id(id), linkid)?;
                     }
 
                     Some(FileData::Regular(mode, size, time, hmac))
@@ -556,9 +556,11 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                             let linkid = rand_hashid();
                             blocks.push((*blockid, linkid));
 
-                            if !self.storage.linkobj(tx, &blockid, &linkid)? {
-                                self.upload_object(tx, &blockid, &linkid,
-                                                   block_data)?;
+                            if !self.storage.linkobj(
+                                tx, &xform_obj_id(&blockid), &linkid)?
+                            {
+                                self.upload_object(
+                                    tx, &blockid, &linkid, block_data)?;
                             }
                             Ok(())
                         })?;
@@ -586,9 +588,9 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         let mut ciphertext = Vec::<u8>::with_capacity(block_data.len() + 256);
         let compressor = flate2::read::GzEncoder::new(
             block_data, self.compression);
-        encrypt_obj(&mut ciphertext, compressor, &self.key)?;
+        encrypt_obj(&mut ciphertext, compressor, blockid)?;
         self.storage.putobj(
-            tx, &blockid, &linkid, &ciphertext[..])?;
+            tx, &xform_obj_id(blockid), &linkid, &ciphertext[..])?;
         Ok(())
     }
 
@@ -633,7 +635,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
                         },
                         block_size: block_size as usize,
                         fetch: Arc::new(ServerTransferOut::new(
-                            self.storage.clone(), self.key.clone())),
+                            self.storage.clone())),
                     })
                 } else {
                     Err(ErrorKind::ServerContentUpdated.into())
