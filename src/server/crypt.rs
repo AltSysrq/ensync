@@ -217,7 +217,7 @@ use rust_crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer,
                           RefReadBuffer, RefWriteBuffer};
 use rust_crypto::symmetriccipher::{Decryptor, Encryptor, SymmetricCipherError};
 
-use defs::HashId;
+use defs::{HashId, UNKNOWN_HASH};
 use errors::*;
 
 const SCRYPT_18_8_1: &'static str = "scrypt-18-8-1";
@@ -316,10 +316,12 @@ pub fn rand_hashid() -> HashId {
 }
 
 /// A set of internal keys derived from a passphrase.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyChain {
     /// Map from group names to internal keys associated with this key chain.
     pub keys: BTreeMap<String, InternalKey>,
+    /// The intermediate key derived from the passphrase.
+    pub derived: InternalKey,
 }
 
 impl KeyChain {
@@ -332,7 +334,23 @@ impl KeyChain {
 
         KeyChain {
             keys: keys,
+            derived: InternalKey(UNKNOWN_HASH),
         }
+    }
+
+    /// Returns a `KeyChain` with no keys and an unknown derived key.
+    pub fn empty() -> Self {
+        KeyChain {
+            keys: BTreeMap::new(),
+            derived: InternalKey(UNKNOWN_HASH),
+        }
+    }
+
+    /// Returns the internal key with the given name, or an error if not
+    /// associated to this key chain.
+    pub fn key(&self, name: &str) -> Result<&InternalKey> {
+        self.keys.get(name).ok_or_else(
+            || ErrorKind::KeyNotInGroup(name.to_owned()).into())
     }
 
     // TODO Remove these
@@ -349,7 +367,7 @@ impl KeyChain {
     }
 }
 
-#[derive(PartialEq,Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InternalKey(HashId);
 
 impl InternalKey {
@@ -430,11 +448,12 @@ fn hixor(a: &HashId, b: &HashId) -> HashId {
 /// Creates a new key entry keyed off of the given passphrase which can be used
 /// to derive the internal keys.
 ///
-/// The new entry will have the same groups as the key chain.
+/// The new entry will have the same groups as the key chain. The chain will be
+/// updated to hold the intermediate key derived from `passphrase`.
 ///
 /// The caller must provide the logic for determining the various date-time
 /// fields itself.
-pub fn create_key(passphrase: &[u8], chain: &KeyChain,
+pub fn create_key(passphrase: &[u8], chain: &mut KeyChain,
                   created: DateTime<UTC>,
                   updated: Option<DateTime<UTC>>,
                   used: Option<DateTime<UTC>>)
@@ -442,23 +461,30 @@ pub fn create_key(passphrase: &[u8], chain: &KeyChain,
     let mut salt = HashId::default();
     rand(&mut salt);
     let derived = scrypt_18_8_1(passphrase, &salt);
+    chain.derived = InternalKey(derived);
 
-    let mut groups = BTreeMap::new();
-    for (name, internal_key) in &chain.keys {
-        groups.insert(name.to_owned(),
-                      hixor(&hmac(name.as_bytes(), &derived),
-                            &internal_key.0));
-    }
-
-    KdfEntry {
+    let mut entry = KdfEntry {
         created: created,
         updated: updated,
         used: used,
         algorithm: SCRYPT_18_8_1.to_owned(),
         salt: salt,
         hash: sha3(&derived),
-        groups: groups,
+        groups: BTreeMap::new(),
         unknown: UnknownFields::default(),
+    };
+    reassoc_keys(&mut entry, chain);
+    entry
+}
+
+/// Clear the groups on `entry`, then repopulate to match the internal keys on
+/// `chain`.
+pub fn reassoc_keys(entry: &mut KdfEntry, chain: &KeyChain) {
+    entry.groups.clear();
+    for (name, internal_key) in &chain.keys {
+        entry.groups.insert(name.to_owned(),
+                            hixor(&hmac(name.as_bytes(), &chain.derived.0),
+                                  &internal_key.0));
     }
 }
 
@@ -478,7 +504,8 @@ pub fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
             }
 
             Some(KeyChain {
-                keys: keys
+                keys: keys,
+                derived: InternalKey(derived),
             })
         } else {
             None
@@ -771,17 +798,19 @@ mod test {
 
     #[test]
     fn generate_and_derive_keys() {
-        fn ck(passphrase: &[u8], keychain: &KeyChain) -> KdfEntry {
+        fn ck(passphrase: &[u8], keychain: &mut KeyChain) -> KdfEntry {
             create_key(passphrase, keychain, UTC::now(), None, None)
         }
 
-        let keychain = KeyChain::generate_new();
+        let mut keychain = KeyChain::generate_new();
         let mut keys = BTreeMap::new();
-        keys.insert("a".to_owned(), ck(b"plugh", &keychain));
-        keys.insert("b".to_owned(), ck(b"xyzzy", &keychain));
+        keys.insert("a".to_owned(), ck(b"plugh", &mut keychain));
+        keys.insert("b".to_owned(), ck(b"xyzzy", &mut keychain));
 
-        assert_eq!(Some(&keychain), try_derive_key(b"plugh", &keys).as_ref());
-        assert_eq!(Some(&keychain), try_derive_key(b"xyzzy", &keys).as_ref());
+        assert_eq!(Some(&keychain.keys),
+                   try_derive_key(b"plugh", &keys).as_ref().map(|c| &c.keys));
+        assert_eq!(Some(&keychain.keys),
+                   try_derive_key(b"xyzzy", &keys).as_ref().map(|c| &c.keys));
         assert_eq!(None, try_derive_key(b"foo", &keys));
     }
 }

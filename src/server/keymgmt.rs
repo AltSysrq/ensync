@@ -103,14 +103,14 @@ pub fn init_keys<S : Storage + ?Sized>(
             return Err(ErrorKind::KdfListAlreadyExists.into());
         }
 
-        let key_chain = KeyChain::generate_new();
+        let mut key_chain = KeyChain::generate_new();
         let mut kdflist = KdfList {
             keys: BTreeMap::new(),
             unknown: Default::default(),
         };
         kdflist.keys.insert(
             key_name.to_owned(),
-            create_key(passphrase, &key_chain,
+            create_key(passphrase, &mut key_chain,
                        UTC::now(), None, None));
 
         put_kdflist(storage, &kdflist, tx, None)?;
@@ -126,11 +126,11 @@ pub fn add_key<S : Storage + ?Sized>(storage: &S, old_passphrase: &[u8],
                                      new_passphrase: &[u8], new_name: &str)
                                      -> Result<()> {
     edit_kdflist(storage, |kdflist| {
-        let key_chain = try_derive_key(old_passphrase, &kdflist.keys)
+        let mut key_chain = try_derive_key(old_passphrase, &kdflist.keys)
             .ok_or(ErrorKind::PassphraseNotInKdfList)?;
         if kdflist.keys.insert(
             new_name.to_owned(),
-            create_key(new_passphrase, &key_chain,
+            create_key(new_passphrase, &mut key_chain,
                        UTC::now(), None, None))
             .is_some()
         {
@@ -149,15 +149,24 @@ pub fn add_key<S : Storage + ?Sized>(storage: &S, old_passphrase: &[u8],
 ///
 /// This fails if `name` identifies the last key in the key store, since
 /// removing it would make it impossible to ever derive any internal keys
-/// again.
+/// again. It also fails if the key corresponding to `name` is the last key in
+/// any particular group.
 pub fn del_key<S : Storage + ?Sized>(storage: &S, name: &str) -> Result<()> {
     edit_kdflist(storage, |kdflist| {
-        kdflist.keys.remove(name).ok_or_else(
+        let old_entry = kdflist.keys.remove(name).ok_or_else(
             || ErrorKind::KeyNotInKdfList(name.to_owned()))?;
 
         if kdflist.keys.is_empty() {
             return Err(ErrorKind::WouldRemoveLastKdfEntry.into());
         }
+
+        old_entry.groups.keys()
+            .filter(|g| !kdflist.keys.values().any(
+                |e| e.groups.contains_key(g.as_str())))
+            .map(|g| Err(ErrorKind::WouldDisassocLastKeyFromGroup(
+                name.to_owned(), g.to_owned())))
+            .next().unwrap_or(Ok(()))?;
+
         Ok(())
     })
 }
@@ -171,6 +180,9 @@ pub fn del_key<S : Storage + ?Sized>(storage: &S, name: &str) -> Result<()> {
 /// `old_passphrase` is a valid passphrase in the key store but does not
 /// correspond to `name`. If true, `old_passphrase` does not need to correspond
 /// to `name`.
+///
+/// If the passphrase being changed is not the one being used to derive the
+/// internal keys, the latter must be in a superset of groups as the former.
 pub fn change_key<S : Storage + ?Sized>(
     storage: &S, old_passphrase: &[u8],
     new_passphrase: &[u8], name: Option<&str>,
@@ -203,8 +215,14 @@ pub fn change_key<S : Storage + ?Sized>(
             return Err(ErrorKind::PassphraseNotInKdfList.into());
         };
 
+        let mut new_chain = KeyChain::empty();
+        for group in old_entry.groups.keys() {
+            new_chain.keys.insert(group.to_owned(),
+                                  key_chain.key(group)?.clone());
+        }
+
         kdflist.keys.insert(real_name,
-                            create_key(new_passphrase, &key_chain,
+                            create_key(new_passphrase, &mut new_chain,
                                        old_entry.created,
                                        Some(UTC::now()),
                                        old_entry.used));
@@ -226,6 +244,142 @@ pub fn derive_key_chain<S : Storage + ?Sized>(storage: &S, passphrase: &[u8])
         }
 
         Err(ErrorKind::PassphraseNotInKdfList.into())
+    })
+}
+
+/// Create a group with each given name on the key with the given passphrase.
+///
+/// Fails if any group is already defined on any key.
+pub fn create_group<S : Storage + ?Sized, IT : Iterator + Clone>
+    (storage: &S, passphrase: &[u8], names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    edit_kdflist(storage, |kdflist| {
+        for name in names.clone() {
+            let name = name.as_ref();
+            for (_, e) in &kdflist.keys {
+                if e.groups.contains_key(name) {
+                    return Err(ErrorKind::GroupNameAlreadyInUse(
+                        name.to_owned()).into());
+                }
+            }
+        }
+
+        for (_, e) in &mut kdflist.keys {
+            if let Some(mut key_chain) =
+                try_derive_key_single(passphrase, e)
+            {
+                for name in names.clone() {
+                    let name = name.as_ref();
+                    key_chain.keys.insert(name.to_owned(),
+                                          InternalKey::generate_new());
+                }
+                reassoc_keys(e, &mut key_chain);
+                return Ok(());
+            }
+        }
+
+        Err(ErrorKind::PassphraseNotInKdfList.into())
+    })
+}
+
+/// Adds every group listed in `names` to the entry corresponding to
+/// `dst_passphrase`, using `src_passphrase` to derive the internal keys for
+/// this transfer.
+pub fn assoc_group<S : Storage + ?Sized, IT : Iterator + Clone>
+    (storage: &S, src_passphrase: &[u8], dst_passphrase: &[u8],
+     names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    edit_kdflist(storage, |kdflist| {
+        let src_chain = try_derive_key(src_passphrase, &kdflist.keys)
+            .ok_or_else(|| ErrorKind::PassphraseNotInKdfList)?;
+
+        for (_, e) in &mut kdflist.keys {
+            if let Some(mut key_chain) =
+                try_derive_key_single(dst_passphrase, e)
+            {
+                for name in names.clone() {
+                    let name = name.as_ref();
+                    if key_chain.keys.contains_key(name) {
+                        return Err(ErrorKind::KeyAlreadyInGroup(
+                            name.to_owned()).into());
+                    }
+                    key_chain.keys.insert(
+                        name.to_owned(), src_chain.key(name)?.clone());
+                }
+                reassoc_keys(e, &mut key_chain);
+                return Ok(());
+            }
+        }
+
+        Err(ErrorKind::PassphraseNotInKdfList.into())
+    })
+}
+
+/// Disassociates the key named by `key` from all groups named in `names`.
+///
+/// It is an error to disassociate a group not associated, to disassociate
+/// `everyone`, or to disassociate a group which has only one associated key.
+pub fn disassoc_group<S : Storage + ?Sized, IT : Iterator + Clone>
+    (storage: &S, key: &str, names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    for name in names.clone() {
+        if GROUP_EVERYONE == name.as_ref() {
+            return Err(ErrorKind::CannotDisassocGroup(
+                GROUP_EVERYONE.to_owned()).into());
+        }
+    }
+
+    edit_kdflist(storage, |kdflist| {
+        {
+            let entry = kdflist.keys.get_mut(key).ok_or_else(
+                || ErrorKind::KeyNotInKdfList(key.to_owned()))?;
+            for name in names.clone() {
+                let name = name.as_ref();
+                entry.groups.remove(name).ok_or_else(
+                    || ErrorKind::KeyNotInGroup(name.to_owned()))?;
+            }
+        }
+
+        for name in names.clone() {
+            let name = name.as_ref();
+            if !kdflist.keys.values().any(|e| e.groups.contains_key(name)) {
+                return Err(ErrorKind::WouldDisassocLastKeyFromGroup(
+                    key.to_owned(), name.to_owned()).into());
+            }
+        }
+
+        Ok(())
+    })
+}
+
+/// Removes all occurrences of each named group in the KDF list.
+///
+/// It is an error to try to destroy the `everyone` or `root` groups.
+pub fn destroy_group<S : Storage + ?Sized, IT : Iterator + Clone>
+    (storage: &S, names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    for name in names.clone() {
+        let name = name.as_ref();
+        if GROUP_EVERYONE == name || GROUP_ROOT == name {
+            return Err(ErrorKind::CannotDestroyGroup(
+                name.to_owned()).into());
+        }
+    }
+
+    edit_kdflist(storage, |kdflist| {
+        for name in names.clone() {
+            let name = name.as_ref();
+            let mut found = false;
+            for e in kdflist.keys.values_mut() {
+                found |= e.groups.remove(name).is_some();
+            }
+
+            if !found {
+                return Err(ErrorKind::GroupNotInKdfList(name.to_owned())
+                           .into());
+            }
+        }
+        Ok(())
     })
 }
 
@@ -318,7 +472,7 @@ mod test {
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
-        assert_eq!(mk, mk2);
+        assert_eq!(mk.keys, mk2.keys);
     }
 
     #[test]
@@ -348,7 +502,7 @@ mod test {
 
         change_key(&storage, b"hunter2", b"hunter3", None, false).unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
-        assert_eq!(mk, mk2);
+        assert_eq!(mk.keys, mk2.keys);
 
         assert_err!(ErrorKind::PassphraseNotInKdfList,
                     derive_key_chain(&storage, b"hunter2"));
@@ -420,7 +574,7 @@ mod test {
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter33").unwrap();
-        assert_eq!(mk, mk2);
+        assert_eq!(mk.keys, mk2.keys);
         assert_err!(ErrorKind::PassphraseNotInKdfList,
                     derive_key_chain(&storage, b"hunter3"));
     }
@@ -436,12 +590,52 @@ mod test {
     }
 
     #[test]
+    fn change_key_other_doesnt_add_groups() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
+
+        change_key(&storage, b"hunter2", b"hunter33",
+                   Some("new"), true).unwrap();
+
+        let mk2 = derive_key_chain(&storage, b"hunter33").unwrap();
+        assert_eq!(2, mk2.keys.len());
+    }
+
+    #[test]
+    fn change_key_other_fails_if_insufficient_groups() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        create_group(&storage, b"hunter3", ["group"].iter()).unwrap();
+
+        assert_err!(
+            ErrorKind::KeyNotInGroup(..),
+            change_key(&storage, b"hunter2", b"hunter33",
+                       Some("new"), true));
+    }
+
+    #[test]
     fn del_key_wont_delete_last_key() {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::WouldRemoveLastKdfEntry,
                     del_key(&storage, "original"));
+    }
+
+    #[test]
+    fn del_key_wont_delete_last_key_in_group() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        create_group(&storage, b"hunter3", ["group"].iter()).unwrap();
+        assert_err!(ErrorKind::WouldDisassocLastKeyFromGroup(..),
+                    del_key(&storage, "new"));
     }
 
     #[test]
@@ -465,7 +659,7 @@ mod test {
         del_key(&storage, "original").unwrap();
 
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
-        assert_eq!(mk, mk2);
+        assert_eq!(mk.keys, mk2.keys);
 
         assert_err!(ErrorKind::PassphraseNotInKdfList,
                     derive_key_chain(&storage, b"hunter2"));
@@ -492,5 +686,159 @@ mod test {
         assert_eq!(1, list.len());
         assert!(list[0].updated.is_some());
         assert!(list[0].used.is_some());
+    }
+
+    #[test]
+    fn create_group_already_exists() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(ErrorKind::GroupNameAlreadyInUse(_),
+                    create_group(&storage, b"hunter2", ["root"].iter()));
+    }
+
+    #[test]
+    fn create_group_success() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        create_group(&storage, b"hunter2", ["users", "private"].iter())
+            .unwrap();
+
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
+        assert_eq!(4, mk.keys.len());
+        assert!(mk.keys.contains_key("root"));
+        assert!(mk.keys.contains_key("everyone"));
+        assert!(mk.keys.contains_key("users"));
+        assert!(mk.keys.contains_key("private"));
+    }
+
+    #[test]
+    fn assoc_group_nx_group() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
+        assert_err!(
+            ErrorKind::KeyNotInGroup(..),
+            assoc_group(&storage, b"hunter2", b"hunter3",
+                        ["group"].iter()));
+    }
+
+    #[test]
+    fn assoc_group_success() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
+        create_group(&storage, b"hunter2", ["users", "shared", "private"]
+                     .iter()).unwrap();
+        assoc_group(&storage, b"hunter2", b"hunter3", ["users", "shared"]
+                    .iter()).unwrap();
+
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
+        let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
+        assert_eq!(5, mk.keys.len());
+        assert_eq!(4, mk2.keys.len());
+        assert_eq!(mk.keys["root"], mk2.keys["root"]);
+        assert_eq!(mk.keys["everyone"], mk2.keys["everyone"]);
+        assert_eq!(mk.keys["users"], mk2.keys["users"]);
+        assert_eq!(mk.keys["shared"], mk2.keys["shared"]);
+    }
+
+    #[test]
+    fn disassoc_group_refuses_everyone() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(ErrorKind::CannotDisassocGroup(_),
+                    disassoc_group(&storage, "original",
+                                   ["everyone"].iter()));
+    }
+
+    #[test]
+    fn disassoc_group_refuses_last_key() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
+        assert_err!(
+            ErrorKind::WouldDisassocLastKeyFromGroup(..),
+            disassoc_group(&storage, "original", ["group"].iter()));
+    }
+
+    #[test]
+    fn disassoc_group_nx_group() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(
+            ErrorKind::KeyNotInGroup(..),
+            disassoc_group(&storage, "original", ["group"].iter()));
+    }
+
+    #[test]
+    fn disassoc_group_nx_key() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(
+            ErrorKind::KeyNotInKdfList(..),
+            disassoc_group(&storage, "plugh", ["root"].iter()));
+    }
+
+    #[test]
+    fn disassoc_group_success() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
+        assoc_group(&storage, b"hunter2", b"hunter3", ["group"].iter())
+            .unwrap();
+        disassoc_group(&storage, "original", ["group", "root"].iter()).unwrap();
+
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
+        let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
+        assert_eq!(1, mk.keys.len());
+        assert_eq!(mk2.keys["everyone"], mk.keys["everyone"]);
+    }
+
+    #[test]
+    fn destroy_group_refuses_builtins() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(ErrorKind::CannotDestroyGroup(..),
+                    destroy_group(&storage, ["everyone"].iter()));
+        assert_err!(ErrorKind::CannotDestroyGroup(..),
+                    destroy_group(&storage, ["root"].iter()));
+    }
+
+    #[test]
+    fn destroy_group_nx() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(ErrorKind::GroupNotInKdfList(..),
+                    destroy_group(&storage, ["plugh"].iter()));
+    }
+
+    #[test]
+    fn destroy_group_success() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
+        destroy_group(&storage, ["group"].iter()).unwrap();
+
+        let mk = derive_key_chain(&storage, b"hunter2").unwrap();
+        let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
+        assert_eq!(2, mk.keys.len());
+        assert_eq!(2, mk2.keys.len());
+        assert_eq!(mk2.keys["everyone"], mk.keys["everyone"]);
+        assert_eq!(mk2.keys["root"], mk.keys["root"]);
     }
 }

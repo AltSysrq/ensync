@@ -216,7 +216,7 @@ error_chain! {
         }
         KeyNotInKdfList(name: String) {
             description("Key not found in key store")
-            display("Key {} not found in key store", name)
+            display("Key '{}' not found in key store", name)
         }
         PassphraseNotInKdfList {
             description("Passphrase not found in key store")
@@ -240,6 +240,39 @@ error_chain! {
             description("Key name already in use")
             display("Key name '{}' already in use \
                      (use `key change` if you want to edit it)", name)
+        }
+        GroupNameAlreadyInUse(name: String) {
+            description("Key group name already in use")
+            display("Key group '{}' already exists; \
+                     (use `key group assoc` to add it to another key)",
+                    name)
+        }
+        KeyNotInGroup(name: String) {
+            description("Key not in group")
+            display("Key not in group '{}'", name)
+        }
+        KeyAlreadyInGroup(name: String) {
+            description("Key already in group")
+            display("Key already in group '{}'", name)
+        }
+        CannotDisassocGroup(name: String) {
+            description("Cannot disassociate group")
+            display("Cannot disassociate group '{}'", name)
+        }
+        CannotDestroyGroup(name: String) {
+            description("Cannot destroy group")
+            display("Cannot destroy group '{}'", name)
+        }
+        WouldDisassocLastKeyFromGroup(key: String, name: String) {
+            description("This is the last key in the group")
+            display("'{}' is the last key in group '{}'; \
+                     disassociating or deleting the key would destroy \
+                     the group (use `key group destroy` if \
+                     you really want to do that)", key, name)
+        }
+        GroupNotInKdfList(name: String) {
+            description("Group not found in key store")
+            display("Group '{}' not found in key store", name)
         }
     }
 }
