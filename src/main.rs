@@ -222,7 +222,9 @@ store hasbeen initialised; see `key add` for that instead."))
                              .help("Change <key-name> even if the old \
                                     passphrase does not correspond to \
                                     that key")))
-            .subcommand(SubCommand::with_name("del")
+            .subcommand(SubCommand::with_name("rm")
+                        .alias("del")
+                        .alias("delete")
                         .about("Delete a key from the key store")
                         .setting(AppSettings::DontCollapseArgsInUsage)
                         .arg(&config_arg)
@@ -427,7 +429,7 @@ store hasbeen initialised; see `key add` for that instead."))
             cli::cmd_keymgmt::change_key(&config, &*storage, &old, &new,
                                          matches.value_of("key-name"),
                                          matches.is_present("force"))
-        } else if let Some(matches) = matches.subcommand_matches("del") {
+        } else if let Some(matches) = matches.subcommand_matches("rm") {
             set_up!(matches, config, storage);
             cli::cmd_keymgmt::del_key(
                 &*storage, matches.value_of("key-name").unwrap())
