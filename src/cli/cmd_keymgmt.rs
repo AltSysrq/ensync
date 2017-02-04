@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+use std::io::{self, Write};
+
 use chrono::{DateTime, UTC};
 
 use errors::*;
@@ -80,4 +82,54 @@ pub fn change_key(config: &Config, storage: &Storage, old: &PassphraseConfig,
 
 pub fn del_key(storage: &Storage, name: &str) -> Result<()> {
     keymgmt::del_key(storage, name)
+}
+
+pub fn create_group<IT : Iterator + Clone>
+    (storage: &Storage, key: &PassphraseConfig, names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    let pass = key.read_passphrase("passphrase", false)?;
+
+    keymgmt::create_group(storage, &pass, names)
+}
+
+pub fn assoc_group<IT : Iterator + Clone>
+    (storage: &Storage, from: &PassphraseConfig, to: &PassphraseConfig,
+     names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    let from_pass = from.read_passphrase(
+        "passphrase with these groups", false)?;
+    let to_pass = to.read_passphrase(
+        "passphrase to receive groups", false)?;
+
+    keymgmt::assoc_group(storage, &from_pass, &to_pass, names)
+}
+
+pub fn disassoc_group<IT : Iterator + Clone>
+    (storage: &Storage, from: &str, names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    keymgmt::disassoc_group(storage, from, names)
+}
+
+
+pub fn destroy_group<IT : Iterator + Clone>
+    (storage: &Storage, dont_ask: bool, names: IT) -> Result<()>
+where IT::Item : AsRef<str> {
+    if !dont_ask {
+        print!("\
+WARNING: If there are any directories protected by any of these groups, they \n\
+will no longer be accessible. This cannot be undone. This means that if you \n\
+have a write-protected directory with one of these groups, it will be \n\
+impossible to remove it. If you have a read-protected directory with one of \n\
+these groups, it and its contents WILL BE RENDERED UNRECOVERABLE FOREVER.\n\
+\n\
+If you are certain you want to do this, type \"yes\": ");
+        let _ = io::stdout().flush();
+        let mut yes = String::new();
+        let _ = io::stdin().read_line(&mut yes);
+        if "yes" != yes.trim() {
+            return Err("Not confirmed".into());
+        }
+    }
+
+    keymgmt::destroy_group(storage, names)
 }

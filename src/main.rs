@@ -98,12 +98,40 @@ fn main_impl() -> Result<()> {
                the config to get the old passphrase. This \
                argument is in the same format as the config, \
                i.e., `prompt`, `file:/some/path`, etc.");
+    let alt_key_arg = Arg::with_name("key")
+        .required(false)
+        .takes_value(true)
+        .short("k")
+        .long("key")
+        .help("Use this value instead of `passphrase` from \
+               the config to get old passphrase. This \
+               argument is in the same format as the config, \
+               i.e., `prompt`, `file:/some/path`, etc.");
+    let from_key_arg = Arg::with_name("from-key")
+        .required(false)
+        .takes_value(true)
+        .short("f")
+        .long("from-key")
+        .help("Use this value instead of `passphrase` from \
+               the config to get the passphrase of the key which has the \
+               groups to be granted. This \
+               argument is in the same format as the config, \
+               i.e., `prompt`, `file:/some/path`, etc.");
     let new_key_arg = Arg::with_name("new-key")
         .required(false)
         .takes_value(true)
         .short("n")
         .long("new")
         .help("Specify how to get the new passphrase, like \
+               with the `passphrase` line in the config")
+        .default_value("prompt");
+    let to_key_arg = Arg::with_name("to-key")
+        .required(false)
+        .takes_value(true)
+        .short("t")
+        .long("to-key")
+        .help("Specify how to get the passphrase of the key to which \
+               the groups are to be granted, like \
                with the `passphrase` line in the config")
         .default_value("prompt");
     let simple_verbose_arg = Arg::with_name("verbose")
@@ -224,7 +252,6 @@ store hasbeen initialised; see `key add` for that instead."))
                                     that key")))
             .subcommand(SubCommand::with_name("rm")
                         .alias("del")
-                        .alias("delete")
                         .about("Delete a key from the key store")
                         .setting(AppSettings::DontCollapseArgsInUsage)
                         .arg(&config_arg)
@@ -234,7 +261,85 @@ store hasbeen initialised; see `key add` for that instead."))
             .subcommand(SubCommand::with_name("list")
                         .about("List the keys in the key store")
                         .setting(AppSettings::DontCollapseArgsInUsage)
-                        .arg(&config_arg)))
+                        .arg(&config_arg))
+            .subcommand(
+                SubCommand::with_name("group")
+                .about("Manage key groups")
+                .subcommand(SubCommand::with_name("create")
+                            .setting(AppSettings::DontCollapseArgsInUsage)
+                            .about("Create key group(s)")
+                            .arg(&config_arg)
+                            .arg(&alt_key_arg)
+                            .arg(Arg::with_name("group")
+                                 .required(true)
+                                 .multiple(true)
+                                 .help("The name(s) of the \
+                                        group(s) to create"))
+                            .after_help(
+                                "Creates one or more key groups. All \
+                                 groups will initially be granted to \
+                                 the key that was derived from the \
+                                 passphrase."))
+                .subcommand(SubCommand::with_name("assoc")
+                            .setting(AppSettings::DontCollapseArgsInUsage)
+                            .about("Associate a key with key group(s)")
+                            .arg(&config_arg)
+                            .arg(&from_key_arg)
+                            .arg(&to_key_arg)
+                            .arg(Arg::with_name("group")
+                                 .required(true)
+                                 .multiple(true)
+                                 .help("The name(s) of the group(s) to grant"))
+                            .after_help(
+                                "Associates one or more key groups to a \
+                                 key. This involves two passphrases; the \
+                                 first must be a member of all the listed \
+                                 groups and is used to derive the \
+                                 information needed to grant them. The \
+                                 second is the one to which the groups \
+                                 are to be granted."))
+                .subcommand(SubCommand::with_name("disassoc")
+                            .setting(AppSettings::DontCollapseArgsInUsage)
+                            .about("Disassociate a key from key group(s)")
+                            .arg(&config_arg)
+                            .arg(Arg::with_name("key")
+                                 .required(true)
+                                 .help("The key from which to remove the \
+                                        listed group(s)"))
+                            .arg(Arg::with_name("group")
+                                 .required(true)
+                                 .multiple(true)
+                                 .help("The name(s) of the group(s) to \
+                                        remove"))
+                            .after_help(
+                                "Disassociates one or more key groups from \
+                                 a key identified by name, essentially \
+                                 undoing the effect of `key group assoc`. \
+                                 This cannot be used to remove a group from \
+                                 the last key associated; use `key group \
+                                 destroy` for that instead."))
+                .subcommand(SubCommand::with_name("destroy")
+                            .setting(AppSettings::DontCollapseArgsInUsage)
+                            .about("Destroy key group(s)")
+                            .arg(&config_arg)
+                            .arg(Arg::with_name("yes")
+                                 .required(false)
+                                 .takes_value(false)
+                                 .short("y")
+                                 .long("yes")
+                                 .help("Don't prompt for confirmation"))
+                            .arg(Arg::with_name("group")
+                                 .required(true)
+                                 .multiple(true)
+                                 .help("The name(s) of the group(s) to \
+                                        destroy"))
+                            .after_help(
+                                "Destroys the listed groups, implicitly \
+                                 disassociating them from any and all \
+                                 keys. WARNING: This is an irreversible \
+                                 operation which will render any data \
+                                 protected by the destroyed key groups \
+                                 irrecoverable."))))
         .subcommand(SubCommand::with_name("ls")
                     .alias("dir")
                     .about("List directory contents on server")
@@ -433,6 +538,36 @@ store hasbeen initialised; see `key add` for that instead."))
             set_up!(matches, config, storage);
             cli::cmd_keymgmt::del_key(
                 &*storage, matches.value_of("key-name").unwrap())
+        } else if let Some(matches) = matches.subcommand_matches("group") {
+            if let Some(matches) = matches.subcommand_matches("create") {
+                set_up!(matches, config, storage);
+                let key = passphrase_or_config!(matches, config, "key");
+                cli::cmd_keymgmt::create_group(
+                    &*storage, &key, matches.values_of("group").unwrap())
+            } else if let Some(matches) = matches.subcommand_matches("assoc") {
+                set_up!(matches, config, storage);
+                let from = passphrase_or_config!(matches, config, "from-key");
+                let to = passphrase_or_prompt!(matches, config, "to-key");
+                cli::cmd_keymgmt::assoc_group(
+                    &*storage, &from, &to, matches.values_of("group").unwrap())
+            } else if let Some(matches) = matches.subcommand_matches(
+                "disassoc")
+            {
+                set_up!(matches, config, storage);
+                cli::cmd_keymgmt::disassoc_group(
+                    &*storage, matches.value_of("key").unwrap(),
+                    matches.values_of("group").unwrap())
+            } else if let Some(matches) = matches.subcommand_matches(
+                "destroy")
+            {
+                set_up!(matches, config, storage);
+                cli::cmd_keymgmt::destroy_group(
+                    &*storage, matches.is_present("yes"),
+                    matches.values_of("group").unwrap())
+            } else {
+                panic!("Unhandled `key group` subcommand: {}",
+                       matches.subcommand_name().unwrap());
+            }
         } else {
             panic!("Unhandled `key` subcommand: {}",
                    matches.subcommand_name().unwrap());
