@@ -4,54 +4,111 @@ Ensync
 Introduction
 ------------
 
-Ensync is a file synchronisation utility operating in a star topology, where
-all files on the central hub are encrypted and signed via GPG. This makes it
-suitable for use cases where the central hub is not considered completely
-secure, eg, due to unavailability of disk encryption or because it is
-controlled by a third party.
+TODO
 
-Emphasis is placed on simplicity and robustness rather than having lots of
-features or being particularly fast.
+### Contents
 
-Security Notes
---------------
+1. [Getting Started](#getting-started)
+2. [About the Sync Process](#about-the-sync-process)
+3. [Understanding the Sync Model](#understanding-the-sync-model)
+4. [Advanced Sync Rules](#advanced-sync-rules)
+5. [Using Multiple Keys](#using-multiple-keys)
+6. [Using Key Groups](#using-key-groups)
+7. [Security Considerations](#security-considerations)
 
-Ensync is specifically designed to prevent the discovery of novel byte
-sequences via compromise of the central hub. Attackers can still determine the
-size of each file trivially; additionally, unless the `pepper` option is used,
-it is possible for an attacker to determine whether you have a particular exact
-file. Even then, you probably want to take extra measures if you're worried
-about this type of identification.
-
-Sync Model
-----------
+Getting Started
+---------------
 
 TODO
 
-Operational Model
------------------
+About the Sync Process
+----------------------
 
-Ensync uses a simple client-server model, where the client operates on the
-cleartext files and makes most decisions, and the server provides a dumb blob
-store. Typically the server is invoked over SSH, but it can also be run locally
-to, eg, sync with a removable device.
+TODO Expand
 
-### Server Side
+### Concurrency and Failure
 
-The server, for the most part, knows nothing about the sync model. Its main
-functionality is storing a mapping from client-supplied 256-bit identifiers to
-data payloads. In practise, the identifiers are SHA-3 sums of the cleartext
-with the pepper prepended and appended, though the server has no way to verify
-this. The reference counts are also maintained via commands from the client,
-since the server cannot identify references itself.
+Ensync will not behave incorrectly if any client files are modified while it is
+running, insofar as that it will not corrupt the store on the server. However,
+such files cannot be captured in an atomic state, and may therefore be less
+than useful. For example, you should not try to use Ensync to replicate or back
+up a live database.
 
-The server also maintains a table of cleartext identifiers to blob identifiers,
-which serve as the roots of the file trees and the targets of directory
-entries. (Note however that it is not possible to use these pointers alone to
-reconstruct the directory structure.)
+Multiple Ensync instances cannot be run concurrently on the same configuration.
+It is safe to run multiple Ensync instances with different configurations over
+the same local directory tree, but be aware that they could see each other's
+intermediate states and propagate them. It is safe to run any number of Ensync
+instances against the same server store.
 
-Sync Rules
-----------
+If the server process is killed gracelessly, it may leak temporary files but
+will not corrupt the store.
+
+If the client process dies before completion, some temporary files may be
+leaked, and the filesystem may be left in an intermediate state, but no data
+will be lost. In some cases, cached data may be lost, which will result in the
+next sync being much slower than usual.
+
+In case of power loss, all committed changes are expected to survive,
+conditional on your operating system's `fsync` call actually syncing the data
+and the underlying hardware behaving properly. One exception is the ancestor
+state, which may in some cases be destroyed by unexpected termination of the
+OS. If this happens, the next sync will simply be more conservative than
+normal, which generally manifests in deletions being undone and additional
+conflict files being created.
+
+Errors that occur when processing a single file are generally logged without
+interrupting the rest of the sync process.
+
+### Filesystem Limitations
+
+Only regular files, symlinks, and directories are supported. Other types of
+files are not synced.
+
+The basic read/write/execute permissions of regular files and directories are
+synced, as well as the modified time of regular files. Other attributes and
+alternate data streams are ignored.
+
+Using Ensync with a case-insensitive filesystem (or, more generally, any
+filesystem which considers one byte sequence to match a directory entry whose
+name is a different byte sequence) is generally a bad idea, but is partially
+supported so long as nothing causes two files on the server to exist which the
+insensitive filesystem considers the same. If this happens, or if equivalent
+but different names are created on the server and client, the result will
+generally involve one version overwriting the other or the two being merged. No
+guarantees are made here, nor is Ensync tested in these conditions.
+
+Using Ensync with a filesystem which performs name normalisation (i.e., one
+where trying to create a file whose name is one byte sequence results in
+creating a file with a name which is a different byte sequence) is strongly
+discouraged. These normalisations appear as a rename to Ensync and will be
+propagated as such (i.e., as a deletion and a creation). In practise, there
+won't be serious issues here as long as all participants use exactly the same
+normalisation or if no names which would be changed by any normalisation are
+ever created. If there are multiple participants using different normalisation,
+the result will be rename fighting every time each participant syncs. Be aware
+here that a particular fruit-flavoured OS not only has a normalising filesystem
+by default, but uses a different normalisation than the rest of the world.
+
+Ensync is not aware of hard links. Since it never overwrites files in-place,
+having hard links will not cause issues, but Ensync may turn them into separate
+files, and they will be created as separate files on other systems. Hard links
+between directories, should your filesystem actually support them, are not
+supported at all and will likely cause numerous issues.
+
+If your system permits opening directories as regular files (eg, FreeBSD), you
+may end up in a weird situation if something changes a regular file into a
+directory at just the right moment. No data will be lost locally, but the raw
+content of the directory may propagate as a regular file instead.
+
+Understanding the Sync Model
+----------------------------
+
+TODO
+
+Advanced Sync Rules
+-------------------
+
+TODO Review this section, provide examples
 
 The sync rules are defined in the configuration within the `rules` table. The
 rules are divided into one or more _states_; the initial state is called
@@ -262,66 +319,22 @@ switch = "private"
 mode = "cud/cud"
 ```
 
-Concurrency and Failure
+Using Multiple Keys
+-------------------
+
+TODO
+
+Using Key Groups
+----------------
+
+TODO
+
+Security Considerations
 -----------------------
 
-Ensync will not behave incorrectly if any client files are modified while it is
-running, insofar as that it will not corrupt the store on the server. However,
-such files cannot be captured in an atomic state, and may therefore be less
-than useful.
+TODO
 
-Multiple Ensync instances should not be run concurrently over the same
-directory tree. A best effort is made to detect this condition and abort when
-it happens. Ensync does not permit multiple instances to run over the same
-server store at once.
+License
+-------
 
-If the server process is killed gracelessly, it may leak temporary files but
-will not corrupt the store.
-
-If the client process dies before completion, some temporary files may be
-leaked, and some sync changes will have been applied to the local filesystem,
-but no changes at all will have occurred server-side or in the ancestor store.
-No non-temporary files will exist in an intermediate state. This means that
-restarting a failed sync behaves the way one would expect, since the only
-changes occurring on the client side were to make it look like the server side.
-However, in some cases additional edit conflict files may be created.
-
-Errors that occur when processing a single file are generally logged without
-interrupting the rest of the sync process. Ancestor state for failed files is
-left unchanged.
-
-Filesystem Limitations
-----------------------
-
-Only regular files, symlinks, and directories are supported. Other types of
-files are not synced.
-
-The basic read/write/execute permissions of regular files and directories are
-synced. Other attributes and alternate data streams are ignored.
-
-Using Ensync with a case-insensitive filesystem (or, more generally, any
-filesystem which considers one byte sequence to match a directory entry whose
-name is a different byte sequence) is generally a bad idea, but is partially
-supported so long as nothing causes two files on the server to exist which the
-insensitive filesystem considers the same. If this happens, or if equivalent
-but different names are created on the server and client, the result will
-generally involve one version overwriting the other or the two being merged. No
-guarantees are made here, nor is Ensync tested in these conditions.
-
-Ensync is not aware of hard links. Since it never overwrites files in-place,
-having hard links will not cause issues, but Ensync may turn them into separate
-files, and they will be created as separate files on other systems. Hard links
-between directories, should your filesystem actually support them, are not
-supported at all and will likely cause numerous issues.
-
-If your system permits opening directories as regular files (eg, FreeBSD), you
-may end up in a weird situation if something changes a regular file into a
-directory at just the right moment. No data will be lost locally, but the raw
-content of the directory may propagate as a regular file instead.
-
-Building from Source
---------------------
-
-Install Rust 1.10 and Cargo 0.9.0 or later (https://www.rust-lang.org/).
-
-Install `gpgme` and sqlite, eg, `pkg install gpgme sqlite3` as root.
+[GLPv3 or later](COPYING)
