@@ -28,3 +28,4 @@ pub mod cmd_server;
 pub mod cmd_keymgmt;
 pub mod cmd_sync;
 pub mod cmd_manual;
+pub mod cmd_setup;

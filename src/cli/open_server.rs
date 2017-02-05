@@ -16,13 +16,60 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::io::{Write, stderr};
+use std::io::{Read, Write, stderr};
 use std::process;
 use std::sync::Arc;
 
 use cli::config::*;
 use errors::*;
 use server::*;
+
+/// Connect to a server process in `child` which writes to `stdout` and reads
+/// from `stdin`.
+///
+/// `command` is printed in diagnostics.
+pub fn connect_server_storage<R : Read + Send + 'static,
+                              W : Write + Send + 'static>
+    (mut child: process::Child, stdin: W, stdout: R,
+     command: &str) -> Result<RemoteStorage>
+{
+    let storage = RemoteStorage::new(stdout, stdin);
+
+    match storage.exchange_client_info() {
+        Ok((info, motd)) => {
+            let _ = writeln!(stderr(), "Connected to {} {}.{}.{} \
+                                        (proto {}.{}) via `{}`",
+                             info.name, info.version.0, info.version.1,
+                             info.version.2, info.protocol.0,
+                             info.protocol.1, command);
+            if let Some(motd) = motd {
+                let _ = writeln!(stderr(), "{}", motd);
+            }
+        },
+        Err(e) => {
+            // Close the child's input and output and wait for it to
+            // finish. Most likely the remote process failed to start
+            // for some reason, so it is better to output that detail
+            // rather than some obscure protocol error, if possible.
+            drop(storage);
+            if let Ok(status) = child.wait() {
+                if !status.success() {
+                    return Err(format!("Command `{}` failed with {}",
+                                       command, status).into());
+                }
+            }
+
+            // Either the command succeeded unexpectedly, or we failed
+            // to wait for the child. All we can do is return the
+            // protocol error.
+            return Err(e).chain_err(
+                || format!("Protocol error communicating with `{}`",
+                           command));
+        },
+    }
+
+    Ok(storage)
+}
 
 /// Opens the `Storage` for the given server configuration.
 ///
@@ -61,44 +108,12 @@ pub fn open_server_storage(config: &ServerConfig) -> Result<Arc<Storage>> {
 
             let mut child = process.spawn().chain_err(
                 || format!("Failed to start server command `{}`", command))?;
-            let storage = RemoteStorage::new(
-                child.stdout.take().expect("Missing stdout pipe on child"),
-                child.stdin.take().expect("Missing stdin pipe on child"));
-
-            match storage.exchange_client_info() {
-                Ok((info, motd)) => {
-                    let _ = writeln!(stderr(), "Connected to {} {}.{}.{} \
-                                                (proto {}.{}) via `{}`",
-                                     info.name, info.version.0, info.version.1,
-                                     info.version.2, info.protocol.0,
-                                     info.protocol.1, command);
-                    if let Some(motd) = motd {
-                        let _ = writeln!(stderr(), "{}", motd);
-                    }
-                },
-                Err(e) => {
-                    // Close the child's input and output and wait for it to
-                    // finish. Most likely the remote process failed to start
-                    // for some reason, so it is better to output that detail
-                    // rather than some obscure protocol error, if possible.
-                    drop(storage);
-                    if let Ok(status) = child.wait() {
-                        if !status.success() {
-                            return Err(format!("Command `{}` failed with {}",
-                                               command, status).into());
-                        }
-                    }
-
-                    // Either the command succeeded unexpectedly, or we failed
-                    // to wait for the child. All we can do is return the
-                    // protocol error.
-                    return Err(e).chain_err(
-                        || format!("Protocol error communicating with `{}`",
-                                   command));
-                },
-            }
-
-            Ok(Arc::new(storage))
+            let stdout = child.stdout.take()
+                .expect("Missing stdout pipe on child");
+            let stdin = child.stdin.take()
+                .expect("Missing stdin pipe on child");
+            Ok(Arc::new(
+                connect_server_storage(child, stdin, stdout, command)?))
         },
     }
 }

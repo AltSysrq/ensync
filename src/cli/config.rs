@@ -239,8 +239,9 @@ impl Config {
     }
 }
 
-fn parse_compression_name(filename: &Path, name: &str)
-                          -> Result<flate2::Compression> {
+/// Parses the given string as a compression level.
+pub fn parse_compression_name(filename: &Path, name: &str)
+                              -> Result<flate2::Compression> {
     Ok(match name {
         "none" | "off" => flate2::Compression::None,
         "default" | "on" => flate2::Compression::Default,
@@ -419,6 +420,23 @@ impl PassphraseConfig {
 
             PassphraseConfig::Shell(command, _) =>
                 PassphraseConfig::Shell(command, Some(parent.to_owned())),
+        }
+    }
+
+    /// Returns the string representation of this passphrase configuration.
+    ///
+    /// Some information such as non-UTF8 strings and the working directory of
+    /// `Shell` are lost.
+    pub fn to_string_lossy(&self) -> String {
+        match *self {
+            PassphraseConfig::Prompt =>
+                "prompt".to_owned(),
+            PassphraseConfig::String(ref s) =>
+                format!("string:{}", s),
+            PassphraseConfig::File(ref name) =>
+                format!("file:{}", name.display()),
+            PassphraseConfig::Shell(ref command, _) =>
+                format!("shell:{}", command),
         }
     }
 }

@@ -128,9 +128,11 @@ fn edit_kdflist<S : Storage + ?Sized, R,
 
 /// Initialises the KDF List with a new internal key set and the given
 /// passphrase associated with the default groups.
+///
+/// Returns the new key chain.
 pub fn init_keys<S : Storage + ?Sized>(
     storage: &S, passphrase: &[u8], key_name: &str)
-    -> Result<()>
+    -> Result<KeyChain>
 {
     do_tx(storage, |tx| {
         if get_kdflist(storage)?.is_some() {
@@ -150,7 +152,7 @@ pub fn init_keys<S : Storage + ?Sized>(
         put_kdflist(storage, &kdflist, tx, None,
                     key_chain.key(GROUP_ROOT).expect(
                         "Created KeyChain with no `root` group"))?;
-        Ok(())
+        Ok(key_chain)
     })
 }
 

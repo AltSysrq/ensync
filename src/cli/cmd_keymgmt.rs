@@ -35,6 +35,7 @@ pub fn init_keys(config: &Config, storage: &Storage, name: Option<&str>)
                        &config.passphrase.read_passphrase(
                            "new passphrase", true)?[..],
                        name.unwrap_or("original"))
+        .map(|_| ())
 }
 
 pub fn add_key(storage: &Storage, old: &PassphraseConfig,

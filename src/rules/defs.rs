@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -122,6 +122,49 @@ impl FromStr for SyncMode {
     type Err = SyncModeParseError;
 
     fn from_str(s: &str) -> Result<Self, SyncModeParseError> {
+        match s {
+            "mirror" => return Ok(SyncMode {
+                inbound: HalfSyncMode {
+                    create: SyncModeSetting::Off,
+                    update: SyncModeSetting::Off,
+                    delete: SyncModeSetting::Off,
+                },
+                outbound: HalfSyncMode {
+                    create: SyncModeSetting::Force,
+                    update: SyncModeSetting::Force,
+                    delete: SyncModeSetting::Force,
+                }
+            }),
+
+            "conservative-sync" | "sync" => return Ok(SyncMode {
+                inbound: HalfSyncMode {
+                    create: SyncModeSetting::On,
+                    update: SyncModeSetting::On,
+                    delete: SyncModeSetting::On,
+                },
+                outbound: HalfSyncMode {
+                    create: SyncModeSetting::On,
+                    update: SyncModeSetting::On,
+                    delete: SyncModeSetting::On,
+                }
+            }),
+
+            "aggressive-sync" => return Ok(SyncMode {
+                inbound: HalfSyncMode {
+                    create: SyncModeSetting::Force,
+                    update: SyncModeSetting::Force,
+                    delete: SyncModeSetting::Force,
+                },
+                outbound: HalfSyncMode {
+                    create: SyncModeSetting::Force,
+                    update: SyncModeSetting::Force,
+                    delete: SyncModeSetting::Force,
+                }
+            }),
+
+            _ => (),
+        }
+
         let chars : Vec<_> = s.chars().collect();
 
         if 7 != chars.len() {
@@ -286,5 +329,21 @@ mod test {
     #[test]
     fn parse_sync_mode_incorrect_letter() {
         assert!("dud/cud".parse::<SyncMode>().is_err());
+    }
+
+    #[test]
+    fn parse_sync_mode_aliases() {
+        assert_eq!(
+            "---/CUD",
+            &"mirror".parse::<SyncMode>().unwrap().to_string());
+        assert_eq!(
+            "cud/cud",
+            &"sync".parse::<SyncMode>().unwrap().to_string());
+        assert_eq!(
+            "cud/cud",
+            &"conservative-sync".parse::<SyncMode>().unwrap().to_string());
+        assert_eq!(
+            "CUD/CUD",
+            &"aggressive-sync".parse::<SyncMode>().unwrap().to_string());
     }
 }

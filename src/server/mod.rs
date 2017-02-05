@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2017, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -31,3 +31,4 @@ pub use self::storage::Storage;
 pub use self::local_storage::LocalStorage;
 pub use self::rpc::RemoteStorage;
 pub use self::crypt::KeyChain;
+pub use self::dir::{DIRID_KEYS, DIRID_PROOT};

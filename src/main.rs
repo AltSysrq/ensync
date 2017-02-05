@@ -159,6 +159,31 @@ fn main_impl() -> Result<()> {
         .setting(AppSettings::UnifiedHelpMessage)
         .setting(AppSettings::VersionlessSubcommands)
         .max_term_width(120)
+        .subcommand(SubCommand::with_name("setup")
+                    .about("Wizard to set up simple ensync configurations")
+                    .setting(AppSettings::DontCollapseArgsInUsage)
+                    .arg(&config_arg)
+                    .arg(Arg::with_name("key")
+                         .required(false)
+                         .takes_value(true)
+                         .short("k")
+                         .long("key")
+                         .default_value("prompt")
+                         .help("\
+How to get the passphrase. Defaults to `prompt` to read it interactively. Use
+`string:xxx` to use a fixed value, `file:/some/path` to read it from a file,
+or `shell:some shell command` to use the output of a shell command."))
+                    .arg(Arg::with_name("local-path")
+                         .required(true)
+                         .help("Path in the local filesystem of files to be \
+                                synced. Must be an already existing \
+                                directory."))
+                    .arg(Arg::with_name("remote-path")
+                         .required(true)
+                         .help("Where to write encrypted data. This may be \
+                                a local path (e.g., `/path/to/files`) or an \
+                                scp-style argument (e.g., \
+                                `user@host:/path/to/files`).")))
         .subcommand(SubCommand::with_name("sync")
                     .about("Sync files according to configuration")
                     .setting(AppSettings::DontCollapseArgsInUsage)
@@ -522,7 +547,7 @@ store hasbeen initialised; see `key add` for that instead."))
         };
     }
     macro_rules! passphrase_or_prompt {
-        ($matches:expr, $config:expr, $key:expr) => {
+        ($matches:expr, $key:expr) => {
             if let Some(c) = $matches.value_of($key) {
                 c.parse::<PassphraseConfig>()?
             } else {
@@ -541,8 +566,8 @@ store hasbeen initialised; see `key add` for that instead."))
         } else if let Some(matches) = matches.subcommand_matches("add") {
             set_up!(matches, config, storage);
             let old = passphrase_or_config!(matches, config, "old-key");
-            let new = passphrase_or_prompt!(matches, config, "new-key");
-            let root = passphrase_or_prompt!(matches, config, "root-key");
+            let new = passphrase_or_prompt!(matches, "new-key");
+            let root = passphrase_or_prompt!(matches, "root-key");
             cli::cmd_keymgmt::add_key(&*storage, &old, &new, &root,
                                       matches.value_of("key-name").unwrap())
         } else if let Some(matches) = matches.subcommand_matches("list") {
@@ -551,28 +576,28 @@ store hasbeen initialised; see `key add` for that instead."))
         } else if let Some(matches) = matches.subcommand_matches("change") {
             set_up!(matches, config, storage);
             let old = passphrase_or_config!(matches, config, "old-key");
-            let new = passphrase_or_prompt!(matches, config, "new-key");
-            let root = passphrase_or_prompt!(matches, config, "root-key");
+            let new = passphrase_or_prompt!(matches, "new-key");
+            let root = passphrase_or_prompt!(matches, "root-key");
             cli::cmd_keymgmt::change_key(&config, &*storage, &old, &new, &root,
                                          matches.value_of("key-name"),
                                          matches.is_present("force"))
         } else if let Some(matches) = matches.subcommand_matches("rm") {
             set_up!(matches, config, storage);
-            let root = passphrase_or_prompt!(matches, config, "root-key");
+            let root = passphrase_or_prompt!(matches, "root-key");
             cli::cmd_keymgmt::del_key(
                 &*storage, matches.value_of("key-name").unwrap(), &root)
         } else if let Some(matches) = matches.subcommand_matches("group") {
             if let Some(matches) = matches.subcommand_matches("create") {
                 set_up!(matches, config, storage);
                 let key = passphrase_or_config!(matches, config, "key");
-                let root = passphrase_or_prompt!(matches, config, "root-key");
+                let root = passphrase_or_prompt!(matches, "root-key");
                 cli::cmd_keymgmt::create_group(
                     &*storage, &key, &root, matches.values_of("group").unwrap())
             } else if let Some(matches) = matches.subcommand_matches("assoc") {
                 set_up!(matches, config, storage);
                 let from = passphrase_or_config!(matches, config, "from-key");
-                let to = passphrase_or_prompt!(matches, config, "to-key");
-                let root = passphrase_or_prompt!(matches, config, "root-key");
+                let to = passphrase_or_prompt!(matches, "to-key");
+                let root = passphrase_or_prompt!(matches, "root-key");
                 cli::cmd_keymgmt::assoc_group(
                     &*storage, &from, &to, &root,
                     matches.values_of("group").unwrap())
@@ -580,7 +605,7 @@ store hasbeen initialised; see `key add` for that instead."))
                 "disassoc")
             {
                 set_up!(matches, config, storage);
-                let root = passphrase_or_prompt!(matches, config, "root-key");
+                let root = passphrase_or_prompt!(matches, "root-key");
                 cli::cmd_keymgmt::disassoc_group(
                     &*storage, matches.value_of("key").unwrap(), &root,
                     matches.values_of("group").unwrap())
@@ -588,7 +613,7 @@ store hasbeen initialised; see `key add` for that instead."))
                 "destroy")
             {
                 set_up!(matches, config, storage);
-                let root = passphrase_or_prompt!(matches, config, "root-key");
+                let root = passphrase_or_prompt!(matches, "root-key");
                 cli::cmd_keymgmt::destroy_group(
                     &*storage, matches.is_present("yes"), &root,
                     matches.values_of("group").unwrap())
@@ -600,6 +625,12 @@ store hasbeen initialised; see `key add` for that instead."))
             panic!("Unhandled `key` subcommand: {}",
                    matches.subcommand_name().unwrap());
         }
+    } else if let Some(matches) = matches.subcommand_matches("setup") {
+        let passphrase = passphrase_or_prompt!(matches, "key");
+        cli::cmd_setup::run(&passphrase,
+                            matches.value_of("config").unwrap(),
+                            matches.value_of("local-path").unwrap(),
+                            matches.value_of("remote-path").unwrap())
     } else if let Some(matches) = matches.subcommand_matches("sync") {
         set_up!(matches, config, storage);
 
