@@ -24,6 +24,11 @@ use errors::*;
 use server::*;
 use cli::config::*;
 
+macro_rules! root_prompt {
+    ($root:expr) => { || $root.read_passphrase(
+        "passphrase in `root` group", false) }
+}
+
 pub fn init_keys(config: &Config, storage: &Storage, name: Option<&str>)
                  -> Result<()> {
     keymgmt::init_keys(storage,
@@ -33,10 +38,12 @@ pub fn init_keys(config: &Config, storage: &Storage, name: Option<&str>)
 }
 
 pub fn add_key(storage: &Storage, old: &PassphraseConfig,
-               new: &PassphraseConfig, name: &str) -> Result<()> {
+               new: &PassphraseConfig, root: &PassphraseConfig,
+               name: &str) -> Result<()> {
     let old_pass = old.read_passphrase("old passphrase", false)?;
     let new_pass = new.read_passphrase("new passphrase", true)?;
-    keymgmt::add_key(storage, &old_pass, &new_pass, name)
+    keymgmt::add_key(storage, &old_pass, &new_pass, name,
+                     root_prompt!(root))
 }
 
 pub fn list_keys(storage: &Storage) -> Result<()> {
@@ -58,20 +65,21 @@ pub fn list_keys(storage: &Storage) -> Result<()> {
         println!("  algorithm:    {}", key.algorithm);
         println!("  created:      {}", format_date(Some(&key.created)));
         println!("  last changed: {}", format_date(key.updated.as_ref()));
-        println!("  last used:    {}", format_date(key.used.as_ref()));
         println!("");
     }
     Ok(())
 }
 
 pub fn change_key(config: &Config, storage: &Storage, old: &PassphraseConfig,
-                  new: &PassphraseConfig, name: Option<&str>,
+                  new: &PassphraseConfig, root: &PassphraseConfig,
+                  name: Option<&str>,
                   allow_change_via_other_passphrase: bool)
                   -> Result<()> {
     let old_pass = old.read_passphrase("old passphrase", false)?;
     let new_pass = new.read_passphrase("new passphrase", true)?;
     keymgmt::change_key(storage, &old_pass, &new_pass, name,
-                        allow_change_via_other_passphrase)?;
+                        allow_change_via_other_passphrase,
+                        root_prompt!(root))?;
 
     if config.passphrase == *old && config.passphrase != *new {
         println!("Don't forget to update the passphrase configuration \
@@ -80,39 +88,44 @@ pub fn change_key(config: &Config, storage: &Storage, old: &PassphraseConfig,
     Ok(())
 }
 
-pub fn del_key(storage: &Storage, name: &str) -> Result<()> {
-    keymgmt::del_key(storage, name)
+pub fn del_key(storage: &Storage, name: &str, root: &PassphraseConfig)
+               -> Result<()> {
+    keymgmt::del_key(storage, name, root_prompt!(root))
 }
 
 pub fn create_group<IT : Iterator + Clone>
-    (storage: &Storage, key: &PassphraseConfig, names: IT) -> Result<()>
+    (storage: &Storage, key: &PassphraseConfig,
+     root: &PassphraseConfig, names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
     let pass = key.read_passphrase("passphrase", false)?;
 
-    keymgmt::create_group(storage, &pass, names)
+    keymgmt::create_group(storage, &pass, names, root_prompt!(root))
 }
 
 pub fn assoc_group<IT : Iterator + Clone>
     (storage: &Storage, from: &PassphraseConfig, to: &PassphraseConfig,
-     names: IT) -> Result<()>
+     root: &PassphraseConfig, names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
     let from_pass = from.read_passphrase(
         "passphrase with these groups", false)?;
     let to_pass = to.read_passphrase(
         "passphrase to receive groups", false)?;
 
-    keymgmt::assoc_group(storage, &from_pass, &to_pass, names)
+    keymgmt::assoc_group(storage, &from_pass, &to_pass, names,
+                         root_prompt!(root))
 }
 
 pub fn disassoc_group<IT : Iterator + Clone>
-    (storage: &Storage, from: &str, names: IT) -> Result<()>
+    (storage: &Storage, from: &str, root: &PassphraseConfig,
+     names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
-    keymgmt::disassoc_group(storage, from, names)
+    keymgmt::disassoc_group(storage, from, names, root_prompt!(root))
 }
 
 
 pub fn destroy_group<IT : Iterator + Clone>
-    (storage: &Storage, dont_ask: bool, names: IT) -> Result<()>
+    (storage: &Storage, dont_ask: bool, root: &PassphraseConfig,
+     names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
     if !dont_ask {
         print!("\
@@ -131,5 +144,5 @@ If you are certain you want to do this, type \"yes\": ");
         }
     }
 
-    keymgmt::destroy_group(storage, names)
+    keymgmt::destroy_group(storage, names, root_prompt!(root))
 }

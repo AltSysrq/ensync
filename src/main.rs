@@ -135,6 +135,14 @@ fn main_impl() -> Result<()> {
                the groups are to be granted, like \
                with the `passphrase` line in the config")
         .default_value("prompt");
+    let root_key_arg = Arg::with_name("root-key")
+        .required(false)
+        .takes_value(true)
+        .short("r")
+        .long("root-key")
+        .help("Specify how to get a passphrase in the `root` group if \
+               none of the operating keys are in that group")
+        .default_value("prompt");
     let simple_verbose_arg = Arg::with_name("verbose")
         .required(false)
         .takes_value(false)
@@ -231,6 +239,7 @@ store hasbeen initialised; see `key add` for that instead."))
                         .arg(&config_arg)
                         .arg(&old_key_arg)
                         .arg(&new_key_arg)
+                        .arg(&root_key_arg)
                         .arg(Arg::with_name("key-name")
                              .required(true)
                              .help("The name of the key to add")))
@@ -240,6 +249,7 @@ store hasbeen initialised; see `key add` for that instead."))
                         .arg(&config_arg)
                         .arg(&old_key_arg)
                         .arg(&new_key_arg)
+                        .arg(&root_key_arg)
                         .arg(Arg::with_name("key-name")
                              .required(false)
                              .help("The name of the key to edit"))
@@ -256,9 +266,14 @@ store hasbeen initialised; see `key add` for that instead."))
                         .about("Delete a key from the key store")
                         .setting(AppSettings::DontCollapseArgsInUsage)
                         .arg(&config_arg)
+                        .arg(&root_key_arg)
                         .arg(Arg::with_name("key-name")
                              .required(true)
-                             .help("The name of the key to delete")))
+                             .help("The name of the key to delete"))
+                        .after_help("The named key/passphrase is removed from \
+                                     the key store. The `root` key used to \
+                                     write to the key store may not be the \
+                                     key being removed."))
             .subcommand(SubCommand::with_name("list")
                         .about("List the keys in the key store")
                         .setting(AppSettings::DontCollapseArgsInUsage)
@@ -271,6 +286,7 @@ store hasbeen initialised; see `key add` for that instead."))
                             .about("Create key group(s)")
                             .arg(&config_arg)
                             .arg(&alt_key_arg)
+                            .arg(&root_key_arg)
                             .arg(Arg::with_name("group")
                                  .required(true)
                                  .multiple(true)
@@ -287,6 +303,7 @@ store hasbeen initialised; see `key add` for that instead."))
                             .arg(&config_arg)
                             .arg(&from_key_arg)
                             .arg(&to_key_arg)
+                            .arg(&root_key_arg)
                             .arg(Arg::with_name("group")
                                  .required(true)
                                  .multiple(true)
@@ -303,6 +320,7 @@ store hasbeen initialised; see `key add` for that instead."))
                             .setting(AppSettings::DontCollapseArgsInUsage)
                             .about("Disassociate a key from key group(s)")
                             .arg(&config_arg)
+                            .arg(&root_key_arg)
                             .arg(Arg::with_name("key")
                                  .required(true)
                                  .help("The key from which to remove the \
@@ -323,6 +341,7 @@ store hasbeen initialised; see `key add` for that instead."))
                             .setting(AppSettings::DontCollapseArgsInUsage)
                             .about("Destroy key group(s)")
                             .arg(&config_arg)
+                            .arg(&root_key_arg)
                             .arg(Arg::with_name("yes")
                                  .required(false)
                                  .takes_value(false)
@@ -523,7 +542,8 @@ store hasbeen initialised; see `key add` for that instead."))
             set_up!(matches, config, storage);
             let old = passphrase_or_config!(matches, config, "old-key");
             let new = passphrase_or_prompt!(matches, config, "new-key");
-            cli::cmd_keymgmt::add_key(&*storage, &old, &new,
+            let root = passphrase_or_prompt!(matches, config, "root-key");
+            cli::cmd_keymgmt::add_key(&*storage, &old, &new, &root,
                                       matches.value_of("key-name").unwrap())
         } else if let Some(matches) = matches.subcommand_matches("list") {
             set_up!(matches, config, storage);
@@ -532,38 +552,45 @@ store hasbeen initialised; see `key add` for that instead."))
             set_up!(matches, config, storage);
             let old = passphrase_or_config!(matches, config, "old-key");
             let new = passphrase_or_prompt!(matches, config, "new-key");
-            cli::cmd_keymgmt::change_key(&config, &*storage, &old, &new,
+            let root = passphrase_or_prompt!(matches, config, "root-key");
+            cli::cmd_keymgmt::change_key(&config, &*storage, &old, &new, &root,
                                          matches.value_of("key-name"),
                                          matches.is_present("force"))
         } else if let Some(matches) = matches.subcommand_matches("rm") {
             set_up!(matches, config, storage);
+            let root = passphrase_or_prompt!(matches, config, "root-key");
             cli::cmd_keymgmt::del_key(
-                &*storage, matches.value_of("key-name").unwrap())
+                &*storage, matches.value_of("key-name").unwrap(), &root)
         } else if let Some(matches) = matches.subcommand_matches("group") {
             if let Some(matches) = matches.subcommand_matches("create") {
                 set_up!(matches, config, storage);
                 let key = passphrase_or_config!(matches, config, "key");
+                let root = passphrase_or_prompt!(matches, config, "root-key");
                 cli::cmd_keymgmt::create_group(
-                    &*storage, &key, matches.values_of("group").unwrap())
+                    &*storage, &key, &root, matches.values_of("group").unwrap())
             } else if let Some(matches) = matches.subcommand_matches("assoc") {
                 set_up!(matches, config, storage);
                 let from = passphrase_or_config!(matches, config, "from-key");
                 let to = passphrase_or_prompt!(matches, config, "to-key");
+                let root = passphrase_or_prompt!(matches, config, "root-key");
                 cli::cmd_keymgmt::assoc_group(
-                    &*storage, &from, &to, matches.values_of("group").unwrap())
+                    &*storage, &from, &to, &root,
+                    matches.values_of("group").unwrap())
             } else if let Some(matches) = matches.subcommand_matches(
                 "disassoc")
             {
                 set_up!(matches, config, storage);
+                let root = passphrase_or_prompt!(matches, config, "root-key");
                 cli::cmd_keymgmt::disassoc_group(
-                    &*storage, matches.value_of("key").unwrap(),
+                    &*storage, matches.value_of("key").unwrap(), &root,
                     matches.values_of("group").unwrap())
             } else if let Some(matches) = matches.subcommand_matches(
                 "destroy")
             {
                 set_up!(matches, config, storage);
+                let root = passphrase_or_prompt!(matches, config, "root-key");
                 cli::cmd_keymgmt::destroy_group(
-                    &*storage, matches.is_present("yes"),
+                    &*storage, matches.is_present("yes"), &root,
                     matches.values_of("group").unwrap())
             } else {
                 panic!("Unhandled `key group` subcommand: {}",

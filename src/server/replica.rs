@@ -1132,6 +1132,10 @@ mod test {
         }
     }
 
+    fn no_prompt() -> Result<Vec<u8>> {
+        panic!("shouldn't prompt for password")
+    }
+
     #[test]
     fn read_protected_dirs_not_readable_by_non_group_members() {
         use server::keymgmt;
@@ -1146,10 +1150,10 @@ mod test {
 
         // Set up two keys, putting the first one into a unique group.
         keymgmt::init_keys(&*storage, b"hunter2", "privileged").unwrap();
-        keymgmt::add_key(&*storage, b"hunter2", b"hunter3", "restricted")
-            .unwrap();
-        keymgmt::create_group(&*storage, b"hunter2", ["private"].iter())
-            .unwrap();
+        keymgmt::add_key(&*storage, b"hunter2", b"hunter3", "restricted",
+                         no_prompt).unwrap();
+        keymgmt::create_group(&*storage, b"hunter2", ["private"].iter(),
+                              no_prompt).unwrap();
 
         let subdir_name = oss("priv.ensync[r=private]");
 
@@ -1211,10 +1215,10 @@ mod test {
 
         // Set up two keys, putting the first one into a unique group.
         keymgmt::init_keys(&*storage, b"hunter2", "privileged").unwrap();
-        keymgmt::add_key(&*storage, b"hunter2", b"hunter3", "restricted")
-            .unwrap();
-        keymgmt::create_group(&*storage, b"hunter2", ["private"].iter())
-            .unwrap();
+        keymgmt::add_key(&*storage, b"hunter2", b"hunter3", "restricted",
+                         no_prompt).unwrap();
+        keymgmt::create_group(&*storage, b"hunter2", ["private"].iter(),
+                              no_prompt).unwrap();
 
         let subdir_name = oss("priv.ensync[w=private]");
 

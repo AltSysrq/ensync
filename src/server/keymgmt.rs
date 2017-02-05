@@ -29,6 +29,23 @@ use server::crypt::*;
 use server::storage::*;
 use server::dir::DIRID_KEYS;
 
+/// Caches a `root` internal key.
+///
+/// Since editing the KDF list requires `root` access, and in many setups all
+/// keys are associated with `root`, we want to simply use a `root` key we
+/// encounter incidentally if possible instead of needing to prompt the user
+/// for it.
+#[derive(Default)]
+struct RootKey(Option<InternalKey>);
+
+impl RootKey {
+    fn chain(&mut self, kc: &KeyChain) {
+        if self.0.is_none() {
+            self.0 = kc.key(GROUP_ROOT).ok().map(InternalKey::to_owned);
+        }
+    }
+}
+
 fn do_tx<S : Storage + ?Sized, R, F : FnMut (Tx) -> Result<R>>(
     storage: &S, mut f: F) -> Result<R>
 {
@@ -68,27 +85,43 @@ fn get_kdflist<S : Storage + ?Sized>(
 }
 
 fn put_kdflist<S : Storage + ?Sized>(storage: &S, kdf: &KdfList,
-                                     tx: Tx, old: Option<(&HashId, u32)>)
+                                     tx: Tx, old: Option<(&HashId, u32)>,
+                                     key: &InternalKey)
                                      -> Result<(HashId, u32)> {
     let new_ver = rand_hashid();
     let new_data = fourleaf::to_vec(kdf)?;
 
     if let Some((old_ver, old_len)) = old {
-        storage.rmdir(tx, &DIRID_KEYS, old_ver, old_len)?;
+        storage.rmdir(tx, &DIRID_KEYS,
+                      &secret_dir_ver(&old_ver, key), old_len)?;
     }
-    // TODO Need to HMAC new_ver to get write protection.
-    storage.mkdir(tx, &DIRID_KEYS, &new_ver, &new_ver, &new_data)?;
+    storage.mkdir(tx, &DIRID_KEYS, &new_ver,
+                  &secret_dir_ver(&new_ver, key), &new_data)?;
     Ok((new_ver, new_data.len() as u32))
 }
 
-fn edit_kdflist<S : Storage + ?Sized, R, F : FnMut (&mut KdfList) -> Result<R>>
-    (storage: &S, mut f: F) -> Result<R>
+fn edit_kdflist<S : Storage + ?Sized, R,
+                P : FnMut () -> Result<Vec<u8>>,
+                F : FnMut (&mut KdfList, &mut RootKey) -> Result<R>>
+    (storage: &S, mut get_root_passphrase: P, mut f: F) -> Result<R>
 {
+    let mut root_key = RootKey::default();
+
     do_tx(storage, |tx| {
         let (mut kdflist, old_ver, old_len) = get_kdflist(storage)?
             .ok_or(ErrorKind::KdfListNotExists)?;
-        let r = f(&mut kdflist)?;
-        put_kdflist(storage, &kdflist, tx, Some((&old_ver, old_len)))?;
+        let r = f(&mut kdflist, &mut root_key)?;
+
+        if root_key.0.is_none() {
+            let root_passphrase = get_root_passphrase()?;
+            root_key.chain(
+                &try_derive_key(&root_passphrase, &kdflist.keys)
+                    .ok_or(ErrorKind::PassphraseNotInKdfList)?);
+        }
+
+        put_kdflist(storage, &kdflist, tx, Some((&old_ver, old_len)),
+                    root_key.0.as_ref().ok_or(
+                        "Input key not in `root` group")?)?;
         Ok(r)
     })
 }
@@ -112,9 +145,11 @@ pub fn init_keys<S : Storage + ?Sized>(
         kdflist.keys.insert(
             key_name.to_owned(),
             create_key(passphrase, &mut key_chain,
-                       UTC::now(), None, None));
+                       UTC::now(), None));
 
-        put_kdflist(storage, &kdflist, tx, None)?;
+        put_kdflist(storage, &kdflist, tx, None,
+                    key_chain.key(GROUP_ROOT).expect(
+                        "Created KeyChain with no `root` group"))?;
         Ok(())
     })
 }
@@ -123,16 +158,18 @@ pub fn init_keys<S : Storage + ?Sized>(
 /// `old_passphrase` to derive the key chain.
 ///
 /// The new key will inherit the same groups as the old one.
-pub fn add_key<S : Storage + ?Sized>(storage: &S, old_passphrase: &[u8],
-                                     new_passphrase: &[u8], new_name: &str)
-                                     -> Result<()> {
-    edit_kdflist(storage, |kdflist| {
+pub fn add_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>
+    (storage: &S, old_passphrase: &[u8], new_passphrase: &[u8], new_name: &str,
+     get_root_passphrase: P) -> Result<()>
+{
+    edit_kdflist(storage, get_root_passphrase, |kdflist, root_key| {
         let mut key_chain = try_derive_key(old_passphrase, &kdflist.keys)
             .ok_or(ErrorKind::PassphraseNotInKdfList)?;
+        root_key.chain(&key_chain);
         if kdflist.keys.insert(
             new_name.to_owned(),
             create_key(new_passphrase, &mut key_chain,
-                       UTC::now(), None, None))
+                       UTC::now(), None))
             .is_some()
         {
             return Err(ErrorKind::KeyNameAlreadyInUse(new_name.to_owned())
@@ -144,16 +181,14 @@ pub fn add_key<S : Storage + ?Sized>(storage: &S, old_passphrase: &[u8],
 
 /// Deletes the key identified by `name`.
 ///
-/// This does not require being able to derive the key chain. We explicitly do
-/// not require doing so here so as not to create the illusion that an attacker
-/// would need to do so.
-///
 /// This fails if `name` identifies the last key in the key store, since
 /// removing it would make it impossible to ever derive any internal keys
 /// again. It also fails if the key corresponding to `name` is the last key in
 /// any particular group.
-pub fn del_key<S : Storage + ?Sized>(storage: &S, name: &str) -> Result<()> {
-    edit_kdflist(storage, |kdflist| {
+pub fn del_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>
+    (storage: &S, name: &str, get_root_passphrase: P) -> Result<()>
+{
+    edit_kdflist(storage, get_root_passphrase, |kdflist, _root_key| {
         let old_entry = kdflist.keys.remove(name).ok_or_else(
             || ErrorKind::KeyNotInKdfList(name.to_owned()))?;
 
@@ -184,13 +219,14 @@ pub fn del_key<S : Storage + ?Sized>(storage: &S, name: &str) -> Result<()> {
 ///
 /// If the passphrase being changed is not the one being used to derive the
 /// internal keys, the latter must be in a superset of groups as the former.
-pub fn change_key<S : Storage + ?Sized>(
+pub fn change_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>(
     storage: &S, old_passphrase: &[u8],
     new_passphrase: &[u8], name: Option<&str>,
-    allow_change_via_other_passphrase: bool)
+    allow_change_via_other_passphrase: bool,
+    get_root_passphrase: P)
     -> Result<()>
 {
-    edit_kdflist(storage, |kdflist| {
+    edit_kdflist(storage, get_root_passphrase, |kdflist, root_key| {
         let real_name = if let Some(name) = name {
             name.to_owned()
         } else if 1 == kdflist.keys.len() {
@@ -216,6 +252,8 @@ pub fn change_key<S : Storage + ?Sized>(
             return Err(ErrorKind::PassphraseNotInKdfList.into());
         };
 
+        root_key.chain(&key_chain);
+
         let mut new_chain = KeyChain::empty();
         for group in old_entry.groups.keys() {
             new_chain.keys.insert(group.to_owned(),
@@ -225,36 +263,34 @@ pub fn change_key<S : Storage + ?Sized>(
         kdflist.keys.insert(real_name,
                             create_key(new_passphrase, &mut new_chain,
                                        old_entry.created,
-                                       Some(UTC::now()),
-                                       old_entry.used));
+                                       Some(UTC::now())));
         Ok(())
     })
 }
 
 /// Fetches the KDF list and uses `passphrase` to derive the key chain.
-///
-/// This will also update the last-used time of the matched entry.
 pub fn derive_key_chain<S : Storage + ?Sized>(storage: &S, passphrase: &[u8])
                                               -> Result<KeyChain> {
-    edit_kdflist(storage, |kdflist| {
-        for (_, e) in &mut kdflist.keys {
-            if let Some(key_chain) = try_derive_key_single(passphrase, e) {
-                e.used = Some(UTC::now());
-                return Ok(key_chain);
-            }
+    let (kdflist, _, _) = get_kdflist(storage)?
+        .ok_or(ErrorKind::KdfListNotExists)?;
+    for entry in kdflist.keys.values() {
+        if let Some(key_chain) = try_derive_key_single(passphrase, entry) {
+            return Ok(key_chain);
         }
+    }
 
-        Err(ErrorKind::PassphraseNotInKdfList.into())
-    })
+    Err(ErrorKind::PassphraseNotInKdfList.into())
 }
 
 /// Create a group with each given name on the key with the given passphrase.
 ///
 /// Fails if any group is already defined on any key.
-pub fn create_group<S : Storage + ?Sized, IT : Iterator + Clone>
-    (storage: &S, passphrase: &[u8], names: IT) -> Result<()>
+pub fn create_group<S : Storage + ?Sized, IT : Iterator + Clone,
+                    P : FnMut () -> Result<Vec<u8>>>
+    (storage: &S, passphrase: &[u8], names: IT, get_root_passphrase: P)
+     -> Result<()>
 where IT::Item : AsRef<str> {
-    edit_kdflist(storage, |kdflist| {
+    edit_kdflist(storage, get_root_passphrase, |kdflist, root_key| {
         for name in names.clone() {
             let name = name.as_ref();
             for (_, e) in &kdflist.keys {
@@ -269,6 +305,7 @@ where IT::Item : AsRef<str> {
             if let Some(mut key_chain) =
                 try_derive_key_single(passphrase, e)
             {
+                root_key.chain(&key_chain);
                 for name in names.clone() {
                     let name = name.as_ref();
                     key_chain.keys.insert(name.to_owned(),
@@ -286,18 +323,22 @@ where IT::Item : AsRef<str> {
 /// Adds every group listed in `names` to the entry corresponding to
 /// `dst_passphrase`, using `src_passphrase` to derive the internal keys for
 /// this transfer.
-pub fn assoc_group<S : Storage + ?Sized, IT : Iterator + Clone>
+pub fn assoc_group<S : Storage + ?Sized, IT : Iterator + Clone,
+                   P : FnMut () -> Result<Vec<u8>>>
     (storage: &S, src_passphrase: &[u8], dst_passphrase: &[u8],
-     names: IT) -> Result<()>
+     names: IT, get_root_passphrase: P) -> Result<()>
 where IT::Item : AsRef<str> {
-    edit_kdflist(storage, |kdflist| {
+    edit_kdflist(storage, get_root_passphrase, |kdflist, root_key| {
         let src_chain = try_derive_key(src_passphrase, &kdflist.keys)
             .ok_or_else(|| ErrorKind::PassphraseNotInKdfList)?;
+        root_key.chain(&src_chain);
 
         for (_, e) in &mut kdflist.keys {
             if let Some(mut key_chain) =
                 try_derive_key_single(dst_passphrase, e)
             {
+                root_key.chain(&key_chain);
+
                 for name in names.clone() {
                     let name = name.as_ref();
                     if key_chain.keys.contains_key(name) {
@@ -320,8 +361,9 @@ where IT::Item : AsRef<str> {
 ///
 /// It is an error to disassociate a group not associated, to disassociate
 /// `everyone`, or to disassociate a group which has only one associated key.
-pub fn disassoc_group<S : Storage + ?Sized, IT : Iterator + Clone>
-    (storage: &S, key: &str, names: IT) -> Result<()>
+pub fn disassoc_group<S : Storage + ?Sized, IT : Iterator + Clone,
+                      P : FnMut () -> Result<Vec<u8>>>
+    (storage: &S, key: &str, names: IT, get_root_passphrase: P) -> Result<()>
 where IT::Item : AsRef<str> {
     for name in names.clone() {
         if GROUP_EVERYONE == name.as_ref() {
@@ -330,7 +372,7 @@ where IT::Item : AsRef<str> {
         }
     }
 
-    edit_kdflist(storage, |kdflist| {
+    edit_kdflist(storage, get_root_passphrase, |kdflist, _root_key| {
         {
             let entry = kdflist.keys.get_mut(key).ok_or_else(
                 || ErrorKind::KeyNotInKdfList(key.to_owned()))?;
@@ -356,8 +398,9 @@ where IT::Item : AsRef<str> {
 /// Removes all occurrences of each named group in the KDF list.
 ///
 /// It is an error to try to destroy the `everyone` or `root` groups.
-pub fn destroy_group<S : Storage + ?Sized, IT : Iterator + Clone>
-    (storage: &S, names: IT) -> Result<()>
+pub fn destroy_group<S : Storage + ?Sized, IT : Iterator + Clone,
+                     P : FnMut () -> Result<Vec<u8>>>
+    (storage: &S, names: IT, get_root_passphrase: P) -> Result<()>
 where IT::Item : AsRef<str> {
     for name in names.clone() {
         let name = name.as_ref();
@@ -367,7 +410,7 @@ where IT::Item : AsRef<str> {
         }
     }
 
-    edit_kdflist(storage, |kdflist| {
+    edit_kdflist(storage, get_root_passphrase, |kdflist, _root_key| {
         for name in names.clone() {
             let name = name.as_ref();
             let mut found = false;
@@ -392,7 +435,6 @@ pub struct KeyInfo {
     pub algorithm: String,
     pub created: DateTime<UTC>,
     pub updated: Option<DateTime<UTC>>,
-    pub used: Option<DateTime<UTC>>,
     pub groups: Vec<String>,
 }
 
@@ -407,7 +449,6 @@ pub fn list_keys<S : Storage + ?Sized>(storage: &S) -> Result<Vec<KeyInfo>> {
                algorithm: e.algorithm.clone(),
                created: e.created,
                updated: e.updated,
-               used: e.used,
                groups: e.groups.keys().map(|s| s.to_owned()).collect(),
            }).collect())
     } else {
@@ -424,6 +465,10 @@ mod test {
     #[allow(unused_imports)] use errors::*;
     use server::local_storage::LocalStorage;
     use super::*;
+
+    fn no_prompt() -> Result<Vec<u8>> {
+        panic!("shouldn't prompt");
+    }
 
     macro_rules! init {
         ($storage:ident) => {
@@ -444,11 +489,11 @@ mod test {
     fn empty() {
         init!(storage);
         assert_err!(ErrorKind::KdfListNotExists,
-                    add_key(&storage, b"a", b"b", "name"));
+                    add_key(&storage, b"a", b"b", "name", no_prompt));
         assert_err!(ErrorKind::KdfListNotExists,
-                    change_key(&storage, b"a", b"b", None, false));
+                    change_key(&storage, b"a", b"b", None, false, no_prompt));
         assert_err!(ErrorKind::KdfListNotExists,
-                    del_key(&storage, "name"));
+                    del_key(&storage, "name", no_prompt));
         assert!(list_keys(&storage).unwrap().is_empty());
     }
 
@@ -469,7 +514,7 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
@@ -482,7 +527,8 @@ mod test {
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::KeyNameAlreadyInUse(_),
-                    add_key(&storage, b"hunter2", b"hunter3", "original"));
+                    add_key(&storage, b"hunter2", b"hunter3", "original",
+                            no_prompt));
     }
 
     #[test]
@@ -491,7 +537,7 @@ mod test {
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    add_key(&storage, b"plugh", b"xyzzy", "new"));
+                    add_key(&storage, b"plugh", b"xyzzy", "new", no_prompt));
     }
 
     #[test]
@@ -501,7 +547,8 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
 
-        change_key(&storage, b"hunter2", b"hunter3", None, false).unwrap();
+        change_key(&storage, b"hunter2", b"hunter3", None, false,
+                   no_prompt).unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
         assert_eq!(mk.keys, mk2.keys);
 
@@ -514,9 +561,10 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
         assert_err!(ErrorKind::AnonChangeKeyButMultipleKdfEntries,
-                    change_key(&storage, b"hunter3", b"hunter4", None, false));
+                    change_key(&storage, b"hunter3", b"hunter4", None, false,
+                               no_prompt));
     }
 
     #[test]
@@ -524,17 +572,17 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
 
-        change_key(&storage, b"hunter2", b"hunter22", Some("original"), false)
-            .unwrap();
+        change_key(&storage, b"hunter2", b"hunter22", Some("original"), false,
+                   no_prompt).unwrap();
         assert_err!(ErrorKind::PassphraseNotInKdfList,
                     derive_key_chain(&storage, b"hunter2"));
         derive_key_chain(&storage, b"hunter22").unwrap();
         derive_key_chain(&storage, b"hunter3").unwrap();
 
-        change_key(&storage, b"hunter3", b"hunter33", Some("new"), false)
-            .unwrap();
+        change_key(&storage, b"hunter3", b"hunter33", Some("new"), false,
+                   no_prompt).unwrap();
         assert_err!(ErrorKind::PassphraseNotInKdfList,
                     derive_key_chain(&storage, b"hunter3"));
         derive_key_chain(&storage, b"hunter22").unwrap();
@@ -548,7 +596,7 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::KeyNotInKdfList(_),
                     change_key(&storage, b"hunter2", b"hunter3", Some("new"),
-                               false));
+                               false, no_prompt));
     }
 
     #[test]
@@ -556,11 +604,11 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
 
         assert_err!(ErrorKind::ChangeKeyWithPassphraseMismatch,
                     change_key(&storage, b"hunter2", b"hunter33",
-                               Some("new"), false));
+                               Some("new"), false, no_prompt));
     }
 
     #[test]
@@ -568,10 +616,10 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
 
         change_key(&storage, b"hunter2", b"hunter33",
-                   Some("new"), true).unwrap();
+                   Some("new"), true, no_prompt).unwrap();
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter33").unwrap();
@@ -587,7 +635,8 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
 
         assert_err!(ErrorKind::PassphraseNotInKdfList,
-                    change_key(&storage, b"plugh", b"xyzzy", None, false));
+                    change_key(&storage, b"plugh", b"xyzzy", None, false,
+                               no_prompt));
     }
 
     #[test]
@@ -595,11 +644,12 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
-        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter(), no_prompt)
+            .unwrap();
 
         change_key(&storage, b"hunter2", b"hunter33",
-                   Some("new"), true).unwrap();
+                   Some("new"), true, no_prompt).unwrap();
 
         let mk2 = derive_key_chain(&storage, b"hunter33").unwrap();
         assert_eq!(2, mk2.keys.len());
@@ -610,13 +660,14 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
-        create_group(&storage, b"hunter3", ["group"].iter()).unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
+        create_group(&storage, b"hunter3", ["group"].iter(), no_prompt)
+            .unwrap();
 
         assert_err!(
             ErrorKind::KeyNotInGroup(..),
             change_key(&storage, b"hunter2", b"hunter33",
-                       Some("new"), true));
+                       Some("new"), true, no_prompt));
     }
 
     #[test]
@@ -625,7 +676,7 @@ mod test {
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::WouldRemoveLastKdfEntry,
-                    del_key(&storage, "original"));
+                    del_key(&storage, "original", no_prompt));
     }
 
     #[test]
@@ -633,10 +684,11 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
-        create_group(&storage, b"hunter3", ["group"].iter()).unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
+        create_group(&storage, b"hunter3", ["group"].iter(),
+                     no_prompt).unwrap();
         assert_err!(ErrorKind::WouldDisassocLastKeyFromGroup(..),
-                    del_key(&storage, "new"));
+                    del_key(&storage, "new", no_prompt));
     }
 
     #[test]
@@ -645,7 +697,7 @@ mod test {
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::KeyNotInKdfList(_),
-                    del_key(&storage, "plugh"));
+                    del_key(&storage, "plugh", no_prompt));
     }
 
     #[test]
@@ -653,11 +705,12 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "new").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
 
-        del_key(&storage, "original").unwrap();
+        del_key(&storage, "original",
+                || Ok((&b"hunter3"[..]).to_owned())).unwrap();
 
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
         assert_eq!(mk.keys, mk2.keys);
@@ -674,19 +727,12 @@ mod test {
         let list = list_keys(&storage).unwrap();
         assert_eq!(1, list.len());
         assert!(list[0].updated.is_none());
-        assert!(list[0].used.is_none());
 
-        change_key(&storage, b"hunter2", b"hunter3", None, false).unwrap();
+        change_key(&storage, b"hunter2", b"hunter3", None, false,
+                   no_prompt).unwrap();
         let list = list_keys(&storage).unwrap();
         assert_eq!(1, list.len());
         assert!(list[0].updated.is_some());
-        assert!(list[0].used.is_none());
-
-        derive_key_chain(&storage, b"hunter3").unwrap();
-        let list = list_keys(&storage).unwrap();
-        assert_eq!(1, list.len());
-        assert!(list[0].updated.is_some());
-        assert!(list[0].used.is_some());
     }
 
     #[test]
@@ -695,7 +741,8 @@ mod test {
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::GroupNameAlreadyInUse(_),
-                    create_group(&storage, b"hunter2", ["root"].iter()));
+                    create_group(&storage, b"hunter2", ["root"].iter(),
+                                 no_prompt));
     }
 
     #[test]
@@ -703,8 +750,8 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        create_group(&storage, b"hunter2", ["users", "private"].iter())
-            .unwrap();
+        create_group(&storage, b"hunter2", ["users", "private"].iter(),
+                     no_prompt).unwrap();
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         assert_eq!(4, mk.keys.len());
@@ -719,11 +766,12 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second",
+                no_prompt).unwrap();
         assert_err!(
             ErrorKind::KeyNotInGroup(..),
             assoc_group(&storage, b"hunter2", b"hunter3",
-                        ["group"].iter()));
+                        ["group"].iter(), no_prompt));
     }
 
     #[test]
@@ -731,11 +779,12 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second",
+                no_prompt).unwrap();
         create_group(&storage, b"hunter2", ["users", "shared", "private"]
-                     .iter()).unwrap();
+                     .iter(), no_prompt).unwrap();
         assoc_group(&storage, b"hunter2", b"hunter3", ["users", "shared"]
-                    .iter()).unwrap();
+                    .iter(), no_prompt).unwrap();
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
@@ -754,7 +803,7 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::CannotDisassocGroup(_),
                     disassoc_group(&storage, "original",
-                                   ["everyone"].iter()));
+                                   ["everyone"].iter(), no_prompt));
     }
 
     #[test]
@@ -762,11 +811,14 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
-        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second",
+                no_prompt).unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter(),
+                     no_prompt).unwrap();
         assert_err!(
             ErrorKind::WouldDisassocLastKeyFromGroup(..),
-            disassoc_group(&storage, "original", ["group"].iter()));
+            disassoc_group(&storage, "original", ["group"].iter(),
+                           no_prompt));
     }
 
     #[test]
@@ -776,7 +828,8 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(
             ErrorKind::KeyNotInGroup(..),
-            disassoc_group(&storage, "original", ["group"].iter()));
+            disassoc_group(&storage, "original", ["group"].iter(),
+                           no_prompt));
     }
 
     #[test]
@@ -786,7 +839,7 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(
             ErrorKind::KeyNotInKdfList(..),
-            disassoc_group(&storage, "plugh", ["root"].iter()));
+            disassoc_group(&storage, "plugh", ["root"].iter(), no_prompt));
     }
 
     #[test]
@@ -794,11 +847,14 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
-        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
-        assoc_group(&storage, b"hunter2", b"hunter3", ["group"].iter())
-            .unwrap();
-        disassoc_group(&storage, "original", ["group", "root"].iter()).unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second",
+                no_prompt).unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter(),
+                     no_prompt).unwrap();
+        assoc_group(&storage, b"hunter2", b"hunter3", ["group"].iter(),
+                    no_prompt).unwrap();
+        disassoc_group(&storage, "original", ["group", "root"].iter(),
+                       || Ok((&b"hunter3"[..]).to_owned())).unwrap();
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();
@@ -812,9 +868,9 @@ mod test {
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::CannotDestroyGroup(..),
-                    destroy_group(&storage, ["everyone"].iter()));
+                    destroy_group(&storage, ["everyone"].iter(), no_prompt));
         assert_err!(ErrorKind::CannotDestroyGroup(..),
-                    destroy_group(&storage, ["root"].iter()));
+                    destroy_group(&storage, ["root"].iter(), no_prompt));
     }
 
     #[test]
@@ -823,7 +879,7 @@ mod test {
 
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::GroupNotInKdfList(..),
-                    destroy_group(&storage, ["plugh"].iter()));
+                    destroy_group(&storage, ["plugh"].iter(), no_prompt));
     }
 
     #[test]
@@ -831,9 +887,12 @@ mod test {
         init!(storage);
 
         init_keys(&storage, b"hunter2", "original").unwrap();
-        create_group(&storage, b"hunter2", ["group"].iter()).unwrap();
-        add_key(&storage, b"hunter2", b"hunter3", "second").unwrap();
-        destroy_group(&storage, ["group"].iter()).unwrap();
+        create_group(&storage, b"hunter2", ["group"].iter(),
+                     no_prompt).unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "second",
+                no_prompt).unwrap();
+        destroy_group(&storage, ["group"].iter(),
+                      || Ok((&b"hunter2"[..]).to_owned())).unwrap();
 
         let mk = derive_key_chain(&storage, b"hunter2").unwrap();
         let mk2 = derive_key_chain(&storage, b"hunter3").unwrap();

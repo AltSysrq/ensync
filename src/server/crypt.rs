@@ -262,8 +262,6 @@ pub struct KdfEntry {
     pub created: DateTime<UTC>,
     /// The time this (logical) entry was last updated.
     pub updated: Option<DateTime<UTC>>,
-    /// The time this entry was last used to derive keys
-    pub used: Option<DateTime<UTC>>,
     /// The algorithm used.
     ///
     /// This includes the parameters used. Note that these are not parsed;
@@ -299,15 +297,13 @@ fourleaf_retrofit!(struct KdfEntry : {} {} {
     |_context, this|
     [1] created: SerDt = SerDt(this.created),
     [2] updated: Option<SerDt> = this.updated.map(SerDt),
-    [3] used: Option<SerDt> = this.used.map(SerDt),
-    [4] algorithm: String = &this.algorithm,
-    [5] salt: HashId = this.salt,
-    [6] hash: HashId = this.hash,
-    [7] groups: BTreeMap<String, HashId> = &this.groups,
+    [3] algorithm: String = &this.algorithm,
+    [4] salt: HashId = this.salt,
+    [5] hash: HashId = this.hash,
+    [6] groups: BTreeMap<String, HashId> = &this.groups,
     (?) unknown: Copied<UnknownFields<'static>> = &this.unknown,
     { Ok(KdfEntry { created: created.0,
                     updated: updated.map(|v| v.0),
-                    used: used.map(|v| v.0),
                     algorithm: algorithm, salt: salt, hash: hash,
                     groups: groups,
                     unknown: unknown.0 }) }
@@ -455,8 +451,7 @@ fn hixor(a: &HashId, b: &HashId) -> HashId {
 /// fields itself.
 pub fn create_key(passphrase: &[u8], chain: &mut KeyChain,
                   created: DateTime<UTC>,
-                  updated: Option<DateTime<UTC>>,
-                  used: Option<DateTime<UTC>>)
+                  updated: Option<DateTime<UTC>>)
                   -> KdfEntry {
     let mut salt = HashId::default();
     rand(&mut salt);
@@ -466,7 +461,6 @@ pub fn create_key(passphrase: &[u8], chain: &mut KeyChain,
     let mut entry = KdfEntry {
         created: created,
         updated: updated,
-        used: used,
         algorithm: SCRYPT_18_8_1.to_owned(),
         salt: salt,
         hash: sha3(&derived),
@@ -824,7 +818,7 @@ mod test {
     #[test]
     fn generate_and_derive_keys() {
         fn ck(passphrase: &[u8], keychain: &mut KeyChain) -> KdfEntry {
-            create_key(passphrase, keychain, UTC::now(), None, None)
+            create_key(passphrase, keychain, UTC::now(), None)
         }
 
         let mut keychain = KeyChain::generate_new();
