@@ -112,7 +112,7 @@ fn main_impl() -> Result<()> {
         .required(false)
         .takes_value(true)
         .short("f")
-        .long("from-key")
+        .long("from")
         .help("Use this value instead of `passphrase` from \
                the config to get the passphrase of the key which has the \
                groups to be granted. This \
@@ -130,7 +130,7 @@ fn main_impl() -> Result<()> {
         .required(false)
         .takes_value(true)
         .short("t")
-        .long("to-key")
+        .long("to")
         .help("Specify how to get the passphrase of the key to which \
                the groups are to be granted, like \
                with the `passphrase` line in the config")
@@ -139,7 +139,7 @@ fn main_impl() -> Result<()> {
         .required(false)
         .takes_value(true)
         .short("r")
-        .long("root-key")
+        .long("root")
         .help("Specify how to get a passphrase in the `root` group if \
                none of the operating keys are in that group")
         .default_value("prompt");
