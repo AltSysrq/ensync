@@ -253,6 +253,10 @@ struct DirContent {
     length: u32,
     /// The parsed content of this directory.
     files: HashMap<OsString, v0::Entry>,
+    /// Whether the directory has been refreshed since a call to `list()`. If
+    /// false, marking the directory as clean must be a noop because the caller
+    /// hasn't seen all the changes.
+    list_up_to_date: bool,
     /// The HMAC of the last chunk in the directory content. (There is always
     /// at least one since the `Header` is always present.)
     prev_hmac: HashId,
@@ -384,6 +388,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
     pub fn list(&self) -> Result<Vec<(OsString, FileData)>> {
         let mut content = self.content.lock().unwrap();
         self.refresh_if_needed(&mut content)?;
+        content.list_up_to_date = true;
         Ok(content.files.iter().map(
             |(name, value)| (
                 name.to_owned(),
@@ -672,6 +677,10 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         Ok((content.version, content.length))
     }
 
+    pub fn list_up_to_date(&self) -> bool {
+        self.content.lock().unwrap().list_up_to_date
+    }
+
     fn lookup_opt<'a>(&self, content: &'a mut DirContent, name: &OsStr)
                       -> Result<Option<&'a v0::Entry>> {
         self.refresh_if_needed(content)?;
@@ -774,6 +783,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
             cipher_version: cipher_version,
             length: cipher_data.len() as u32,
             files: Default::default(),
+            list_up_to_date: false,
             prev_hmac: chunk_hmac,
             physical_entries: 0,
             session_key: session_key,

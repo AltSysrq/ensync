@@ -127,6 +127,7 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
 
     fn set_dir_clean(&self, dir: &Arc<Dir<S>>) -> Result<bool> {
         let (ver, len) = dir.ver_and_len()?;
+        if !dir.list_up_to_date() { return Ok(false); }
         let parent = if let Some(ref parent) = dir.parent {
             sqlite::Value::Binary(parent.id.to_vec())
         } else {
@@ -1035,11 +1036,13 @@ mod test {
         let root2 = replica1.root().unwrap();
 
         assert!(replica1.is_dir_dirty(&root1));
+        replica1.list(&mut root1).unwrap();
         replica1.create(
             &mut root1, File(&oss("sub"), &FileData::Directory(0o700)),
             None).unwrap();
         let mut subdir1 = replica1.chdir(&root1, &oss("sub")).unwrap();
         assert!(replica1.is_dir_dirty(&subdir1));
+        replica1.list(&mut subdir1).unwrap();
         replica1.create(
             &mut subdir1, File(&oss("sym"), &FileData::Symlink(oss("target"))),
             None).unwrap();
@@ -1047,7 +1050,8 @@ mod test {
         replica1.create(
             &mut root1, File(&oss("other"), &FileData::Directory(0o700)),
             None).unwrap();
-        let otherdir1 = replica1.chdir(&root1, &oss("other")).unwrap();
+        let mut otherdir1 = replica1.chdir(&root1, &oss("other")).unwrap();
+        replica1.list(&mut otherdir1).unwrap();
 
         replica1.set_dir_clean(&root1).unwrap();
         replica1.set_dir_clean(&subdir1).unwrap();
@@ -1073,6 +1077,82 @@ mod test {
         assert!(replica1.is_dir_dirty(&root1));
         assert!(replica1.is_dir_dirty(&subdir1));
         assert!(!replica1.is_dir_dirty(&otherdir1));
+    }
+
+    #[test]
+    fn setting_dir_clean_is_noop_if_concurrently_modified() {
+        let dir = TempDir::new("storage").unwrap();
+        let key_chain = Arc::new(KeyChain::generate_new());
+
+        let storage1 = LocalStorage::open(dir.path()).unwrap();
+        let replica1 = ServerReplica::new(
+            ":memory:", key_chain.clone(),
+            Arc::new(storage1), "r00t", 1024,
+            flate2::Compression::Fast).unwrap();
+        replica1.create_root().unwrap();
+        let mut root1 = replica1.root().unwrap();
+
+        let storage2 = LocalStorage::open(dir.path()).unwrap();
+        let replica2 = ServerReplica::new(
+            ":memory:", key_chain.clone(),
+            Arc::new(storage2), "r00t", 1024,
+            flate2::Compression::Fast).unwrap();
+        let mut root2 = replica1.root().unwrap();
+
+        // Process 1 gets a snapshot of the root
+        replica1.list(&mut root1).unwrap();
+        // But then process 2 modifies the root
+        replica2.create(&mut root2, File(
+            &oss("foo"), &FileData::Directory(0o700)), None).unwrap();
+        // And then process 1 tries to mark the root as clean, even though it
+        // hasn't seen the change.
+        replica1.set_dir_clean(&root1).unwrap();
+
+        // But on the next prepare it discovers that the directory is in fact
+        // dirty.
+        replica1.prepare().unwrap();
+        let root = replica1.root().unwrap();
+        assert!(replica1.is_dir_dirty(&root));
+    }
+
+    #[test]
+    fn setting_dir_clean_is_noop_if_concurrently_modified_both() {
+        let dir = TempDir::new("storage").unwrap();
+        let key_chain = Arc::new(KeyChain::generate_new());
+
+        let storage1 = LocalStorage::open(dir.path()).unwrap();
+        let replica1 = ServerReplica::new(
+            ":memory:", key_chain.clone(),
+            Arc::new(storage1), "r00t", 1024,
+            flate2::Compression::Fast).unwrap();
+        replica1.create_root().unwrap();
+        let mut root1 = replica1.root().unwrap();
+
+        let storage2 = LocalStorage::open(dir.path()).unwrap();
+        let replica2 = ServerReplica::new(
+            ":memory:", key_chain.clone(),
+            Arc::new(storage2), "r00t", 1024,
+            flate2::Compression::Fast).unwrap();
+        let mut root2 = replica1.root().unwrap();
+
+        // Process 1 gets a snapshot of the root
+        replica1.list(&mut root1).unwrap();
+        // But then process 2 modifies the root
+        replica2.create(&mut root2, File(
+            &oss("foo"), &FileData::Directory(0o700)), None).unwrap();
+        // Process 1 then also does a modification. This causes the cached
+        // directory state to be refreshed to reflect process 2's change, but
+        // because this wasn't taken into account in the call to `list()`,
+        // marking the dir clean should have no effect.
+        replica1.create(&mut root1, File(
+            &oss("bar"), &FileData::Directory(0o700)), None).unwrap();
+        replica1.set_dir_clean(&root1).unwrap();
+
+        // But on the next prepare it discovers that the directory is in fact
+        // dirty.
+        replica1.prepare().unwrap();
+        let root = replica1.root().unwrap();
+        assert!(replica1.is_dir_dirty(&root));
     }
 
     #[test]
