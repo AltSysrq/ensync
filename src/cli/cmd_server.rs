@@ -16,12 +16,16 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::io::{stdin, stdout};
+use std::env;
+use std::fs;
+use std::io::{Write, stdin, stdout};
 use std::path::Path;
 use libc::isatty;
 
 use errors::*;
 use server::{LocalStorage, rpc};
+
+pub const SHELL_IDENTITY: &'static str = "I am ensync shell";
 
 pub fn run<P : AsRef<Path>>(path: P) -> Result<()> {
     if 1 == unsafe { isatty(0) } || 1 == unsafe { isatty(1) } {
@@ -36,4 +40,22 @@ pub fn run<P : AsRef<Path>>(path: P) -> Result<()> {
                               path.display()))?;
     rpc::run_server_rpc(storage, stdin(), stdout())
         .chain_err(|| "Server-side RPC handler failed")
+}
+
+pub fn shell() -> Result<()> {
+    if 1 == unsafe { isatty(0) } || 1 == unsafe { isatty(1) } {
+        return Err("Ensync shell is not for interactive use".into());
+    }
+
+    // If we have been given any arguments, print a string that lets `ensync
+    // setup` recognise us.
+    if env::args().count() > 1 {
+        print!("{}\x00", SHELL_IDENTITY);
+        stdout().flush()?;
+    }
+
+    let path = fs::read_link("ensync-server-dir").chain_err(
+        || "Failed to read symlink '~/ensync-server-dir' (needs to be a \
+            symlink to where `ensync server` should place files)")?;
+    run(path)
 }

@@ -82,11 +82,26 @@ fn main() {
 }
 
 fn main_impl() -> Result<()> {
+    use std::env;
     use std::fs;
 
     use clap::*;
 
     use cli::config::PassphraseConfig;
+
+    {
+        let mut args = env::args().fuse();
+        // If invoked as the login shell, go to a special server-only
+        // code-path.
+        if args.next().map_or(false, |arg0| arg0.starts_with("-")) {
+            return cli::cmd_server::shell();
+        }
+        // If the second argument is `-c`, assume we're being run as the shell
+        // by ssh.
+        if args.next().map_or(false, |arg1| "-c" == &arg1) {
+            return cli::cmd_server::shell();
+        }
+    }
 
     let config_arg = Arg::with_name("config")
         .help("Path to Ensync configuration and local data")

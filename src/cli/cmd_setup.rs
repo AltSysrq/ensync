@@ -28,8 +28,9 @@ use std::sync::Arc;
 
 use toml;
 
-use cli::open_server::{connect_server_storage, open_server_replica};
+use cli::cmd_server::SHELL_IDENTITY;
 use cli::config::*;
+use cli::open_server::{connect_server_storage, open_server_replica};
 use defs::{File, FileData};
 use errors::*;
 use replica::Replica;
@@ -109,7 +110,10 @@ Does this look reasonable? ", full_local.display(), remote_path,
 
         let mut child = process::Command::new("ssh")
             .arg(&host)
-            .arg("/bin/sh")
+            // If we actually connect to a POSIX shell, we get the `0`
+            // response. However, if the server is running ensync shell, it
+            // ignores these arguments and returns `SHELL_IDENTITY`.
+            .arg("printf").arg("'0\\0'").arg("&&").arg("exec").arg("sh")
             .stderr(process::Stdio::inherit())
             .stdin(process::Stdio::piped())
             .stdout(process::Stdio::piped())
@@ -123,26 +127,31 @@ Does this look reasonable? ", full_local.display(), remote_path,
         let ensync_path = configure_server(&mut output, &mut input,
                                            remote_path)?;
 
-        // Using `exec` ensures that if the process fails to start, the shell
-        // exits anyway and we don't end up feeding binary fourleaf data into
-        // the shell. We also put the `printf` in the same statement so that we
-        // can wait for that byte come in to know that the shell as
-        // relinquished stdin.
-        writeln!(input, "printf . && exec {} server {}",
-                 shell_escape(&ensync_path), shell_escape(remote_path))
-            .and_then(|_| input.flush())
-            .chain_err(|| "Failed to start server process")?;
+        let command;
+        if let Some(ensync_path) = ensync_path {
+            // Using `exec` ensures that if the process fails to start, the
+            // shell exits anyway and we don't end up feeding binary fourleaf
+            // data into the shell. We also put the `printf` in the same
+            // statement so that we can wait for that byte come in to know that
+            // the shell as relinquished stdin.
+            writeln!(input, "printf . && exec {} server {}",
+                     shell_escape(&ensync_path), shell_escape(remote_path))
+                .and_then(|_| input.flush())
+                .chain_err(|| "Failed to start server process")?;
 
-        let mut period = [0u8;1];
-        output.read_exact(&mut period).chain_err(
-            || "Failed to wait for server process to start")?;
+            let mut period = [0u8;1];
+            output.read_exact(&mut period).chain_err(
+                || "Failed to wait for server process to start")?;
 
-        let command = format!("ssh {} {} server {}",
+            command = format!("ssh -T {} {} server {}",
                               shell_escape(&host),
                               // Awkwardly, we need to double-escape the paths
                               // here since they get passed to `sh -c`.
                               shell_escape(&shell_escape(&ensync_path)),
                               shell_escape(&shell_escape(remote_path)));
+        } else {
+            command = format!("ssh -T {}", shell_escape(&host));
+        }
         server_spec = format!("shell:{}", command);
         storage = Arc::new(
             connect_server_storage(child, input, output, &command)?);
@@ -429,8 +438,22 @@ fn confirm(msg: &str) -> Result<()> {
 
 fn configure_server<R : Read, W : Write>(output: R, mut input: W,
                                          remote_path: &str)
-                                         -> Result<String> {
+                                         -> Result<Option<String>> {
     let mut output = io::BufReader::new(output);
+
+    // Read the response from the `printf` at the beginning of the ssh shell
+    // command.
+    let is_ensync_shell = read_shell_response(&mut output)?;
+    if SHELL_IDENTITY == &is_ensync_shell {
+        if !remote_path.is_empty() {
+            return Err("The server is running ensync as a shell; you cannot \
+                        specify the server-side path (just write `host:` or \
+                        `user@host:`".into());
+        }
+        return Ok(None);
+    } else if "0" != &is_ensync_shell {
+        return Err("Unexpected response from server shell".into());
+    }
 
     sanity_check_remote(ShellPathAccess {
         input: &mut input, output: &mut output
@@ -445,7 +468,7 @@ fn configure_server<R : Read, W : Write>(output: R, mut input: W,
          printf 'nothing\\0'")?;
 
     if "nothing" != &found {
-        return Ok(found);
+        return Ok(Some(found));
     }
 
     // Eventually, we should try some options here to set this up for the
@@ -454,11 +477,14 @@ fn configure_server<R : Read, W : Write>(output: R, mut input: W,
 }
 
 fn remote_shell_command<R : BufRead, W : Write>
-    (mut input: W, mut output: R, command: &str) -> Result<String>
+    (mut input: W, output: R, command: &str) -> Result<String>
 {
     writeln!(input, "{}", command).and_then(|_| input.flush())
         .chain_err(|| "Error writing shell command to server")?;
+    read_shell_response(output)
+}
 
+fn read_shell_response<R : BufRead>(mut output: R) -> Result<String> {
     let mut buf = Vec::new();
     output.read_until(0, &mut buf).chain_err(
         || "Failed to read shell response from server")?;
@@ -544,6 +570,9 @@ fn sanity_check_remote<A : PathAccess, P : AsRef<Path>>
     (mut access: A, remote: P) -> Result<()>
 {
     let remote = remote.as_ref();
+    if remote.iter().next().is_none() {
+        return Err("Remote path is empty".into());
+    }
 
     if access.exists(remote)? {
         if !access.is_dir(remote)? {
