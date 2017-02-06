@@ -4,7 +4,43 @@ Ensync
 Introduction
 ------------
 
-TODO
+Ensync is an ENcrypted file SYNChroniser. That is, it synchronises files
+between one or more clients via a central "server" (which might just be, e.g.,
+a flash drive) location, but encrypts the data on the server such that it is
+impossible to recover the data stored on the server without knowing the keys.
+
+Features:
+
+- Support for full bidirectional synchronisation.
+
+- Flexible, hierarchical sync rules configuration.
+
+- Optional transparent compression for file transfers and server-side storage.
+
+- Transparent block deduplication. If two clients store the same file in the
+  same storage location, the backing storage will be shared, even if the
+  clients cannot read each others' data.
+
+- Support for multiple passphrases / keys to access the server store.
+
+- Support for separate key groups, to prevent some clients from reading/writing
+  other clients' data.
+
+Please note that Ensync's cryptographic properties have not been independently
+verified.
+
+Supported platforms:
+
+- The author regularly uses Ensync on FreeBSD (AMD64), DragonFly BSD, and Linux
+  (AMD64 and ARM7), so it is known to work well on those systems.
+
+- In general, any POSIX-like system that Rust supports should be able to run
+  Ensync.
+
+- Windows is currently *not* supported. While not inherently impossible,
+  Windows's filesystem quirks make support rather difficult to implement. There
+  are currently no plans to implement such support, but contributions would be
+  welcome.
 
 ### Contents
 
