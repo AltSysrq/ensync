@@ -34,13 +34,14 @@ use cli::open_server::open_server_replica;
 use cli::config::Config;
 use cli::format_date;
 use defs::*;
+use dry_run_replica::DryRunReplica;
 use errors::*;
 use interrupt;
 use log::*;
 use posix::*;
 use reconcile::compute::*;
 use reconcile;
-use replica::Replica;
+use replica::{Condemn, Replica, NullTransfer};
 use rules;
 use server::*;
 use work_stack;
@@ -635,6 +636,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
            itemise: bool, itemise_unchanged: bool,
            colour: &str, spin: &str,
            include_ancestors: bool,
+           dry_run: bool,
            num_threads: u32) -> Result<()> {
     let colour = match colour {
         "never" => false,
@@ -712,20 +714,52 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         },
     };
 
-    // For some reason the type parms on `Context` are required
-    let context = Arc::new(reconcile::Context::<
-            PosixReplica, AncestorReplica, ServerReplica<Storage>,
-            LoggerImpl, rules::engine::DirEngine> {
-        cli: client_replica,
-        anc: ancestor_replica,
-        srv: server_replica,
-        log: log,
-        root_rules: rules::engine::FileEngine::new(
-            config.sync_rules.clone()),
-        work: work_stack::WorkStack::new(),
-        tasks: reconcile::UnqueuedTasks::new(),
-    });
+    if dry_run {
+        let context = Arc::new(reconcile::Context::<
+                DryRunReplica<PosixReplica>,
+                DryRunReplica<AncestorReplica>,
+                DryRunReplica<ServerReplica<Storage>>,
+                LoggerImpl, rules::engine::DirEngine> {
+            cli: DryRunReplica(client_replica),
+            anc: DryRunReplica(ancestor_replica),
+            srv: DryRunReplica(server_replica),
+            log: log,
+            root_rules: rules::engine::FileEngine::new(
+                config.sync_rules.clone()),
+            work: work_stack::WorkStack::new(),
+            tasks: reconcile::UnqueuedTasks::new(),
+        });
 
+        run_sync(context, level, num_threads)
+    } else {
+        // For some reason the type parms on `Context` are required
+        let context = Arc::new(reconcile::Context::<
+                PosixReplica, AncestorReplica, ServerReplica<Storage>,
+                LoggerImpl, rules::engine::DirEngine> {
+            cli: client_replica,
+            anc: ancestor_replica,
+            srv: server_replica,
+            log: log,
+            root_rules: rules::engine::FileEngine::new(
+                config.sync_rules.clone()),
+            work: work_stack::WorkStack::new(),
+            tasks: reconcile::UnqueuedTasks::new(),
+        });
+
+        run_sync(context, level, num_threads)
+    }
+}
+
+fn run_sync<CLI : Replica + 'static,
+            ANC : Replica + NullTransfer + Condemn + 'static,
+            SRV : Replica<TransferIn = CLI::TransferOut,
+                          TransferOut = CLI::TransferIn> + 'static>
+    (context: Arc<reconcile::Context<CLI, ANC, SRV, LoggerImpl,
+                                     rules::engine::DirEngine>>,
+     level: LogLevel,
+     num_threads: u32)
+    -> Result<()>
+{
     macro_rules! spawn {
         (|$context:ident| $body:expr) => { {
             let $context = $context.clone();

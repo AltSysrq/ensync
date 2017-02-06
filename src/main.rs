@@ -51,6 +51,7 @@ mod rules;
 mod log;
 mod replica;
 #[cfg(test)] mod memory_replica;
+mod dry_run_replica;
 mod reconcile;
 mod block_xfer;
 mod ancestor;
@@ -241,7 +242,13 @@ or `shell:some shell command` to use the output of a shell command."))
                          .default_value("auto")
                          .possible_values(&["auto", "always", "never"])
                          .help("Control whether the progress spinner \
-                                is shown")))
+                                is shown"))
+                    .arg(Arg::with_name("dry-run")
+                         .short("n")
+                         .long("dry-run")
+                         .required(false)
+                         .takes_value(false)
+                         .help("Don't actually make any changes")))
         .subcommand(
             SubCommand::with_name("key")
             .about("Perform key management operations")
@@ -656,6 +663,7 @@ store hasbeen initialised; see `key add` for that instead."))
                            matches.value_of("colour").unwrap(),
                            matches.value_of("spin").unwrap(),
                            matches.is_present("include-ancestors"),
+                           matches.is_present("dry-run"),
                            num_threads)
     } else if let Some(matches) = matches.subcommand_matches("ls") {
         set_up!(matches, config, storage, replica);
