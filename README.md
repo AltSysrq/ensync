@@ -46,21 +46,160 @@ Supported platforms:
 
 1. [Getting Started](#getting-started)
 2. [About the Sync Process](#about-the-sync-process)
-3. [Understanding the Sync Model](#understanding-the-sync-model)
-4. [Advanced Sync Rules](#advanced-sync-rules)
-5. [Using Multiple Keys](#using-multiple-keys)
-6. [Using Key Groups](#using-key-groups)
-7. [Security Considerations](#security-considerations)
+3. [Configuration Reference](#configuration-reference)
+4. [Understanding the Sync Model](#understanding-the-sync-model)
+5. [Advanced Sync Rules](#advanced-sync-rules)
+6. [Key Management](#key-management)
+7. [Using Key Groups](#using-key-groups)
+8. [Security Considerations](#security-considerations)
 
 Getting Started
 ---------------
 
-TODO
+The first thing to do is, of course, install Ensync. The easiest way to do this
+right now is with cargo:
+
+```shell
+  cargo install ensync
+```
+
+If you are on DragonFly, you also need to pass `--no-default-features`.
+
+If you will be syncing to a remote host, Ensync will also need to be installed
+there.
+
+After that, you need to set up configuration and if needed initialise the
+remote storage. This can either be done automatically with `ensync setup`, or
+by manually doing each step.
+
+### Automatic Setup
+
+The `ensync setup` command will write the configuration and perform all setup
+steps automatically, as well as do some sanity checks. It is recommended if you
+haven't used ensync before. Manual setup may be necessary for unusual setups.
+
+The basic `ensync setup` invocation takes three arguments:
+
+- The configuration location. This must name a directory to be created.
+  Configuration files and sync state is placed within this directory.
+
+- The local file location. This is a directory containing the files you want to
+  sync.
+
+- The remote storage location. This may be a directory on your local
+  filesystem, or may be an scp-style `user@host:path`-format string. In the
+  latter case, `ensync setup` will connect to the remote host with
+  `ssh user@host`.
+
+If you don't want your passphrase to be read from the terminal, you can pass
+the `--key` parameter to `ensync setup`, which takes a string in the
+[passphrase configuration](#passphrase-configuration) format. If you use a
+`file` passphrase, the generated configuration will reference the absolute path
+of that file. In the case of a `shell` passphrase, the configuration simply
+holds the string you passed in. In both these cases, you may wish to move files
+into the configuration directory after setup completes and edit the
+configuration accordingly.
+
+Once `ensync setup` completes successfully, you should be good to go. To
+actually sync files, simply run:
+
+```
+  ensync sync /path/to/config
+```
+
+### Manual Setup
+
+First, create a new directory to be the configuration directory. Within this
+directory, create a file named `config.toml`. See the [Configuration
+Reference](#configuration-reference) section for full details on what the
+configuration means. A minimal example:
+
+```toml
+[general]
+path = "/path/to/your/files"
+server = "shell:ssh yourserver.example.com ensync server ensync-data"
+server_root = "your-logical-root"
+passphrase = "prompt"
+compression = "best"
+
+[[rules.root.files]]
+mode = "cud/cud"
+```
+
+If this is the first time using that particular storage instance, you need to
+initialise the key store:
+
+```sh
+  ensync key init /path/to/config
+```
+
+If your chosen `server_root` has not been created on the server yet, you also
+need to take care of that now:
+
+```sh
+  ensync mkdir /path/to/config /your-logical-root
+``
+
+With that taken care of, you should be good to go, and can run
+
+```sh
+  ensync sync /path/to/config
+```
+
+to start syncing.
 
 About the Sync Process
 ----------------------
 
-TODO Expand
+### Overview
+
+Ensync uses a three-phase sync process:
+
+1. Search for changes.
+2. Reconcile and apply changes.
+3. Clean up.
+
+In the first phase, Ensync scans every local directory it had previously marked
+as clean to see if there may be any changes, and similarly tests whether
+server-side directories marked as clean have been changed. This phase is only
+used to determine what directories need to be processed.
+
+In the "reconcile and apply changes" phase, Ensync recursively walks the client
+and server directory trees, ignoring directories which are still clean
+(including all subdirectories). Separate directories are processed in parallel.
+
+For each examined directory, Ensync lists all files, matches them by name, and
+then determines what change should be applied. When reconciliation is done, it
+applies the selected change to each file in sequence. If all operations
+succeed, the directory is marked clean.
+
+In the cleanup phase, temporary and orphaned files are cleaned, and volatile
+data committed.
+
+### Efficient Rename Handling
+
+Ensync is not aware of file rename operations; it simply sees them as a
+deletion of one file followed by a creation of another file. However, Ensync
+does take some steps to prevent needing to re-transfer file content in this
+case.
+
+On the server, blocks from deleted files linger until some client runs its
+cleanup phase. This means that if a new file is created during the same sync
+with the same content, it will be able to reuse those blocks instead of needing
+to re-upload them.
+
+Locally, deleted files are moved to a temporary location inside the
+configuration/state directory and not actually deleted until the cleanup phase.
+If the same content is encountered again, the data is copied out of the moved
+file instead of being re-downloaded from the server. This functionality does
+require, however, that the directory being synced is on the same filesystem as
+the configuration directory. If it is not, deleted files are simply deleted
+immediately, so renames will require re-downloading from the server in cases
+where the deletion is seen first.
+
+Keep in mind that due to these optimisations, disk usage will not reduce due to
+deletions until Ensync completes, which could cause issues a sync
+simultaneously creates and deletes a lot of very large files.
 
 ### Concurrency and Failure
 
@@ -135,6 +274,97 @@ If your system permits opening directories as regular files (eg, FreeBSD), you
 may end up in a weird situation if something changes a regular file into a
 directory at just the right moment. No data will be lost locally, but the raw
 content of the directory may propagate as a regular file instead.
+
+Configuration Reference
+-----------------------
+
+### At a Glance
+
+The configuration is a [TOML](https://github.com/toml-lang/toml#toml) file
+stored as `config.toml` under the configuration directory. It has two required
+sections: `[general]` and `[rules]`. All file names are relative to the
+configuration directory. The configuration looks like this:
+
+```toml
+[general]
+# The path to the local files, i.e., the directory containing the cleartext
+# files to be synced.
+path = "/some/path"
+
+# The server location, i.e., where the encrypted data is stored. The exact
+# syntax for this described below.
+server = "path:/another/path"
+
+# The name of the logical root on the server to sync with. This is the name of
+# a directory under the physical root of the server which is used as the top of
+# the directory tree to be synced.
+server_root = "the-root-name"
+
+# How to get the passphrase to derive the encryption keys. The formats
+# supported are described below.
+passphrase = "prompt"
+
+# What level of transparent file compression to use. Valid values are "none",
+# "fast", "default", "best". This configuration can be omitted, in which case
+# it defaults to "default".
+compression = "default"
+
+# Files uploaded to the server are split into blocks of this size. Identical
+# blocks are only stored once on the server. A smaller block size may make this
+# deduplication more effective, but will slow some things down. This can be
+# omitted and will default to one megabyte. If you change it, take care that
+# the block size actually corresponds to what you intend to deduplicate;
+# generally, this should be a power of two since many things that have large
+# random-write files align their writes to sector or page boundaries.
+block_size = 1048576
+
+# Specifies the sync rules. This is described in detail in the "Advanced Sync
+# Rules" section. The example here is sufficient to apply one sync mode to
+# all files.
+[[rules.root.files]]
+# The sync mode to use; that is, it describes how various changes are or are
+# not propagated. This example is conservative full bidirectional sync. See
+# "Understanding the Sync Model" for a full description of what this means.
+mode = "cud/cud"
+```
+
+#### Server Configuration
+
+The `server` configuration can take one of two forms.
+
+`path:some-path` causes the "server" to be simply the path `some-path` on the
+local filesystem. This is what is used to sync to a flash drive, for example.
+
+`shell:some command` causes a server process `some command` to be spawned. The
+client process communicates with the server via the child process's standard
+input and output. The `ensync server` command is the server process this
+normally communicates with. Because of this design, you can compose the command
+with anything that forwards standard input and output, such as ssh, which is
+the usual way of syncing to a remote host. For example, the configuration
+
+```
+server = "shell:ssh myserver.example.org ensync server sync-data
+```
+
+will cause the Ensync client to ssh into `myserver.example.org` and run `ensync
+server sync-data`, which in turn causes the encrypted data to be stored in
+`~/sync-data`.
+
+### Passphrase Configuration
+
+The `passphrase` configuration can take one of four forms.
+
+`prompt` specifies to read the passphrase from the controlling terminal. This
+is supported on most, but not all, platforms (DragonFly is the main exception).
+
+`string:xxx` specifies to use `xxx` as the literal passphrase.
+
+`file:some-file` specifies to read the content of `some-file` and use that as
+the passphrase. Any trailing CR or LF characters are stripped from the input.
+
+`shell:some command` specifies to pass `some command` to the shell, and use the
+standard output of the command as the passphrase. As with `file`, trailing CR
+and LF characters are stripped.
 
 Understanding the Sync Model
 ----------------------------
@@ -355,8 +585,8 @@ switch = "private"
 mode = "cud/cud"
 ```
 
-Using Multiple Keys
--------------------
+Key Management
+--------------
 
 TODO
 
