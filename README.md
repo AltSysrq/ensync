@@ -369,7 +369,243 @@ and LF characters are stripped.
 Understanding the Sync Model
 ----------------------------
 
-TODO
+### Introduction
+
+Ensync sync model is to essentially perform a 3-way merge on the contents of
+each directory.
+
+The way this works may be clearer if we start by thinking about how syncing
+might work as a _2-way_ merge of the contents of a directory. A 2-way directory
+merge means to list the contents of each corresponding directory, then match
+files on each replica together based on their name. Then, determine what needs
+to change for each file or pair of files. For example, we might visit a
+directory and build a table like this:
+
+File name       | Client content        | Server content
+----------------|-----------------------|-----------------------
+hello.txt       | hello world           | hello world
+password.txt    | hunter2               | hunter2
+
+This directory is clearly in-sync; the client and server agree on everything.
+Now let's edit one of the files.
+
+File name       | Client content        | Server content
+----------------|-----------------------|-----------------------
+hello.txt       | hallo welt            | hello world
+password.txt    | hunter2               | hunter2
+
+When our 2-way merger runs, it sees that the two replicas disagree on the
+content of `hello.txt`, so clearly one of them must be edited to match the
+other. But there isn't a clear way to choose. One option is to use the one with
+the later modified time; in this case, it would be the client, which does what
+we want.
+
+This approach is called "Last Write Wins", and does work for many cases, but
+also has a lot of problems. For example, if you restore some files from backup
+and the backup tool restores their modified time as well, our 2-way merger
+would immediately undo the restoration since the server-side files would be
+newer.
+
+But 2-way merge completely breaks once we bring file creation and deletion into
+the picture. Let's see what happens if we delete "password.txt" on the client
+and someone else creates a new file on the server:
+
+File name       | Client content        | Server content
+----------------|-----------------------|-----------------------
+hello.txt       | hello world           | hello world
+memo.txt        | _(none)_              | some text here
+password.txt    | _(none)_              | hunter2
+
+Notice that for the two files in question, the table looks _exactly the same_.
+No logic on this state can handle both the creation and the deletion correctly.
+And we don't have any timestamps to work with this time.
+
+What Ensync does is add a _third_ replica, the "ancestor" replica, which stores
+the last state for each file that was in-sync for the client and server
+replicas. This ancestor replica is used to determine which end replica(s) have
+actually changed. Thus, our "everything in-sync" table actually looks like
+
+File name       | Client content        | Ancestor content      | Server content
+----------------|-----------------------|-----------------------|---------------
+hello.txt       | hello world           | hello world           | hello world
+password.txt    | hunter2               | hunter2               | hunter2
+
+And the create-and-delete table actually looks like
+
+File name       | Client content        | Ancestor content      | Server content
+----------------|-----------------------|-----------------------|---------------
+hello.txt       | hello world           | hello world           | hello world
+memo.txt        | _(none)_              | _(none)_              | some text here
+password.txt    | _(none)_              | hunter2               | hunter2
+
+Now, the cases for the creation and deletion are different. We can clearly see
+that "password.txt" once did exist on both end replicas (since it _is_ in the
+ancestor replica) but is now gone from the client and was thus deleted, as well
+as that "memo.txt" was never seen before and thus must be a creation.
+
+Note that for simplicity we notate the ancestor replica as having particular
+content, but in reality it only stores content hashes and no actual file
+content.
+
+### Sync Mode
+
+The ancestor replica allows Ensync to determine what _has_ changed. The
+configured _sync mode_ tells Ensync what _should be_ changed in response.
+
+The sync is normally specified as a 7-character string formatted like
+`cud/cud`. Each letter is a flag; a lowercase letter indicates "on", an
+uppercase letter indicates "force", and replacing the letter with a hyphen
+means "off". Below shows the name and meaning of each flag.
+
+```
+        ┌─────── "Sync inbound create"
+        │        New remote files are downloaded to the local filesystem
+        │┌────── "Sync inbound update"
+        ││       Edits to remote files are applied to local files
+        ││┌───── "Sync inbound delete"
+        │││      Files deleted remotely are deleted in the local filesystem
+        cud/cud
+            │││
+            ││└─ "Sync outbound delete"
+            ││   Files deleted in the local filesystem are deleted remotely
+            │└── "Sync outbound update"
+            │    Edits to local files are applied to remote files
+            └─── "Sync outbound create"
+                 New local files are uploaded to remote storage
+```
+
+More specifically, each flag applies to changes that may be made to that
+replica under any condition, so they can also be viewed as giving Ensync
+"permission" to perform that type of operation. For example, if "sync inbound
+create" is off, Ensync will never create any new files locally.
+
+Setting a flag to "force" will cause Ensync to perform that operation if
+necessary to bring the replicas in-sync, even if this could result in losing
+data:
+
+- "Force create" will cause a deleted file to be recreated if the
+  opposite-bound delete setting is off.
+
+- "Force delete" will cause a new file to be deleted if the opposite-bound
+  create setting is off. It will also cause edit-delete conflicts to be
+  resolved in favour of delete when the opposite-bound create setting is off.
+
+- "Force update" will cause updates to be reverted if the opposite update
+  setting is off. It will also cause edit-edit conflicts to be resolved in
+  favour of the side _without_ "force update". If _both_ sides have "force
+  update", edit-edit conflicts are automatically resolved in favour of the
+  version with the newer modified time, or the client if tied.
+
+The most useful sync modes also have aliases:
+
+- "mirror" is an alias for "---/CUD" (all outbound set to "force", all inbound
+  set to "off"). This causes the server replica to be modified to exactly match
+  the client side, without making any modifications to the client side at all.
+
+- "conservative-sync" is an alias for "cud/cud", i.e., conservative
+  bidirectional sync.
+
+- "aggressive-sync" is an alias for "CUD/CUD", i.e., bidirectional sync with
+  automatic resolution of all conflicts.
+
+### Non-Conflicting States
+
+The below table shows what actions are taken for various (client, ancestor,
+server) states and sync modes. A `*` in the sync mode or state indicates
+"anything"; uppercase letters in the state indicate content (i.e., `(A,A,A)`
+indicates client, ancestor, and server have identical file content;
+`(A,∅,B)` indicates client and server have different file content and the
+ancestor has no content). Conflicts are shown here, but discussed in the next
+section.
+
+State           | Sync mode     | Action
+----------------|---------------|---------
+`(∅,*,∅)`       | `***/***`     | None
+`(∅,∅,A)`       | `c**/***`     | Create file on client
+`(∅,∅,A)`       | `-**/**D`     | Delete file on server
+`(∅,∅,A)`       | (otherwise)   | Leave out-of-sync
+`(∅,A,A)`       | `***/**d`     | Delete file on server
+`(∅,A,A)`       | `C**/**-`     | Recreate file on client
+`(∅,A,A)`       | (otherwise)   | Leave out-of-sync
+`(∅,A,B)`       | `***/***`     | _Edit-delete conflict_
+`(A,∅,∅)`       | `***/c**`     | Create file on server
+`(A,∅,∅)`       | `**D/-**`     | Delete file on client
+`(A,∅,∅)`       | (otherwise)   | Leave out-of-sync
+`(A,A,∅)`       | `**d/***`     | Delete file on client
+`(A,A,∅)`       | `**-/C**`     | Recreate file on server
+`(A,B,∅)`       | `***/***`     | _Edit-delete conflict_
+`(A,*,A)`       | `***/***`     | None
+`(A,A,B)`       | `*u*/***`     | Update client to B
+`(A,A,B)`       | `*-*/*U*`     | Revert server to A
+`(A,A,B)`       | (otherwise)   | Leave out-of-sync
+`(A,B,B)`       | `***/*u*`     | Update server to A
+`(A,B,B)`       | `*U*/*-*`     | Revert client to B
+`(A,B,B)`       | (otherwise)   | Leave out-of-sync
+`(A,∅,C)`       | `***/***`     | _Edit-edit conflict_
+`(A,B,C)`       | `***/***`     | _Edit-edit conflict_
+
+### Conflicting States
+
+A conflict occurs when the client and server have both changed to different
+states since the last sync. Ensync generally tries to handle conflicts as
+conservatively as possible, but this can be controlled by the sync mode.
+
+An edit-delete conflict occurs when one replica has modified a file since the
+last sync, and the other has deleted it. Ensync resolves an edit-delete
+conflict by taking the first choice below according to the sync mode:
+
+- If create is enabled on the side that deleted the file, recreate the file
+  with the new content, since dealing with an unwanted extra file is easier
+  than recovering data that was deleted.
+
+- If delete is set to "force" on the side that edited the file, delete it from
+  that side.
+
+- Otherwise, leave the file out-of-sync.
+
+An edit-edit conflict occurs when both the client and server replicas have
+changed the state of a file since the last sync, and those states are
+different. If the replicas each create a file with different content, it is
+also considered an edit-edit conflict. Edit-edit conflicts are handled by
+taking the first choice below according to the sync mode:
+
+- If both update settings are "force" and the file has a modified time on both
+  replicas, use the version with the later modified time.
+
+- If one update setting is "force", use the version from the opposite replica.
+
+- If neither update setting is "on", leave the files out-of-sync.
+
+- If _both_ create settings are at least "on", rename the conflicting file on
+  the server (e.g., `foo.txt` → `foo~1.txt`) and then propagate both versions
+  as creates to each opposing side.
+
+- Otherwise, leave the file out-of-sync.
+
+For "less important" file properties, like mode or timestamp, Ensync always
+resolves conflicts implicitly and will not rename or create new files.
+Additionally, these fields are always carried from whatever version was
+propagated. For example, if you `chmod` a file locally, but the actual content
+is updated on the server, and both "update" settings are on, Ensync will update
+the file to have the content and mode from the server, essentially discarding
+the effect of the `chmod`.
+
+### Directory Weirdness
+
+The fact that directories contain more files that are themselves subject to
+syncing complicates the model presented above. Without going into too much
+detail:
+
+- If the above rules would delete a directory, Ensync instead recurses into it
+  and syncs it normally, treating the replica as already deleted as having
+  empty directories. If all files within the replica that does still have the
+  directory do in fact get deleted, then the directory itself is deleted.
+  However, if new files were introduced there, the directory path leading there
+  will instead be [re]created on the other replica.
+
+- If a directory is edited into a non-directory, Ensync will rename the
+  directory on the replica that still holds it and then proceed according to
+  the recursive delete case above.
 
 Advanced Sync Rules
 -------------------
