@@ -906,7 +906,179 @@ and then edit the configuration to have `my-client.ensync[rw=my-group]` as the
 Security Considerations
 -----------------------
 
-TODO
+### How Ensync does Encryption
+
+For the purpose of not duplicating documentation, this section only skims over
+the details. The [source code](src/server/crypt.rs) has more detailed
+documentation.
+
+Passphrases are hashed via [scrypt](http://www.tarsnap.com/scrypt.html). The
+client verifies the passphrase is correct by comparing the SHA-3 of the derived
+key with a value stored on the server.
+
+Each key group represents a randomly-generated 32-byte internal key. To go from
+a derived key to the internal key group, the client takes the SHA-3 HMAC of the
+group name and the derived key, and then XORs every byte with a sequence stored
+in the key store on the server. Each 32-byte internal key is split into a
+16-byte AES key and a 16-byte HMAC secret.
+
+Every directory file is encrypted via AES CBC (128-bit) with a random session
+key and IV, which themselves are encrypted with the read key of that directory
+and stored at the beginning of the directory file. Directories are internally
+checksummed with SHA-3 HMAC using the HMAC secret from the read key.
+
+File blocks are encrypted with AES CBC using a key and IV taken from the SHA-3
+HMAC of the block content and the HMAC secret of the `everyone` group's
+internal key.
+
+The following things are saved in cleartext on the server and are considered
+"essentially public" information:
+
+- The names of keys and key groups.
+
+- The algorithm used for hashing each passphrase.
+
+- The salt for each passphrase.
+
+- Other metadata about each passphrase.
+
+- The SHA-3 sum of each passphrase's derived key.
+
+- The XOR of the { HMAC of each passphrase's derived key and associated key
+  group name } with the internal key of that key group.
+
+- The random 32-byte ids of directories, and their encrypted version numbers.
+
+- The SHA-3 sum of the HMAC of file blocks' content with the `everyone` group's
+  HMAC secret.
+
+- The length of directory files and the file blocks.
+
+Of course, ideally one protects the server such that this isn't actually
+revealed.
+
+### What attackers can accomplish
+
+While Ensync is designed to keep your files safe, there are some trade-offs to
+be aware of (including some which open certain side-channels), and one should
+understand what an attacker could learn or do if they gain access to various
+things.
+
+This should be prefaced by to notices:
+
+- Practise defence-in-depth. I.e., take standard measures to keep the server
+  data secure as well; use an encrypted channel for communicating with the
+  server (e.g., ssh, not telnet); etc.
+
+- Statements of what an attacker _can_ do are hard fact. Statements of what an
+  attacker _cannot_ do are subject to things being broken.
+
+The sections below are roughly ordered in ascending order by severity.
+
+#### Passively observation of encrypted Ensync ssh session
+
+It is likely possible to identify Ensync by its traffic patterns.
+
+The observer can use timing to estimate how many key entries in the key store
+were rejected. This side-channel does not reduce the strength of passphrase
+handling below that of having only one passphrase.
+
+The observer can get a reasonably good idea of how many directories are within
+the tree being synced as well as a rough estimate of how many things have
+changed based on the traffic quantity.
+
+#### Connection to ensync server
+
+E.g., the attacker gained access to an ssh session running `ensync server`.
+
+Fetching the key store (which is cleartext) is trivial.
+
+The encrypted physical root directory can be fetched trivially, which can be
+used to get a rough estimate of the number of items in the root.
+
+It is also possible to probe for particular directory ids or object ids and get
+their contents, though finding what these ids are may not be easy.
+
+#### Impersonating the Ensync server
+
+E.g., man-in-the-middle of an insecure ssh setup.
+
+Includes everything from the above scenarios.
+
+The attacker will learn various directory ids, object ids, as well as the
+"secret version" ids of some directories which guard write access to those
+directories.
+
+Assuming the attacker can proxy to the real Ensync server, it can get some
+information about the hierarchy of directory ids due to the order in which the
+client requests them.
+
+#### Access to a dump of the Ensync server data
+
+The attacker learns all directory ids, versions (secret and otherwise) and
+object ids. This also includes the key store in cleartext. It may be possible
+to determine how often certain directories are updated.
+
+Combined to access to an Ensync server session, this allows overwriting
+arbitrary directories with arbitrary data (though garbage since the attacker
+could not correctly encrypt it without also being able to decrypt the data
+anyway).
+
+The actual data is still encrypted here, and an attacker would need to
+determine the internal keys to do anything.
+
+#### Shell access to the Ensync server data
+
+All of the above. The attacker can, of course, tinker with the server data
+stored arbitrarily.
+
+*However,* the attacker cannot manipulate the server data in a way that the
+clients won't notice. This includes even taking a snapshot of the data and
+later reverting (in the hopes of causing the clients to revert their own data
+in response); clients will detect this reversion and refuse to continue.
+
+#### Compromise of a client (including its Ensync key)
+
+The attacker can read and decrypt everything that the client's key has been
+granted access to, and write everything that the Ensync server allows. The
+attacker can determine what the HMAC of particular file blocks would be, and
+probe the server to see if that content has been stored (even in an area the
+attacker doesn't otherwise have access to).
+
+Directories with a read key the attacker doesn't have are still safe, as are
+the objects referenced by them.
+
+### Recovering from Leaks
+
+If a passphrase is leaked, but not access to the server, simply replace the
+passphrase, using `ensync key change`. The important part here is to ensure
+that no attacker that knows the passphrase ever sees the Ensync key store at a
+time that that passphrase was represented in the key store.
+
+If the Ensync key store is leaked, you have a bigger — but not immediate —
+problem, since changing the passphrase will not change the underlying internal
+key. That is, the if the attacker can use the key store to derive an internal
+key in their own time, and when done, that internal key will still be valid.
+
+Provided a sensible passphrase is used, deriving an internal key from a key
+store should be intractable. You should still change the passphrases so that if
+they are later leaked too, they cannot be used with the leaked key store.
+However, if the possibility of the key store being broken in isolation is a
+concern, you may want to replace the internal keys as well. There is no quick
+way to do this; essentially, it is a multi-step process:
+
+- Grab all the data from the server and store it somewhere safe. `ensync get`
+  can be used for this.
+
+- Destroy the data on the server.
+
+- Set the server up again, recreate keys, etc.
+
+- Put the data onto the new server store. `ensync put` can be used for this.
+
+- Remove the `server-state.sqlite` file from _every_ client's `internal.ensync`
+  directory. If this is not done, clients will detect the above steps as a
+  possible reversion attack and not proceed.
 
 License
 -------
