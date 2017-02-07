@@ -610,20 +610,68 @@ detail:
 Advanced Sync Rules
 -------------------
 
-TODO Review this section, provide examples
-
 The sync rules are defined in the configuration within the `rules` table. The
 rules are divided into one or more _states_; the initial state is called
-`root`. The initial current sync mode is "---/---", i.e., "do nothing".
+`root`. The initial current sync mode is `---/---`, i.e., "do nothing".
 
 Each state has two rule-groups at which rules are matched, termed `files` and
 `siblings`. These are sub-tables under the state; so, for example, the minimal
-rules consist of `rules.root.files` and `rules.root.siblings` table arrays.
+rules consist of `[[rules.root.files]]` and `[[rules.root.siblings]]` table
+arrays.
 
 The tables within each rule-group share a similar structure. Each rule consists
 of any number of distinct conditions, and has one or more actions. (Zero
 actions is permitted for consistency, but is not useful on its own.) Each rule
 is evaluated in the order defined and any actions processed.
+
+### Examples
+
+Before going into detail, some examples will hopefully make the syntax of all
+this clearer. First, the minimal configuration seen earlier in the
+documentation:
+
+```toml
+[[rules.root.files]]
+mode = "cud/cud"
+```
+
+This defines a single rule in the `root` state. It applies to all files since
+it has no conditions, and sets the sync mode for every file to `cud/cud`.
+
+Let's consider a more complex example:
+
+```toml
+[[rules.root.files]]
+mode = "cud/cud"
+
+[[rules.root.files]]
+name = '~$'
+mode = "---/---"
+
+[[rules.root.siblings]]
+name = '^\.git$'
+switch = "git"
+
+[[rules.git.files]]
+mode = "---/---"
+```
+
+This configuration defines two rules in the `files` rule-group of the `root`
+state, one rule in the `siblings` rule-group of the `root` state, and one rule
+in the `files` rule-group of the `git` state. It can be read like the
+following:
+
+- Unless otherwise noted, use full symmetric sync for files. (First rule: no
+  conditions, set mode to `cud/cud`.)
+
+- Don't sync files ending in `~` at all. (Second rule: files whose names match
+  `~$`, set mode to `---/---`.)
+
+- If entering a directory containing a `.git` file, consult the `git` state
+  instead. (Third rule: sibling matching `^\.git$`, switch to `git`.)
+
+- Don't sync the contents of git repositories at all. (Fourth rule: in `git`
+  state, no condition, set mode to `---/---`.)
 
 ### The `files` rule-group
 
@@ -636,7 +684,7 @@ matching actions are applied to that file and that file alone. For files which
 are directories, general state (e.g., the current rules state, and the current
 sync mode) are kept for the directory's contents.
 
-Each file name in a directory is evaluated against the root set exactly once.
+Each file name in a directory is evaluated against the rule set exactly once.
 If the file exists client-side, the data there is used for matching purposes;
 otherwise, the server-side file version is used instead.
 
@@ -820,6 +868,12 @@ switch = "private"
 [[rules.private.files]]
 mode = "cud/cud"
 ```
+
+What the above does is establish a convention of files starting with `.!` as
+being machine-specific, and then not syncing symlinks to those files. The files
+themselves are still synced. (The purpose of this being that things like
+`.bashrc` which might vary are still accessible to all clients in the correct
+place while allowing the underlying files to sync normally.)
 
 Key Management
 --------------
