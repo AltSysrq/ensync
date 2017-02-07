@@ -824,12 +824,84 @@ mode = "cud/cud"
 Key Management
 --------------
 
-TODO
+Ensync allows associating any number of passphrases/keys with the server store.
+The `ensync key` subcommands can be used to inspect and manipulate the key
+store.
+
+Separate keys do not — in and of themselves — control access to the underlying
+data; rather, multiple keys are mainly useful for ensuring that it is easy to
+revoke access to a particular client without needing to change keys everywhere
+else.
+
+For small passphrases (less than 64 characters), Ensync uses a very strong
+hashing function that can take some systems multiple seconds per key in the key
+store. If you plan to use a large number of keys, it helps to generate random
+"passphrases" which are much longer (e.g., `dd if=/dev/urandom of=key count=1`,
+then put `file:key` as the passphrase in the configuration).
 
 Using Key Groups
 ----------------
 
-TODO
+Each key in the key store can be associated with any number of _key groups_.
+Unlike keys, key groups can actually restrict access to information.
+Concretely, each key group corresponds to an internal encryption key, and
+adding a key to a key group adds to that key the information needed to derive
+that internal key.
+
+By default, there are two key groups:
+
+- `everyone`. All keys are always in this group. The `everyone` group is used
+  as the key for the HMAC of all file blocks and is used as the encryption key
+  of the physical root directory and by default all directories below.
+
+- `root`. The `root` group grants the power to edit the key store, and is the
+  write key for the physical root directory and by default all directories
+  below.
+
+The `ensync key group` subcommands can be used to create and assign key groups.
+To make key groups useful, one must understand how the _read key_ and _write
+key_ are used when encrypting things on the server.
+
+The _read key_ of a directory is the encryption key used to encrypt its
+content. It is cryptographically unfeasible for a reader without the read key
+to read a directory or to manipulate the directory content meaningfully.
+
+The _write key_ is required to write a directory or the key store _through a
+normal ensync implementation_. Unlike the read key, it has _no cryptographic
+significance_; rather, it is a defence-in-depth measure so that the compromise
+of a client with some access to ensync (but nothing else) cannot be used to,
+e.g., destroy the key store or cause more data loss.
+
+The default read key is from the `everyone` group, and the default write key is
+from the `root` group. Normally, a directory inherits the keys of its parent.
+To change the keys, one puts special syntax in the _name_ of that directory.
+(The fact that this is a very loud and "sticky" mechanism is by design.) The
+syntax is to place `.ensync[config=value,...]` anywhere in the name. `config`
+is one of the following:
+
+- `r`. Set the read key to the internal key of the group identified by `value`.
+
+- `w`. Set the write key to the internal key of the group identified by `value`.
+
+- `rw`. Set both the read and the write key to the internal key of the group
+  identified by `value`.
+
+For example, a directory named `foo.ensync[r=my-group]` will cause the
+directory to have the read key from the `my-group` group.
+`foo.ensync[r=my-group,w=another-group]` sets the read and write keys to
+`my-group` and `another-group`, respectively.
+
+The simplest way to use this feature is in the logical root name (i.e., the
+`server_root` configuration key). For example, to create a sync root which only
+your client has access to, you might do something like this:
+
+```
+$ ensync key group create /path/to/config my-group
+$ ensync mkdir /path/to/config /my-client.ensync[rw=my-group]
+```
+
+and then edit the configuration to have `my-client.ensync[rw=my-group]` as the
+`server_root`.
 
 Security Considerations
 -----------------------
