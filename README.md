@@ -51,7 +51,8 @@ Supported platforms:
 5. [Advanced Sync Rules](#advanced-sync-rules)
 6. [Key Management](#key-management)
 7. [Using Key Groups](#using-key-groups)
-8. [Security Considerations](#security-considerations)
+8. [Ensync Shell](#ensync-shell)
+9. [Security Considerations](#security-considerations)
 
 Getting Started
 ---------------
@@ -956,6 +957,31 @@ $ ensync mkdir /path/to/config /my-client.ensync[rw=my-group]
 
 and then edit the configuration to have `my-client.ensync[rw=my-group]` as the
 `server_root`.
+
+Ensync Shell
+------------
+
+It is possible to make `ensync` a user's shell. This will cause it to always
+behave as if invoked as `ensync server` with a particular (fixed) path. The
+purpose of this is to make it possible for a remote client to access Ensync
+over ssh without having actual shell access.
+
+The basic procedure for this is:
+
+- Add the full path to `ensync` to `/etc/shells`.
+
+- Create the user with `ensync` as their shell.
+
+- In the user's home directory, make a symlink to the directory where Ensync
+  should store the server data.
+
+You can then simply use `shell:ssh -T user@host` as the `server` configuration.
+For `ensync setup`, use `user@host:` as the remote path.
+
+As always, defence-in-depth measures may also be advisable. E.g., make the
+user's home directory read-only and not owned by them, or even run the whole
+thing in a chroot (which is fairly easy since `ensync` does not need anything
+beyond a fist-full of shared objects to run).
 
 Security Considerations
 -----------------------
