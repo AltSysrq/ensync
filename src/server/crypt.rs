@@ -233,7 +233,7 @@ use rust_crypto::symmetriccipher::{Decryptor, Encryptor, SymmetricCipherError};
 use defs::{HashId, UNKNOWN_HASH};
 use errors::*;
 
-const SCRYPT_18_8_1: &'static str = "scrypt-18-8-1";
+const SCRYPT_18_14_12_8_1: &'static str = "scrypt-18/14/12-8-1";
 pub const BLKSZ: usize = 16;
 pub const GROUP_EVERYONE: &'static str = "everyone";
 pub const GROUP_ROOT: &'static str = "root";
@@ -396,18 +396,36 @@ impl fmt::Debug for InternalKey {
     }
 }
 
-fn scrypt_18_8_1(passphrase: &[u8], salt: &[u8]) -> HashId {
+fn scrypt_18_14_12_8_1(passphrase: &[u8], salt: &[u8]) -> HashId {
     // Scrypt paper recommends n=2**14, r=8, p=1
     // Slides in http://www.tarsnap.com/scrypt/scrypt-slides.pdf suggest
     // n=2**20 for file encryption, but that requires 1GB of memory.
     // As a compromise, we use n=2**18, which needs "only" 256MB.
     //
+    // For larger passphrases, we use the weaker n values of 14 and 12, since
+    // at those points the input likely has a larger value space than the
+    // derived hash anyway (i.e., a brute-force would be faster against the
+    // derived key than the passphrase itself). We vary this at hashing time,
+    // rather than selecting the algorithm when the key is created, so that we
+    // don't leak information on the passphrase size while at the same time
+    // making usage with a large random passphrase fast even in the presence of
+    // other keys which had shorter passphrases with stronger hashes.
+    //
     // For tests, we implicitly use weaker parameters because scrypt-18-8-1
     // takes forever in debug builds, and it wouldn't make sense to have
     // another algorithm option which exists only for tests to use.
-    #[cfg(not(test))] const N: u8  = 18; #[cfg(test)] const N: u8  = 12;
-    #[cfg(not(test))] const R: u32 = 8;  #[cfg(test)] const R: u32 = 4;
-    let sparms = scrypt::ScryptParams::new(N, R, 1);
+    #[cfg(not(test))] const N18: u8 = 18; #[cfg(test)] const N18: u8 = 12;
+    #[cfg(not(test))] const N14: u8 = 14; #[cfg(test)] const N14: u8 = 10;
+    #[cfg(not(test))] const N12: u8 = 12; #[cfg(test)] const N12: u8 = 8;
+    #[cfg(not(test))] const R:  u32 = 8;  #[cfg(test)] const R:  u32 = 4;
+    let n = if passphrase.len() >= 256 {
+        N12
+    } else if passphrase.len() >= 64 {
+        N14
+    } else {
+        N18
+    };
+    let sparms = scrypt::ScryptParams::new(n, R, 1);
     let mut derived: HashId = Default::default();
     scrypt::scrypt(passphrase, &salt, &sparms, &mut derived);
 
@@ -455,13 +473,16 @@ pub fn create_key(passphrase: &[u8], chain: &mut KeyChain,
                   -> KdfEntry {
     let mut salt = HashId::default();
     rand(&mut salt);
-    let derived = scrypt_18_8_1(passphrase, &salt);
+
+    let algorithm = SCRYPT_18_14_12_8_1;
+    let derived = scrypt_18_14_12_8_1(passphrase, &salt);
+
     chain.derived = InternalKey(derived);
 
     let mut entry = KdfEntry {
         created: created,
         updated: updated,
-        algorithm: SCRYPT_18_8_1.to_owned(),
+        algorithm: algorithm.to_owned(),
         salt: salt,
         hash: sha3(&derived),
         groups: BTreeMap::new(),
@@ -487,7 +508,7 @@ pub fn reassoc_keys(entry: &mut KdfEntry, chain: &KeyChain) {
 pub fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
                              -> Option<KeyChain> {
     match entry.algorithm.as_str() {
-        SCRYPT_18_8_1 => Some(scrypt_18_8_1(passphrase, &entry.salt)),
+        SCRYPT_18_14_12_8_1 => Some(scrypt_18_14_12_8_1(passphrase, &entry.salt)),
         _ => None,
     }.and_then(|derived| {
         if sha3(&derived) == entry.hash {
@@ -815,12 +836,12 @@ mod test {
 
     use super::*;
 
+    fn ck(passphrase: &[u8], keychain: &mut KeyChain) -> KdfEntry {
+        create_key(passphrase, keychain, UTC::now(), None)
+    }
+
     #[test]
     fn generate_and_derive_keys() {
-        fn ck(passphrase: &[u8], keychain: &mut KeyChain) -> KdfEntry {
-            create_key(passphrase, keychain, UTC::now(), None)
-        }
-
         let mut keychain = KeyChain::generate_new();
         let mut keys = BTreeMap::new();
         keys.insert("a".to_owned(), ck(b"plugh", &mut keychain));
@@ -831,6 +852,25 @@ mod test {
         assert_eq!(Some(&keychain.keys),
                    try_derive_key(b"xyzzy", &keys).as_ref().map(|c| &c.keys));
         assert_eq!(None, try_derive_key(b"foo", &keys));
+    }
+
+    #[test]
+    fn generate_and_derive_keys_long_passphrase() {
+        let pw_a = [b'a';1024];
+        let pw_b = [b'b';1024];
+        let pw_c = [b'c';1024];
+
+        let mut keychain = KeyChain::generate_new();
+        let mut keys = BTreeMap::new();
+        keys.insert("a".to_owned(), ck(&pw_a, &mut keychain));
+        keys.insert("b".to_owned(), ck(&pw_b, &mut keychain));
+
+        assert_eq!(Some(&keychain.keys),
+                   try_derive_key(&pw_a, &keys).as_ref().map(|c| &c.keys));
+        assert_eq!(Some(&keychain.keys),
+                   try_derive_key(&pw_b, &keys).as_ref().map(|c| &c.keys));
+        assert_eq!(None, try_derive_key(&pw_c, &keys));
+
     }
 }
 

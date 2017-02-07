@@ -666,7 +666,7 @@ stop = "all"
 
 [[rules.root.siblings]]
 name = '^a$'
-mode = "---/---
+mode = "---/---"
 ```
 
 the contents of a directory containing both files named `a` and `b` will apply
