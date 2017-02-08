@@ -165,12 +165,19 @@ pub fn add_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>
      get_root_passphrase: P) -> Result<()>
 {
     if new_name.is_empty() {
-        return Err("Cannot create key with empty name".into());
+        return Err(ErrorKind::EmptyKeyName.into());
     }
 
     edit_kdflist(storage, get_root_passphrase, |kdflist, root_key| {
         let mut key_chain = try_derive_key(old_passphrase, &kdflist.keys)
             .ok_or(ErrorKind::PassphraseNotInKdfList)?;
+
+        // Since the passphrase is used to identify the key implicitly, forbid
+        // duplicates.
+        if try_derive_key(new_passphrase, &kdflist.keys).is_some() {
+            return Err(ErrorKind::PassphraseInKdfList.into());
+        }
+
         root_key.chain(&key_chain);
         if kdflist.keys.insert(
             new_name.to_owned(),
@@ -243,6 +250,12 @@ pub fn change_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>(
 
         let old_entry = kdflist.keys.remove(&real_name)
             .ok_or_else(|| ErrorKind::KeyNotInKdfList(real_name.clone()))?;
+
+        // Since the passphrase identifies the key implicitly, we need to make
+        // sure that we don't get a duplicate passphrase.
+        if try_derive_key(new_passphrase, &kdflist.keys).is_some() {
+            return Err(ErrorKind::PassphraseInKdfList.into());
+        }
 
         let key_chain = if let Some(mk) =
             try_derive_key_single(old_passphrase, &old_entry)
@@ -563,6 +576,16 @@ mod test {
     }
 
     #[test]
+    fn add_key_refuses_duplicate_pw() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(ErrorKind::PassphraseInKdfList,
+                    add_key(&storage, b"hunter2", b"hunter2", "new",
+                            no_prompt));
+    }
+
+    #[test]
     fn change_key_doesnt_need_key_name_if_only_one_key() {
         init!(storage);
 
@@ -659,6 +682,18 @@ mod test {
         assert_err!(ErrorKind::PassphraseNotInKdfList,
                     change_key(&storage, b"plugh", b"xyzzy", None, false,
                                no_prompt));
+    }
+
+    #[test]
+    fn change_key_dupe_pw() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        add_key(&storage, b"hunter2", b"hunter3", "new", no_prompt).unwrap();
+
+        assert_err!(ErrorKind::PassphraseInKdfList,
+                    change_key(&storage, b"hunter3", b"hunter2",
+                               Some("new"), false, no_prompt));
     }
 
     #[test]

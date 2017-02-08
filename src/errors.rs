@@ -233,6 +233,10 @@ error_chain! {
         PassphraseNotInKdfList {
             description("Passphrase not found in key store")
         }
+        PassphraseInKdfList {
+            description("Passphrase already bound to another key in the \
+                         key store.")
+        }
         WouldRemoveLastKdfEntry {
             description("There is only one key in the key store, \
                          it cannot be removed")

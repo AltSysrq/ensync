@@ -357,6 +357,9 @@ new key. By default, the existing key will be taken from the configuration. \
 The new key will inherit all key groups of the old key. If this is undesired, \
 they can be removed with `ensync key group disassoc`.
 
+The passphrase for the new key must be distinct from other passphrases \
+currently in use, since the passphrase is used to identify the key implicitly.
+
 Since this operation modifies the key store, a key in the `root` group is \
 required. If the existing key is in the `root` group, it will be used to \
 do this implicitly. Otherwise, a separate key will need to be provided. \
@@ -388,6 +391,9 @@ This requires an existing key and the new passphrase. By default, the \
 existing key is drawn from the configuration. The `--old` argument can \
 be used to change this. The new key is by default read from the terminal; \
 the `--new` argument can be used to override this.
+
+The new passphrase for the key must be distinct from other passphrases \
+currently in use, since the passphrase is used to identify the key implicitly.
 
 Unless `--force` is passed, this command will fail if the passphrase provided \
 as the existing key does not correspond to the key named on the command-line. \

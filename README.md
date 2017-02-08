@@ -910,6 +910,15 @@ store. If you plan to use a large number of keys, it helps to generate random
 "passphrases" which are much longer (e.g., `dd if=/dev/urandom of=key count=1`,
 then put `file:key` as the passphrase in the configuration).
 
+Ensync requires all passphrases in the key store to be distinct. This is
+admittedly an unusual requirement. Note though that nothing is being leaked;
+clients already get the whole key store to test their passphrases against, so
+the simple fact that a passphrase conflicts is not new information that could
+be used in an attack. The restriction exists because Ensync does not, for the
+sake of ergonomics, take a key name and passphrase pair, but rather only a
+passphrase, so if two keys had the same passphrase, only one of them would be
+accessible.
+
 Using Key Groups
 ----------------
 
