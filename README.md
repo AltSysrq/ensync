@@ -26,6 +26,22 @@ Features:
 - Support for separate key groups, to prevent some clients from reading/writing
   other clients' data.
 
+Why use Ensync?
+
+- You want to sync files between multiple systems in a star model (i.e., one
+  central repository to which all systems sync), but encryption is unavailable
+  or problematic on the central point. For example, the central point may be a
+  server that needs to be able to boot without human intervention, or a hosted
+  server.
+
+- You want to sync files between multiple systems and want something more
+  flexible or transparent than otherwise comparable utilities like Unison.
+
+- You want to back up multiple systems to the same storage and deduplicate
+  shared data without being able to escalate from read access to one of those
+  systems to read access to all of them. (For this use alone, it may also be
+  worth looking at [Tarsnap](https://www.tarsnap.com/).
+
 Please note that Ensync's cryptographic properties have not been independently
 verified.
 
