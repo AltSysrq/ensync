@@ -375,47 +375,49 @@ impl LoggerImpl {
             },
 
             Log::Error(side, path, ref op, err) => {
-                match *op {
-                    ErrorOperation::List =>
-                        say!(path, side, "Failed to list directory: {}", err),
-
-                    ErrorOperation::MarkClean =>
-                        say!(path, side, "Failed to mark directory clean: {}",
-                             err),
-
-                    ErrorOperation::Chdir(name) =>
-                        say!((path, name), side,
-                             "Failed to enter directory: {}", err),
-
-                    ErrorOperation::Create(name) =>
-                        say!((path, name), side,
-                             "Failed to create: {}", err),
-
-                    ErrorOperation::Update(name) =>
-                        say!((path, name), side,
-                             "Failed to update: {}", err),
-
-                    ErrorOperation::Rename(name) =>
-                        say!((path, name), side,
-                             "Failed to rename: {}", err),
-
-                    ErrorOperation::Remove(name) =>
-                        say!((path, name), side,
-                             "Failed to remove: {}", err),
-
-                    ErrorOperation::Rmdir =>
-                        say!(path, side, "Failed to remove: {}", err),
-
-                    ErrorOperation::Access(name) =>
-                        say!((path, name), side, "Failed to access: {}", err),
-                }
+                let mut errs = err.to_string();
 
                 for e in err.iter().skip(1) {
-                    perrln!("caused by: {}", e);
+                    errs.push_str(&format!("\ncaused by: {}", e));
                 }
 
                 if let Some(bt) = err.backtrace() {
-                    perrln!("{:?}", bt);
+                    errs.push_str(&format!("\n{:?}\n", bt));
+                }
+
+                match *op {
+                    ErrorOperation::List =>
+                        say!(path, side, "Failed to list directory: {}", errs),
+
+                    ErrorOperation::MarkClean =>
+                        say!(path, side, "Failed to mark directory clean: {}",
+                             errs),
+
+                    ErrorOperation::Chdir(name) =>
+                        say!((path, name), side,
+                             "Failed to enter directory: {}", errs),
+
+                    ErrorOperation::Create(name) =>
+                        say!((path, name), side,
+                             "Failed to create: {}", errs),
+
+                    ErrorOperation::Update(name) =>
+                        say!((path, name), side,
+                             "Failed to update: {}", errs),
+
+                    ErrorOperation::Rename(name) =>
+                        say!((path, name), side,
+                             "Failed to rename: {}", errs),
+
+                    ErrorOperation::Remove(name) =>
+                        say!((path, name), side,
+                             "Failed to remove: {}", errs),
+
+                    ErrorOperation::Rmdir =>
+                        say!(path, side, "Failed to remove: {}", errs),
+
+                    ErrorOperation::Access(name) =>
+                        say!((path, name), side, "Failed to access: {}", errs),
                 }
             },
         }
