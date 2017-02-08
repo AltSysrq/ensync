@@ -1,7 +1,15 @@
 [package]
 name = "ensync"
 version = "0.1.0"
-authors = ["Jason Lingle <jason@lin.gl>"]
+authors = ["Jason Lingle"]
+license = "GPL-3.0"
+repository = "https://github.com/altsysrq/ensync"
+keywords = ["file", "synchronization", "synchronize", "encryption"]
+
+description = """
+A flexible ENcrypted file SYNChroniser suitable for uses where the central
+location is not fully trusted.
+"""
 
 [dependencies]
 chrono = { version = "0.2" }
