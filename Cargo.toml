@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Jason Lingle"]
 license = "GPL-3.0"
 repository = "https://github.com/altsysrq/ensync"
+documentation = "https://github.com/AltSysrq/ensync/blob/master/README.md#ensync"
 keywords = ["file", "synchronization", "synchronize", "encryption"]
 
 description = """
