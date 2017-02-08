@@ -815,7 +815,7 @@ fn run_sync<CLI : Replica + 'static,
         }
     } else {
         if level >= ERROR {
-            perrln!("Syncing completed, but errors occurred");
+            perrln!("Syncing completed, but not clean");
         }
     }
 
