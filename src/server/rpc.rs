@@ -745,10 +745,9 @@ impl Storage for RemoteStorage {
 mod test {
     include!("storage_tests.rs");
 
-    use std::fs;
     use std::thread;
 
-    use os_pipe;
+    use os_pipe::{self, PipeReader, PipeWriter};
 
     use server::local_storage::LocalStorage;
     use super::*;
@@ -763,9 +762,8 @@ mod test {
     }
 
     fn create_storage(dir: &Path) -> RemoteStorage {
-        fn pipe() -> (fs::File, fs::File) {
-            let p = os_pipe::pipe().unwrap();
-            (p.read, p.write)
+        fn pipe() -> (PipeReader, PipeWriter) {
+            os_pipe::pipe().unwrap()
         }
 
         let (read_from_client, write_to_server) = pipe();
