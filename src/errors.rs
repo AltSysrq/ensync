@@ -248,10 +248,16 @@ error_chain! {
                          use `--force` if you really are sure you want \
                          to change the named key")
         }
+        EmptyKeyName {
+            description("Empty key name")
+        }
         KeyNameAlreadyInUse(name: String) {
             description("Key name already in use")
             display("Key name '{}' already in use \
                      (use `key change` if you want to edit it)", name)
+        }
+        EmptyKeyGroupName {
+            description("Empty key group name")
         }
         GroupNameAlreadyInUse(name: String) {
             description("Key group name already in use")

@@ -164,6 +164,10 @@ pub fn add_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>
     (storage: &S, old_passphrase: &[u8], new_passphrase: &[u8], new_name: &str,
      get_root_passphrase: P) -> Result<()>
 {
+    if new_name.is_empty() {
+        return Err("Cannot create key with empty name".into());
+    }
+
     edit_kdflist(storage, get_root_passphrase, |kdflist, root_key| {
         let mut key_chain = try_derive_key(old_passphrase, &kdflist.keys)
             .ok_or(ErrorKind::PassphraseNotInKdfList)?;
@@ -292,6 +296,12 @@ pub fn create_group<S : Storage + ?Sized, IT : Iterator + Clone,
     (storage: &S, passphrase: &[u8], names: IT, get_root_passphrase: P)
      -> Result<()>
 where IT::Item : AsRef<str> {
+    for name in names.clone() {
+        if name.as_ref().is_empty() {
+            return Err(ErrorKind::EmptyKeyGroupName.into());
+        }
+    }
+
     edit_kdflist(storage, get_root_passphrase, |kdflist, root_key| {
         for name in names.clone() {
             let name = name.as_ref();
@@ -524,6 +534,16 @@ mod test {
     }
 
     #[test]
+    fn add_key_refuses_empty_name() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(ErrorKind::EmptyKeyName,
+                    add_key(&storage, b"hunter2", b"hunter3", "",
+                            no_prompt));
+    }
+
+    #[test]
     fn add_key_wont_overwrite_existing_key() {
         init!(storage);
 
@@ -744,6 +764,16 @@ mod test {
         init_keys(&storage, b"hunter2", "original").unwrap();
         assert_err!(ErrorKind::GroupNameAlreadyInUse(_),
                     create_group(&storage, b"hunter2", ["root"].iter(),
+                                 no_prompt));
+    }
+
+    #[test]
+    fn create_group_empty_name() {
+        init!(storage);
+
+        init_keys(&storage, b"hunter2", "original").unwrap();
+        assert_err!(ErrorKind::EmptyKeyGroupName,
+                    create_group(&storage, b"hunter2", [""].iter(),
                                  no_prompt));
     }
 
