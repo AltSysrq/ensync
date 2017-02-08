@@ -162,7 +162,7 @@ need to take care of that now:
 
 ```sh
   ensync mkdir /path/to/config /your-logical-root
-``
+```
 
 With that taken care of, you should be good to go, and can run
 
