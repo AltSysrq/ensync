@@ -159,8 +159,8 @@ impl<T : Replica> Replica for DryRunReplica<T> {
         Ok(())
     }
 
-    fn prepare(&self) -> Result<()> {
-        self.0.prepare()
+    fn prepare(&self, typ: PrepareType) -> Result<()> {
+        self.0.prepare(typ)
     }
 
     fn clean_up(&self) -> Result<()> {

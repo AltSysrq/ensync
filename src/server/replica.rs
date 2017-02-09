@@ -244,11 +244,15 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
         }
     }
 
-    fn prepare(&self) -> Result<()> {
+    fn prepare(&self, typ: PrepareType) -> Result<()> {
         let db = self.db.lock().unwrap();
+        if typ >= PrepareType::Clean {
+            db.prepare("DELETE FROM `clean_dir`").run()?;
+        }
+
         {
             let mut stmt = db.prepare(
-                "SELECT `id`, `ver`, `len` FROM clean_dir")?;
+                "SELECT `id`, `ver`, `len` FROM `clean_dir`")?;
             while sqlite::State::Done != stmt.next()? {
                 let vid: Vec<u8> = stmt.read(0)?;
                 let vver: i64 = stmt.read(1)?;
@@ -1060,7 +1064,7 @@ mod test {
         assert!(!replica1.is_dir_dirty(&root1));
         assert!(!replica1.is_dir_dirty(&subdir1));
         assert!(!replica1.is_dir_dirty(&otherdir1));
-        replica1.prepare().unwrap();
+        replica1.prepare(PrepareType::Fast).unwrap();
         assert!(!replica1.is_dir_dirty(&root1));
         assert!(!replica1.is_dir_dirty(&subdir1));
         assert!(!replica1.is_dir_dirty(&otherdir1));
@@ -1073,7 +1077,7 @@ mod test {
             &FileData::Symlink(oss("target")),
             &FileData::Symlink(oss("tegrat")), None).unwrap();
 
-        replica1.prepare().unwrap();
+        replica1.prepare(PrepareType::Fast).unwrap();
         assert!(replica1.is_dir_dirty(&root1));
         assert!(replica1.is_dir_dirty(&subdir1));
         assert!(!replica1.is_dir_dirty(&otherdir1));
@@ -1110,7 +1114,7 @@ mod test {
 
         // But on the next prepare it discovers that the directory is in fact
         // dirty.
-        replica1.prepare().unwrap();
+        replica1.prepare(PrepareType::Fast).unwrap();
         let root = replica1.root().unwrap();
         assert!(replica1.is_dir_dirty(&root));
     }
@@ -1150,9 +1154,33 @@ mod test {
 
         // But on the next prepare it discovers that the directory is in fact
         // dirty.
-        replica1.prepare().unwrap();
+        replica1.prepare(PrepareType::Fast).unwrap();
         let root = replica1.root().unwrap();
         assert!(replica1.is_dir_dirty(&root));
+    }
+
+    #[test]
+    fn clean_prepare_sets_all_dirs_dirty() {
+        init!(replica, root);
+
+        replica.list(&mut root).unwrap();
+        replica.set_dir_clean(&root).unwrap();
+        assert!(!replica.is_dir_dirty(&root));
+
+        replica.prepare(PrepareType::Clean).unwrap();
+        assert!(replica.is_dir_dirty(&root));
+    }
+
+    #[test]
+    fn scrub_prepare_sets_all_dirs_dirty() {
+        init!(replica, root);
+
+        replica.list(&mut root).unwrap();
+        replica.set_dir_clean(&root).unwrap();
+        assert!(!replica.is_dir_dirty(&root));
+
+        replica.prepare(PrepareType::Scrub).unwrap();
+        assert!(replica.is_dir_dirty(&root));
     }
 
     #[test]

@@ -449,13 +449,22 @@ impl Replica for PosixReplica {
         })
     }
 
-    fn prepare(&self) -> Result<()> {
+    fn prepare(&self, typ: PrepareType) -> Result<()> {
         // Reclaim any files left over from a crashed run
         self.clean_scratch()?;
 
         // Walk all directories marked clean and check whether they are still
         // clean.
         let dao = self.dao.lock().unwrap();
+
+        if typ >= PrepareType::Scrub {
+            dao.purge_hash_cache()?;
+        }
+
+        if typ >= PrepareType::Clean {
+            dao.set_all_dirs_ditry()?;
+        }
+
         for clean_dir in dao.iter_clean_dirs()? {
             let (path, expected_hash) = clean_dir?;
             // device doesn't matter here; just use 0
@@ -1087,7 +1096,7 @@ mod test {
     #[test]
     fn trivial() {
         let (_root, _private, replica) = new_simple();
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         replica.clean_up().unwrap();
     }
 
@@ -1096,7 +1105,7 @@ mod test {
         let (root, _private, replica) = new_simple();
         spit(root.path().join("foo"), "hello world");
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
@@ -1133,7 +1142,7 @@ mod test {
         fs::DirBuilder::new().mode(0o700).create(
             root.path().join(PRIVATE_DIR_NAME)).unwrap();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(4, list.len());
@@ -1156,7 +1165,7 @@ mod test {
     fn create_regular_file_via_xfer() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         let xfer = make_ca_source("Three pounds of VAX!");
@@ -1175,7 +1184,7 @@ mod test {
     fn create_regular_file_with_perm_777() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         let xfer = make_ca_source("Three pounds of VAX!");
@@ -1194,7 +1203,7 @@ mod test {
     fn create_directory() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
         replica.create(&mut dir, File(&oss("d"), &FileData::Directory(0o700)),
                        None).unwrap();
@@ -1208,7 +1217,7 @@ mod test {
     fn create_symlink() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
         replica.create(&mut dir, File(&oss("sym"),
                                       &FileData::Symlink(oss("plugh"))),
@@ -1224,7 +1233,7 @@ mod test {
     fn create_fails_if_alread_exists() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
         let _ = replica.list(&mut dir).unwrap();
 
@@ -1239,7 +1248,7 @@ mod test {
     fn replace_file_with_file() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "Three pounds of VAX");
@@ -1262,7 +1271,7 @@ mod test {
     fn chmod_file() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "Three pounds of VAX");
@@ -1291,7 +1300,7 @@ mod test {
     fn replace_file_with_dir() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "foo");
@@ -1311,7 +1320,7 @@ mod test {
     fn replace_file_with_symlink() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "foo");
@@ -1332,7 +1341,7 @@ mod test {
     fn replace_dir_with_file() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         fs::DirBuilder::new().mode(0o700).create(
@@ -1356,7 +1365,7 @@ mod test {
     fn chmod_dir() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         fs::DirBuilder::new().mode(0o700).create(
@@ -1378,7 +1387,7 @@ mod test {
     fn replace_dir_with_symlink() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         fs::DirBuilder::new().mode(0o700).create(
@@ -1401,7 +1410,7 @@ mod test {
     fn replace_symlink_with_file() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
@@ -1424,7 +1433,7 @@ mod test {
     fn replace_symlink_with_dir() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
@@ -1445,7 +1454,7 @@ mod test {
     fn replace_symlink_with_symlink() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
@@ -1467,7 +1476,7 @@ mod test {
     fn replace_fails_if_not_matched() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "foo");
@@ -1492,7 +1501,7 @@ mod test {
     fn remove_file() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "content");
@@ -1510,7 +1519,7 @@ mod test {
     fn remove_dir() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         fs::DirBuilder::new().mode(0o700).create(
@@ -1529,7 +1538,7 @@ mod test {
     fn remove_symlink() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         unix::fs::symlink("plugh", root.path().join("foo")).unwrap();
@@ -1547,7 +1556,7 @@ mod test {
     fn remove_fails_if_not_matched() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "content");
@@ -1567,7 +1576,7 @@ mod test {
     fn file_copies_optimised() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "Three pounds of VAX");
@@ -1586,7 +1595,7 @@ mod test {
     fn file_block_copies_optimised() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("race"), "racecars");
@@ -1609,7 +1618,7 @@ mod test {
     fn delete_create_renames_optimised() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "Three pounds of VAX");
@@ -1630,7 +1639,7 @@ mod test {
     fn file_copy_optimisation_handles_corruption() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "Three pounds of VAX");
@@ -1652,7 +1661,7 @@ mod test {
     fn block_copy_optimisation_handles_corruption() {
         let (root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("race"), "racecars");
@@ -1710,7 +1719,7 @@ mod test {
     fn chdir_not_found() {
         let (_root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let dir = replica.root().unwrap();
 
         assert!(replica.chdir(&dir, &oss("foo"))
@@ -1722,7 +1731,7 @@ mod test {
         let (root, _private, replica) = new_simple();
         spit(root.path().join("foo"), "bar");
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let dir = replica.root().unwrap();
         assert!(replica.chdir(&dir, &oss("foo"))
                 .is_err());
@@ -1740,7 +1749,7 @@ mod test {
             "target", root.path().join("child")
                 .join("grandchild").join("foo")).unwrap();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
 
         let dir = replica.root().unwrap();
 
@@ -1796,7 +1805,7 @@ mod test {
         fs::DirBuilder::new().mode(0o700).create(
             root.path().join("child")).unwrap();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
 
         let mut dir = replica.root().unwrap();
         let mut subdir = replica.chdir(&dir, &oss("child")).unwrap();
@@ -1811,7 +1820,7 @@ mod test {
         fs::DirBuilder::new().mode(0o700).create(
             root.path().join("child")).unwrap();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
 
         let mut dir = replica.root().unwrap();
         let mut subdir = replica.chdir(&dir, &oss("child")).unwrap();
@@ -1825,7 +1834,7 @@ mod test {
     fn cannot_rmdir_root() {
         let (_root, _private, replica) = new_simple();
 
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
         assert!(replica.rmdir(&mut dir).is_err());
@@ -1840,7 +1849,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
             let mut rdir = replica.root().unwrap();
             assert!(replica.is_dir_dirty(&rdir));
             replica.list(&mut rdir).unwrap();
@@ -1856,7 +1865,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
             let rdir = replica.root().unwrap();
             assert!(!replica.is_dir_dirty(&rdir));
             let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
@@ -1866,7 +1875,7 @@ mod test {
         unix::fs::symlink("xyzzy", subdir.join("plugh")).unwrap();
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
             let rdir = replica.root().unwrap();
             assert!(replica.is_dir_dirty(&rdir));
             let cdir = replica.chdir(&rdir, &oss("child")).unwrap();
@@ -1882,7 +1891,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
 
             let mut rdir = replica.root().unwrap();
             replica.list(&mut rdir).unwrap();
@@ -1900,7 +1909,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
 
             let rdir = replica.root().unwrap();
             assert!(!replica.is_dir_dirty(&rdir));
@@ -1918,7 +1927,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
 
             let mut rdir = replica.root().unwrap();
             replica.list(&mut rdir).unwrap();
@@ -1933,7 +1942,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
 
             let rdir = replica.root().unwrap();
             assert!(!replica.is_dir_dirty(&rdir));
@@ -1951,7 +1960,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
 
             let mut rdir = replica.root().unwrap();
             replica.list(&mut rdir).unwrap();
@@ -1979,7 +1988,7 @@ mod test {
 
         {
             let replica = new_in(&root, &private);
-            replica.prepare().unwrap();
+            replica.prepare(PrepareType::Fast).unwrap();
 
             let rdir = replica.root().unwrap();
             assert!(!replica.is_dir_dirty(&rdir));
@@ -2006,10 +2015,36 @@ mod test {
         replica.set_dir_clean(&subdir).unwrap();
 
         fs::DirBuilder::new().mode(0o700).create(root.join("xyzzy")).unwrap();
-        replica.prepare().unwrap();
+        replica.prepare(PrepareType::Fast).unwrap();
 
         assert!(replica.is_dir_dirty(&dir));
         assert!(!replica.is_dir_dirty(&subdir));
+    }
+
+    #[test]
+    fn all_dirs_dirty_after_clean_prepare() {
+        let (_rootdir, _private, replica) = new_simple();
+
+        let mut root = replica.root().unwrap();
+        replica.list(&mut root).unwrap();
+        replica.set_dir_clean(&root).unwrap();
+        assert!(!replica.is_dir_dirty(&root));
+
+        replica.prepare(PrepareType::Clean).unwrap();
+        assert!(replica.is_dir_dirty(&root));
+    }
+
+    #[test]
+    fn all_dirs_dirty_after_scrub_prepare() {
+        let (_rootdir, _private, replica) = new_simple();
+
+        let mut root = replica.root().unwrap();
+        replica.list(&mut root).unwrap();
+        replica.set_dir_clean(&root).unwrap();
+        assert!(!replica.is_dir_dirty(&root));
+
+        replica.prepare(PrepareType::Scrub).unwrap();
+        assert!(replica.is_dir_dirty(&root));
     }
 
     #[test]

@@ -21,6 +21,20 @@ use std::ffi::{OsStr,OsString};
 use defs::*;
 use errors::Result;
 
+/// Controls the behaviour of `Replica::prepare`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrepareType {
+    /// The ordinary prepare mode. The replica may assume things marked clean
+    /// are still clean provided their conditions are met.
+    Fast,
+    /// The replica must consider all directories dirty after `prepare()`
+    /// completes.
+    Clean,
+    /// Like `Clean`, but additionally discard all caches that cannot be
+    /// validated perfectly.
+    Scrub,
+}
+
 /// Trait for the `Replica::Directory` type.
 pub trait ReplicaDirectory : Send {
     /// Returns the full path of this directory, suitable for display to the
@@ -174,7 +188,8 @@ pub trait Replica : Sync + Send {
     /// This is generally a scan for dirty directories, sanity checks, etc.
     ///
     /// The default is a noop.
-    fn prepare(&self) -> Result<()> { Ok(()) }
+    #[allow(unused_variables)]
+    fn prepare(&self, typ: PrepareType) -> Result<()> { Ok(()) }
 
     /// Performs any final cleanup on this replica.
     ///

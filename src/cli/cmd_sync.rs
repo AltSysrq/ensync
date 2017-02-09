@@ -41,7 +41,7 @@ use log::*;
 use posix::*;
 use reconcile::compute::*;
 use reconcile;
-use replica::{Condemn, Replica, NullTransfer};
+use replica::{Condemn, NullTransfer, PrepareType, Replica};
 use rules;
 use server::*;
 use work_stack;
@@ -780,9 +780,9 @@ fn run_sync<CLI : Replica + 'static,
         perrln!("Scanning files for changes...");
     }
     let client_prepare = spawn!(
-        |context| context.cli.prepare());
+        |context| context.cli.prepare(PrepareType::Fast));
     let server_prepare = spawn!(
-        |context| context.srv.prepare());
+        |context| context.srv.prepare(PrepareType::Fast));
     client_prepare.join()
         .expect("Child thread panicked")
         .chain_err(|| "Scanning for local changes failed")?;

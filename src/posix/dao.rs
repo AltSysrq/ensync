@@ -160,7 +160,7 @@ impl Dao {
             debug_assert!(b'/' == path[0]);
             debug_assert!(b'/' == path[path.len() - 1]);
 
-            if try!(self.0.prepare("SELECT 1 from `clean_dirs` \
+            if try!(self.0.prepare("SELECT 1 FROM `clean_dirs` \
                                     WHERE `path` = ?1")
                     .binding(1, path).exists()) {
                 return Ok(true);
@@ -176,6 +176,11 @@ impl Dao {
         }
 
         Ok(false)
+    }
+
+    /// Clears all clean directory records.
+    pub fn set_all_dirs_ditry(&self) -> Result<()> {
+        Ok(self.0.prepare("DELETE FROM `clean_dirs`").run()?)
     }
 
     /// Determines the new generation number for the cache.
@@ -364,6 +369,11 @@ impl Dao {
     pub fn delete_cache(&self, path: &OsStr) -> Result<()> {
         Ok(try!(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
                 .binding(1, path.as_nbytes()).run()))
+    }
+
+    /// Completely clears the hash cache.
+    pub fn purge_hash_cache(&self) -> Result<()> {
+        Ok(self.0.prepare("DELETE FROM `hash_cache`").run()?)
     }
 }
 
