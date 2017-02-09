@@ -341,6 +341,16 @@ impl Dao {
         }
     }
 
+    /// Updates the modified time on the hash cache entry (if any) for the
+    /// given path.
+    pub fn update_cache_mtime(&self, path: &OsStr, mtime: FileTime)
+                              -> Result<()> {
+        Ok(self.0.prepare("UPDATE `hash_cache` SET `mtime` = ?2 \
+                           WHERE `path` = ?1")
+           .binding(1, path.as_nbytes()).binding(2, mtime as i64)
+           .run()?)
+    }
+
     /// Updates any cache for the file at path `old` to be at path `new`,
     /// preserving all caching information.
     pub fn rename_cache(&self, old: &OsStr, new: &OsStr) -> Result<()> {

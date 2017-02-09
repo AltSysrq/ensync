@@ -331,6 +331,8 @@ impl Replica for PosixReplica {
                         posix::set_mtime_path(&path, t2).chain_err(
                             || format!("Error setting mtime on '{}'",
                                        path.display()))?;
+                        let _ = self.dao.lock().unwrap().update_cache_mtime(
+                            path.as_os_str(), t2);
                     }
                 }
                 dir.toggle_file(File(name, old));
@@ -1006,6 +1008,7 @@ mod test {
     #[allow(unused_imports)] use errors::*;
     use replica::*;
     use block_xfer;
+    use posix::set_mtime_path;
     use super::*;
 
     static SECRET: &'static str = "secret";
@@ -1671,6 +1674,37 @@ mod test {
         assert_eq!("raceways", &slurp(root.path().join("raceways")));
     }
 
+    #[test]
+    fn file_mtime_edit_doesnt_invalidate_hash_cache() {
+        let (root, _private, replica) = new_simple();
+
+        spit(root.path().join("file"), "plugh");
+
+        // This is a somewhat odd test, in that it requires the replica to have
+        // nominally undesirable behaviour. We read the current state of the
+        // file, then use the replica to change its mtime. Then, we bypass the
+        // replica and replace the content of the file, but meticulously leave
+        // its externally observable state unchanged. We then verify that the
+        // replica still thinks it has the old content hash.
+        let mut dir = replica.root().unwrap();
+        let orig_fd = replica.list(&mut dir)
+            .unwrap().into_iter().next().unwrap().1;
+        let new_fd = match orig_fd {
+            FileData::Regular(mode, size, _, hash) =>
+                FileData::Regular(mode, size, 0, hash),
+            _ => panic!(),
+        };
+
+        replica.update(&mut dir, &oss("file"), &orig_fd, &new_fd, None)
+            .unwrap();
+
+        spit(root.path().join("file"), "xyzzy");
+        set_mtime_path(root.path().join("file"), 0).unwrap();
+
+        let final_fd = replica.list(&mut dir)
+            .unwrap().into_iter().next().unwrap().1;
+        assert_eq!(new_fd, final_fd);
+    }
 
     #[test]
     fn chdir_not_found() {
