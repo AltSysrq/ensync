@@ -764,7 +764,11 @@ Runs the server-side component, for use in `shell:...` `server` \
 configurations.
 
 <path> is the directory where data will be stored. It and its parents \
-will be created automatically as necessary.
+will be created automatically as necessary. If the directory already existed, \
+the permissions of that directory will be used for all files and directories \
+created within it (except that regular files have the execute bits cleared). \
+Otherwise, <path> is created with permissions according to umask and those \
+permissions are used for new files.
 
 This command is not for interactive use. It expects to receive on standard \
 input and send on standard output the binary protocol that it uses to \

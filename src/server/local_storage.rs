@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry::*;
 use std::fs;
 use std::io::{self, BufRead, Read, Seek, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::u32;
@@ -32,6 +33,8 @@ use defs::{DisplayHash, HashId, UNKNOWN_HASH};
 use errors::*;
 use sql::{self, SendConnection, StatementEx};
 use server::storage::*;
+
+const NX: u32 = !0o7111;
 
 /// Implements the server storage system on the local filesystem.
 ///
@@ -86,6 +89,9 @@ pub struct LocalStorage {
     dirty_dir_buf: Mutex<fs::File>,
     db: Mutex<SendConnection>,
     txns: Mutex<HashMap<Tx, TxData>>,
+    // Permissions to use for new files. This is copied from the permissions on
+    // the top-level directory.
+    permissions: fs::Permissions,
 }
 
 #[derive(Debug, Default)]
@@ -130,22 +136,42 @@ impl LocalStorage {
         let objdir = path.join("objs");
         let dirdir = path.join("dirs");
 
-        fn create_dir_all(path: &Path) -> Result<()> {
-            fs::create_dir_all(path).chain_err(
-                || format!("Failed to create directory '{}'", path.display()))
+        fn create_dir_all(path: &Path, perm: &fs::Permissions) -> Result<()> {
+            fs::DirBuilder::new().recursive(true).mode(perm.mode())
+                .create(path).chain_err(
+                    || format!("Failed to create directory '{}'",
+                               path.display()))
         }
 
-        try!(create_dir_all(&root));
-        try!(create_dir_all(&tmpdir));
-        try!(create_dir_all(&objdir));
-        try!(create_dir_all(&dirdir));
+        fs::create_dir_all(&root).chain_err(
+            || format!("Failed to create server root '{}'", root.display()))?;
+        let permissions = fs::metadata(&root).map(
+            |md| md.permissions()).chain_err(
+            || "Failed to read server directory permissions")?;
+
+        try!(create_dir_all(&tmpdir, &permissions));
+        try!(create_dir_all(&objdir, &permissions));
+        try!(create_dir_all(&dirdir, &permissions));
         for i in 0..256 {
             let suffix = format!("{:02x}", i);
-            try!(create_dir_all(&objdir.join(&suffix)));
-            try!(create_dir_all(&dirdir.join(&suffix)));
+            try!(create_dir_all(&objdir.join(&suffix), &permissions));
+            try!(create_dir_all(&dirdir.join(&suffix), &permissions));
         }
 
-        let cxn = try!(sqlite::Connection::open(path.join("state.sqlite")));
+        // SQLite doesn't respect umask. Making it do so is a C preprocessor
+        // option only. However, it won't change the mode of an existing file,
+        // and as of http://www.sqlite.org/src/info/84b324606a will copy the
+        // permissions of the database to any auxiliary files. It will also
+        // open an empty file as the database and behave properly. So create
+        // the database file if it does not already exist and ensure it has the
+        // proper mode.
+        let sqlite_path = path.join("state.sqlite");
+        fs::OpenOptions::new().append(true).create(true).mode(
+            permissions.mode() & NX).open(&sqlite_path)
+            .chain_err(|| format!("Error creating '{}'",
+                                  sqlite_path.display()))?;
+        let cxn = try!(sqlite::Connection::open(sqlite_path));
+
         try!(cxn.execute(include_str!("storage-schema.sql")));
 
         let tmpfile = tempfile::tempfile().chain_err(
@@ -158,6 +184,7 @@ impl LocalStorage {
             dirty_dir_buf: Mutex::new(tmpfile),
             db: Mutex::new(SendConnection(cxn)),
             txns: Mutex::new(HashMap::default()),
+            permissions: permissions,
         })
     }
 
@@ -195,6 +222,14 @@ impl LocalStorage {
         }
     }
 
+    fn named_temp_file(&self) -> io::Result<NamedTempFile> {
+        let file = NamedTempFile::new_in(&self.tmpdir)?;
+        let perm = fs::Permissions::from_mode(
+            self.permissions.mode() & NX);
+        fs::set_permissions(file.path(), perm)?;
+        Ok(file)
+    }
+
     fn do_commit(&self, db: &sqlite::Connection, tx: &mut TxData)
                  -> Result<bool> {
         for op in &mut tx.ops { match *op {
@@ -212,7 +247,7 @@ impl LocalStorage {
                      .binding(3, &sver[..])
                      .binding(4, data.len() as i64)
                      .run());
-                let mut tmpfile = try!(NamedTempFile::new_in(&self.tmpdir));
+                let mut tmpfile = try!(self.named_temp_file());
                 try!(tmpfile.write_all(data));
 
                 match tmpfile.persist_noclobber(self.dir_path(&id, &ver)) {
@@ -303,8 +338,7 @@ impl LocalStorage {
                 // here if we lost a race to a cleaner.
                 let objpath = self.obj_path(&id);
                 if fs::symlink_metadata(&objpath).is_err() {
-                    let mut tmpfile = try!(
-                        NamedTempFile::new_in(&self.tmpdir));
+                    let mut tmpfile = try!(self.named_temp_file());
                     try!(io::copy(handle, &mut tmpfile));
                     let persisted = try!(tmpfile.persist(&objpath));
                     try!(persisted.sync_all());
@@ -646,7 +680,7 @@ impl Storage for LocalStorage {
         // There is a possibility of a concurrent process noticing the file
         // with no links and deleting it. This is fine, as we hold onto a
         // handle to the file and can reconstitute it later as with `LinkObj`.
-        let mut tmpfile = try!(NamedTempFile::new_in(&self.tmpdir));
+        let mut tmpfile = try!(self.named_temp_file());
         try!(tmpfile.write_all(data));
         {
             let db = self.db.lock().unwrap();
