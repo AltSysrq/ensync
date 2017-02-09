@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
-use std::io::{Write, stdout, stderr};
+use std::io::{self, Read, Write, stdout, stderr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::Ordering::SeqCst;
@@ -732,7 +732,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads)
+        run_sync(context, level, num_threads, config)
     } else {
         // For some reason the type parms on `Context` are required
         let context = Arc::new(reconcile::Context::<
@@ -748,7 +748,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads)
+        run_sync(context, level, num_threads, config)
     }
 }
 
@@ -758,8 +758,7 @@ fn run_sync<CLI : Replica + 'static,
                           TransferOut = CLI::TransferIn> + 'static>
     (context: Arc<reconcile::Context<CLI, ANC, SRV, LoggerImpl,
                                      rules::engine::DirEngine>>,
-     level: LogLevel,
-     num_threads: u32)
+     level: LogLevel, num_threads: u32, config: &Config)
     -> Result<()>
 {
     macro_rules! spawn {
@@ -774,21 +773,52 @@ fn run_sync<CLI : Replica + 'static,
         }
     }
 
+    let last_config_path = config.private_root.join("last-config.dat");
+    let prepare_type = match fs::File::open(&last_config_path).and_then(
+        |mut file| {
+            let mut hash = HashId::default();
+            file.read_exact(&mut hash)?;
+            Ok(hash)
+        })
+    {
+        Ok(h) if h == config.hash => PrepareType::Fast,
+        Ok(_) => {
+            perrln!("Configuration changed since last sync; all directories \
+                     will be re-scanned.");
+            PrepareType::Clean
+        },
+        Err(ref e) if io::ErrorKind::NotFound == e.kind() =>
+            PrepareType::Clean,
+        Err(e) => {
+            perrln!("Error reading '{}': {}.\n\
+                     Assuming configuration may have \
+                     changed; all directories will be re-scanned.",
+                    last_config_path.display(), e);
+            PrepareType::Clean
+        },
+    };
+
     interrupt::install_signal_handler();
 
     if level >= WARN {
         perrln!("Scanning files for changes...");
     }
     let client_prepare = spawn!(
-        |context| context.cli.prepare(PrepareType::Fast));
+        |context| context.cli.prepare(prepare_type));
     let server_prepare = spawn!(
-        |context| context.srv.prepare(PrepareType::Fast));
+        |context| context.srv.prepare(prepare_type));
     client_prepare.join()
         .expect("Child thread panicked")
         .chain_err(|| "Scanning for local changes failed")?;
     server_prepare.join()
         .expect("Child thread panicked")
         .chain_err(|| "Scanning for remote changes failed")?;
+
+    if let Err(e) = fs::File::create(&last_config_path).and_then(
+        |mut file| file.write_all(&config.hash))
+    {
+        perrln!("Failed to write to '{}': {}", last_config_path.display(), e);
+    }
 
     let root_state = context.start_root()
         .chain_err(|| "Failed to start sync process")?;

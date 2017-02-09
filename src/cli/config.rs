@@ -26,10 +26,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use flate2;
+use keccak;
 #[cfg(feature = "passphrase-prompt")] use rpassword;
 use toml;
 
-use defs::PRIVATE_DIR_NAME;
+use defs::{PRIVATE_DIR_NAME, HashId};
 use errors::*;
 use rules::engine::SyncRules;
 
@@ -54,6 +55,8 @@ pub struct Config {
     pub compression: flate2::Compression,
     /// The sync rules to use for reconciliation.
     pub sync_rules: Arc<SyncRules>,
+    /// The hash of the raw configuration text.
+    pub hash: HashId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +132,14 @@ impl Config {
     /// the text was loaded and must end with `CONFIG_FILE_NAME` and have a
     /// parent.
     pub fn parse<P : AsRef<Path>>(filename: P, s: &str) -> Result<Self> {
+        let hash = {
+            let mut hash = HashId::default();
+            let mut kc = keccak::Keccak::new_sha3_256();
+            kc.update(s.as_bytes());
+            kc.finalize(&mut hash);
+            hash
+        };
+
         let filename = filename.as_ref();
         assert!(filename.ends_with(CONFIG_FILE_NAME));
         let parent = filename.parent().expect(
@@ -235,6 +246,8 @@ impl Config {
             sync_rules: SyncRules::parse(&rules, "rules").map(Arc::new)
                 .chain_err(|| format!("{}: Invalid sync rules configuration",
                                       filename.display()))?,
+
+            hash: hash,
         })
     }
 }
