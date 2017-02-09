@@ -33,6 +33,7 @@ unsafe extern "C" fn handle_sigint(_: libc::c_int) {
                 message.len() as libc::size_t);
     INTERRUPTED.store(true, Relaxed);
     libc::signal(libc::SIGTERM, libc::SIG_DFL);
+    libc::signal(libc::SIGINT, libc::SIG_DFL);
 }
 
 pub fn install_signal_handler() {
