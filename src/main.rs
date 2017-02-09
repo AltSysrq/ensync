@@ -286,6 +286,18 @@ exist."))
                          .required(false)
                          .takes_value(false)
                          .help("Don't actually make any changes"))
+                    .arg(Arg::with_name("strategy")
+                         .long("strategy")
+                         .required(false)
+                         .takes_value(true)
+                         .default_value("fast")
+                         .possible_values(&["fast", "clean", "scrub"])
+                         .help("Control what is checked for syncing. \"fast\" \
+                                means to only scan directories that have \
+                                obviously changed. \"clean\" causes all \
+                                directories to be scanned. \"scrub\" \
+                                additionally causes all cached hashes to be \
+                                purged (this will make the sync very slow)."))
                     .after_help("\
 As one might expect, `ensync sync` is the main subcommand. When invoked, \
 `ensync sync` will scan for file changes and automatically propagate them \
@@ -906,7 +918,8 @@ pipe."))
                            matches.value_of("spin").unwrap(),
                            matches.is_present("include-ancestors"),
                            matches.is_present("dry-run"),
-                           num_threads)
+                           num_threads,
+                           matches.value_of("strategy").unwrap())
     } else if let Some(matches) = matches.subcommand_matches("ls") {
         set_up!(matches, config, storage, replica);
         cli::cmd_manual::ls(&replica, matches.values_of_os("path").unwrap(),

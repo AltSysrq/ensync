@@ -639,7 +639,8 @@ pub fn run(config: &Config, storage: Arc<Storage>,
            colour: &str, spin: &str,
            include_ancestors: bool,
            dry_run: bool,
-           num_threads: u32) -> Result<()> {
+           num_threads: u32,
+           prepare_type: &str) -> Result<()> {
     let colour = match colour {
         "never" => false,
         "always" => true,
@@ -651,6 +652,12 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         "always" => true,
         "auto" => 1 == unsafe { isatty(2) },
         _ => false,
+    };
+    let prepare_type = match prepare_type {
+        "fast" => PrepareType::Fast,
+        "clean" => PrepareType::Clean,
+        "scrub" => PrepareType::Scrub,
+        _ => PrepareType::Fast,
     };
 
     let passphrase = config.passphrase.read_passphrase(
@@ -732,7 +739,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads, config)
+        run_sync(context, level, num_threads, prepare_type, config)
     } else {
         // For some reason the type parms on `Context` are required
         let context = Arc::new(reconcile::Context::<
@@ -748,7 +755,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads, config)
+        run_sync(context, level, num_threads, prepare_type, config)
     }
 }
 
@@ -758,7 +765,8 @@ fn run_sync<CLI : Replica + 'static,
                           TransferOut = CLI::TransferIn> + 'static>
     (context: Arc<reconcile::Context<CLI, ANC, SRV, LoggerImpl,
                                      rules::engine::DirEngine>>,
-     level: LogLevel, num_threads: u32, config: &Config)
+     level: LogLevel, num_threads: u32, prepare_type: PrepareType,
+     config: &Config)
     -> Result<()>
 {
     macro_rules! spawn {
@@ -774,7 +782,7 @@ fn run_sync<CLI : Replica + 'static,
     }
 
     let last_config_path = config.private_root.join("last-config.dat");
-    let prepare_type = match fs::File::open(&last_config_path).and_then(
+    let min_prepare_type = match fs::File::open(&last_config_path).and_then(
         |mut file| {
             let mut hash = HashId::default();
             file.read_exact(&mut hash)?;
@@ -797,6 +805,8 @@ fn run_sync<CLI : Replica + 'static,
             PrepareType::Clean
         },
     };
+
+    let prepare_type = max(prepare_type, min_prepare_type);
 
     interrupt::install_signal_handler();
 
