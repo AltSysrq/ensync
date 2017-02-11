@@ -250,13 +250,8 @@ impl LocalStorage {
                 let mut tmpfile = try!(self.named_temp_file());
                 try!(tmpfile.write_all(data));
 
-                match tmpfile.persist_noclobber(self.dir_path(&id, &ver)) {
+                match tmpfile.persist(self.dir_path(&id, &ver)) {
                     Ok(persisted) => { persisted.sync_all()?; },
-                    Err(PersistError { ref error, .. })
-                        if io::ErrorKind::AlreadyExists == error.kind() =>
-                    {
-                        return Ok(false);
-                    },
                     Err(PersistError { error, .. }) =>
                         return Err(error.into()),
                 }
