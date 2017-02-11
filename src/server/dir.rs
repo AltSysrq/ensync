@@ -1120,6 +1120,6 @@ impl DirContent {
 
     fn rewrite_instead_of_append(&self) -> bool {
         self.physical_entries > 16 &&
-            (self.physical_entries as usize) * 2 > self.files.len()
+            (self.physical_entries as usize) > self.files.len() * 2
     }
 }
