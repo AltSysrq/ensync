@@ -330,6 +330,7 @@ process less gracefully (e.g., with `kill -9`) will not result in data loss, \
 but may leave stray temporary files or corrupt the cache."))
         .subcommand(
             SubCommand::with_name("key")
+            .setting(AppSettings::SubcommandRequiredElseHelp)
             .about("Perform key management operations")
             .max_term_width(100)
             .subcommand(SubCommand::with_name("init")
@@ -451,6 +452,7 @@ passphrase of the key being deleted for this, even if that key is in the \
                         .arg(&config_arg))
             .subcommand(
                 SubCommand::with_name("group")
+                .setting(AppSettings::SubcommandRequiredElseHelp)
                 .about("Manage key groups")
                 .max_term_width(100)
                 .subcommand(SubCommand::with_name("create")
