@@ -179,7 +179,7 @@ impl Dao {
     }
 
     /// Clears all clean directory records.
-    pub fn set_all_dirs_ditry(&self) -> Result<()> {
+    pub fn set_all_dirs_dirty(&self) -> Result<()> {
         Ok(self.0.prepare("DELETE FROM `clean_dirs`").run()?)
     }
 

@@ -23,6 +23,7 @@ extern crate chrono;
 extern crate crypto as rust_crypto;
 extern crate flate2;
 extern crate libc;
+extern crate notify;
 extern crate num_cpus;
 extern crate rand;
 extern crate regex;
