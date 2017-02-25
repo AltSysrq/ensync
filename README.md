@@ -60,10 +60,10 @@ Supported platforms:
 
 ### Status
 
-Experimental. The application itself has proven fairly stable in testing. The
-protocol between the client and server (when using a separate-process server)
-may still be subject to incompatible change. The on-disk format is unlikely to
-be changed in a backwards-incompatible way, but this isn't a promise yet.
+Beta. The application itself has proven fairly stable in testing. The protocol
+between the client and server (when using a separate-process server) may still
+be subject to incompatible change. The on-disk format is unlikely to be changed
+in a backwards-incompatible way, but this isn't a promise yet.
 
 ### Contents
 

@@ -1,6 +1,6 @@
 [package]
 name = "ensync"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Jason Lingle"]
 license = "GPL-3.0"
 repository = "https://github.com/altsysrq/ensync"
