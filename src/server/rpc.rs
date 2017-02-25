@@ -736,6 +736,14 @@ impl Storage for RemoteStorage {
         })
     }
 
+    fn watch(&mut self, _f: Box<FnMut (&HashId) + Send>) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn watchdir(&self, _dir: &HashId, _ver: &HashId, _len: u32) -> Result<()> {
+        unimplemented!()
+    }
+
     fn clean_up(&self) {
         let _ = self.send_single_sync_request(Request::CleanUp);
     }
@@ -744,8 +752,6 @@ impl Storage for RemoteStorage {
 #[cfg(test)]
 mod test {
     include!("storage_tests.rs");
-
-    use std::thread;
 
     use os_pipe::{self, PipeReader, PipeWriter};
 

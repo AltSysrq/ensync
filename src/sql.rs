@@ -192,7 +192,7 @@ unsafe impl Send for SendConnection { }
 ///
 /// When the database is opened, the schema is executed, and then a test is
 /// made to see whether the `db_dirty` table is non-empty. If it is, or any
-/// error occurs in this process, `PRAGMA integrety_check(1)` is run. If that
+/// error occurs in this process, `PRAGMA integrity_check(1)` is run. If that
 /// fails or returns any errors, a warning is printed, the database file is
 /// **deleted**, and then a new database is opened and the schema executed. If
 /// the second try fails, an error is returned.

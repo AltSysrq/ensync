@@ -29,6 +29,11 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::Ordering::SeqCst;
+use std::thread;
+use std::time::Duration;
 
 use tempdir::TempDir;
 
@@ -467,4 +472,55 @@ fn linkobj_holds_handle_to_file_to_recreate_if_needed() {
     assert!(storage.commit(2).unwrap());
     assert_eq!(b"hello world",
                &storage.getobj(&hashid(1)).unwrap().unwrap()[..]);
+}
+
+#[test]
+fn watch_doesnt_notify_changes_by_self() {
+    init!(dir, storage);
+    let mut storage = storage;
+
+    let pass = Arc::new(AtomicBool::new(true));
+    let pass2 = pass.clone();
+    storage.watch(Box::new(move |_| pass2.store(false, SeqCst))).unwrap();
+
+    storage.start_tx(1).unwrap();
+    storage.mkdir(1, &hashid(1), &hashid(2), &hashid(0),
+                  b"unchanged").unwrap();
+    assert!(storage.commit(1).unwrap());
+
+    thread::sleep(Duration::new(10, 0));
+    assert!(pass.load(SeqCst));
+}
+
+#[test]
+fn wtach_notifies_changes_by_other() {
+    init!(dir, storage1);
+    let mut storage1 = storage1;
+    let storage2 = create_storage(&dir.path());
+
+    let seen_notification = Arc::new(AtomicUsize::new(0));
+    let seen_notification2 = seen_notification.clone();
+    let fail = Arc::new(AtomicBool::new(false));
+    let fail2 = fail.clone();
+    storage1.watch(Box::new(move |&id| {
+        if id != hashid(1) {
+            fail2.store(true, SeqCst);
+        } else {
+            seen_notification2.fetch_add(1, SeqCst);
+        }
+    })).unwrap();
+
+    storage1.start_tx(1).unwrap();
+    storage1.mkdir(1, &hashid(1), &hashid(2), &hashid(0),
+                   b"plugh").unwrap();
+    assert!(storage1.commit(1).unwrap());
+    storage1.watchdir(&hashid(1), &hashid(2), 5).unwrap();
+
+    storage2.start_tx(1).unwrap();
+    storage2.updir(1, &hashid(1), &hashid(0), 5, b"xyzzy").unwrap();
+    assert!(storage2.commit(1).unwrap());
+
+    thread::sleep(Duration::new(10, 0));
+    assert!(!fail.load(SeqCst));
+    assert_eq!(1, seen_notification.load(SeqCst));
 }

@@ -1064,7 +1064,9 @@ impl Watch for PosixReplica {
         #[cfg(test)] const DEBOUNCE_SECS: u64 = 3;
         #[cfg(not(test))] const DEBOUNCE_SECS: u64 = 30;
 
-        assert!(self.watcher.is_none());
+        if self.watcher.is_some() {
+            return Err(ErrorKind::AlreadyWatching.into());
+        }
 
         let (tx, rx) = mpsc::channel();
         let notifier = notify::watcher(tx, Duration::new(DEBOUNCE_SECS, 0))
