@@ -287,6 +287,18 @@ exist."))
                          .required(false)
                          .takes_value(false)
                          .help("Don't actually make any changes"))
+                    .arg(Arg::with_name("watch")
+                         .short("w")
+                         .long("watch")
+                         .required(false)
+                         .conflicts_with("dry-run")
+                         .takes_value(false)
+                         .help("When done syncing, continue running and \
+                                monitor for file changes and sync when \
+                                detected. Note that these syncs typically \
+                                happen 30 to 60 seconds after the file \
+                                changes. This requires extra resources \
+                                both locally and on the server."))
                     .arg(Arg::with_name("strategy")
                          .long("strategy")
                          .required(false)
@@ -923,6 +935,7 @@ pipe."))
                            matches.value_of("spin").unwrap(),
                            matches.is_present("include-ancestors"),
                            matches.is_present("dry-run"),
+                           matches.is_present("watch"),
                            num_threads,
                            matches.value_of("strategy").unwrap())
     } else if let Some(matches) = matches.subcommand_matches("ls") {

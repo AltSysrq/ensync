@@ -41,7 +41,7 @@ use log::*;
 use posix::*;
 use reconcile::compute::*;
 use reconcile;
-use replica::{Condemn, NullTransfer, PrepareType, Replica};
+use replica::{Condemn, NullTransfer, PrepareType, Replica, Watch, WatchHandle};
 use rules;
 use server::*;
 use work_stack;
@@ -639,6 +639,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
            colour: &str, spin: &str,
            include_ancestors: bool,
            dry_run: bool,
+           watch: bool,
            num_threads: u32,
            prepare_type: &str) -> Result<()> {
     let colour = match colour {
@@ -665,14 +666,14 @@ pub fn run(config: &Config, storage: Arc<Storage>,
     let key_chain = Arc::new(
         keymgmt::derive_key_chain(&*storage, &passphrase)?);
 
-    let server_replica = open_server_replica(
-        config, storage.clone(), Some(key_chain.clone()))?;
+    let mut server_replica = open_server_replica(
+        config, storage, Some(key_chain.clone()))?;
 
     let client_private_dir = config.private_root.join("client");
     fs::create_dir_all(&client_private_dir).chain_err(
         || format!("Failed to create client replica private directory '{}'",
                    client_private_dir.display()))?;
-    let client_replica = PosixReplica::new(
+    let mut client_replica = PosixReplica::new(
         config.client_root.clone(), client_private_dir,
         key_chain.obj_hmac_secret()?, config.block_size as usize)
         .chain_err(|| "Failed to set up client replica")?;
@@ -741,6 +742,14 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
         run_sync(context, level, num_threads, prepare_type, config)
     } else {
+        let watch_handle = Arc::new(WatchHandle::default());
+        if watch {
+            client_replica.watch(Arc::downgrade(&watch_handle)).chain_err(
+                || "Error setting watch on client replica")?;
+            server_replica.watch(Arc::downgrade(&watch_handle)).chain_err(
+                || "Error setting watch on server replica")?;
+        }
+
         // For some reason the type parms on `Context` are required
         let context = Arc::new(reconcile::Context::<
                 PosixReplica, AncestorReplica, ServerReplica<Storage>,
@@ -755,7 +764,23 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads, prepare_type, config)
+        run_sync(context.clone(), level, num_threads, prepare_type, config)?;
+
+        if watch { loop {
+            // TODO Need to handle ^C / SIGTERM here more sensibly
+
+            watch_handle.wait();
+            if !watch_handle.check_dirty() { continue; }
+
+            run_sync(context.clone(), level, num_threads,
+                     if watch_handle.check_context_lost() {
+                         PrepareType::Fast
+                     } else {
+                         PrepareType::Watched
+                     }, config)?;
+        } }
+
+        Ok(())
     }
 }
 
