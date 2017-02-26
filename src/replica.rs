@@ -250,8 +250,8 @@ struct WatchStatus {
 impl Default for WatchStatus {
     fn default() -> WatchStatus {
         WatchStatus {
-            dirty: true,
-            context_lost: true,
+            dirty: false,
+            context_lost: false,
          }
     }
 }
