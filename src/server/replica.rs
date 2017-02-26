@@ -16,8 +16,11 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
-use std::sync::{Arc, Mutex};
+use std::mem;
+use std::path::Path;
+use std::sync::{Arc, Mutex, Weak};
 use std::u32;
 
 use flate2;
@@ -38,12 +41,17 @@ impl<S : Storage + ?Sized + 'static> ReplicaDirectory for Arc<Dir<S>> {
     }
 }
 
+#[derive(Default)]
+struct WatcherStatus {
+    dirty: HashSet<HashId>,
+}
+
 pub struct ServerReplica<S : Storage + ?Sized + 'static> {
     db: Arc<Mutex<SendConnection>>,
     key: Arc<KeyChain>,
-    storage: Arc<S>,
     pseudo_root: Arc<Dir<S>>,
     root_name: OsString,
+    watcher: Option<Arc<Mutex<WatcherStatus>>>,
 }
 
 impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
@@ -61,24 +69,26 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
     ///
     /// `block_size` indicates the block size to use for all new file blocking
     /// operations.
-    pub fn new(path: &str, key: Arc<KeyChain>,
-               storage: Arc<S>, root_name: &str,
-               block_size: usize, compression: flate2::Compression)
-               -> Result<Self> {
+    pub fn new<P : AsRef<Path>>(
+        path: P, key: Arc<KeyChain>,
+        storage: Arc<S>, root_name: &str,
+        block_size: usize, compression: flate2::Compression)
+        -> Result<Self>
+    {
         let db = sqlite::Connection::open(path)?;
         db.execute(include_str!("client-schema.sql"))?;
         let db = Arc::new(Mutex::new(SendConnection(db)));
 
         let pseudo_root = Arc::new(Dir::root(
-            db.clone(), key.clone(), storage.clone(),
+            db.clone(), key.clone(), storage,
             block_size, compression)?);
 
         Ok(ServerReplica {
             db: db,
             key: key.clone(),
-            storage: storage,
             pseudo_root: pseudo_root,
             root_name: root_name.to_owned().into(),
+            watcher: None,
         })
     }
 
@@ -106,6 +116,10 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
     pub fn key_chain(&self) -> &Arc<KeyChain> {
         &self.key
     }
+
+    fn storage(&self) -> &Arc<S> {
+        &self.pseudo_root.storage
+    }
 }
 
 impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
@@ -114,7 +128,7 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     type TransferOut = Option<ContentAddressableSource>;
 
     fn is_fatal(&self) -> bool {
-        self.storage.is_fatal()
+        self.storage().is_fatal()
     }
 
     fn is_dir_dirty(&self, dir: &Arc<Dir<S>>) -> bool {
@@ -145,6 +159,10 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
             .binding(3, ver as i64)
             .binding(4, len as i64)
             .run()?;
+        if self.watcher.is_some() {
+            let ever = encrypt_dir_ver(&dir.id, ver, &self.key);
+            self.storage().watchdir(&dir.id, &ever, len)?;
+        }
         Ok(true)
     }
 
@@ -245,6 +263,14 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     }
 
     fn prepare(&self, typ: PrepareType) -> Result<()> {
+        let dir_filter = if let (true, Some(ws)) =
+            (typ <= PrepareType::Watched, self.watcher.as_ref())
+        {
+            Some(mem::replace(&mut ws.lock().unwrap().dirty, HashSet::new()))
+        } else {
+            None
+        };
+
         let db = self.db.lock().unwrap();
         if typ >= PrepareType::Clean {
             db.prepare("DELETE FROM `clean_dir`").run()?;
@@ -267,11 +293,15 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
                 id.copy_from_slice(&vid);
 
                 let ver = encrypt_dir_ver(&id, vver as u64, &self.key);
-                self.storage.check_dir_dirty(&id, &ver, ilen as u32)?;
+                self.storage().check_dir_dirty(&id, &ver, ilen as u32)?;
             }
         }
 
-        self.storage.for_dirty_dir(&mut |id| {
+        self.storage().for_dirty_dir(&mut |id| {
+            if dir_filter.as_ref().map_or(false, |d| !d.contains(id)) {
+                return Ok(());
+            }
+
             // Remove the clean entries for this directory and all its parents.
             let mut next_target = Some(id.to_vec());
             while let Some(target) = next_target {
@@ -293,7 +323,30 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     }
 
     fn clean_up(&self) -> Result<()> {
-        self.storage.clean_up();
+        self.storage().clean_up();
+        Ok(())
+    }
+}
+
+impl<S : Storage + ?Sized> Watch for ServerReplica<S> {
+    fn watch(&mut self, watch: Weak<WatchHandle>) -> Result<()> {
+        if self.watcher.is_some() {
+            return Err(ErrorKind::AlreadyWatching.into());
+        }
+
+        let status = Arc::new(Mutex::new(WatcherStatus::default()));
+        let status2 = status.clone();
+        let mut_pr = Arc::get_mut(&mut self.pseudo_root).expect(
+            "ServerReplica::watch called while pseudo-root shared");
+        Arc::get_mut(&mut mut_pr.storage).expect(
+            "ServerReplica::watch called while storage shared")
+            .watch(Box::new(move |id| {
+                status2.lock().unwrap().dirty.insert(*id);
+                if let Some(wh) = watch.upgrade() {
+                    wh.set_dirty();
+                }
+            }))?;
+        self.watcher = Some(status);
         Ok(())
     }
 }
@@ -302,6 +355,8 @@ impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
 mod test {
     use std::io::Cursor;
     use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
 
     use flate2;
     use tempdir::TempDir;
@@ -1184,6 +1239,60 @@ mod test {
     }
 
     #[test]
+    fn watch_notifies_of_change_by_other_instance() {
+        let dir = TempDir::new("storage").unwrap();
+        let storage_dir = dir.path().join("storage");
+
+        let key_chain = Arc::new(KeyChain::generate_new());
+
+        let mut replica1 = ServerReplica::new(
+            ":memory:", key_chain.clone(),
+            Arc::new(LocalStorage::open(&storage_dir).unwrap()),
+            "r00t", 1024, flate2::Compression::Fast).unwrap();
+        let replica2 = ServerReplica::new(
+            ":memory:", key_chain.clone(),
+            Arc::new(LocalStorage::open(&storage_dir).unwrap()),
+            "r00t", 1024, flate2::Compression::Fast).unwrap();
+        replica1.create_root().unwrap();
+
+        let watch = Arc::new(WatchHandle::default());
+        watch.check_dirty();
+        assert!(!watch.check_dirty());
+        watch.check_context_lost();
+        assert!(!watch.check_context_lost());
+
+        replica1.watch(Arc::downgrade(&watch)).unwrap();
+
+        {
+            replica1.prepare(PrepareType::Fast).unwrap();
+            let mut root = replica1.root().unwrap();
+            replica1.list(&mut root).unwrap();
+            replica1.set_dir_clean(&root).unwrap();
+            replica1.clean_up().unwrap();
+        }
+
+        {
+            replica2.prepare(PrepareType::Fast).unwrap();
+            let mut root = replica2.root().unwrap();
+            replica2.list(&mut root).unwrap();
+            replica2.create(&mut root, File(
+                &oss("plugh"), &FileData::Symlink(oss("xyzzy"))), None)
+                .unwrap();
+            replica2.clean_up().unwrap();
+        }
+
+        thread::sleep(Duration::new(10, 0));
+        assert!(watch.check_dirty());
+        assert!(!watch.check_context_lost());
+
+        {
+            replica1.prepare(PrepareType::Watched).unwrap();
+            let root = replica1.root().unwrap();
+            assert!(replica1.is_dir_dirty(&root));
+        }
+    }
+
+    #[test]
     fn directory_revert_detected() {
         use std::process::Command;
 
@@ -1202,7 +1311,7 @@ mod test {
         {
             let storage = LocalStorage::open(&storage_dir).unwrap();
             let replica = ServerReplica::new(
-                sqlite_file.to_str().unwrap(), key_chain.clone(),
+                &sqlite_file, key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
                 flate2::Compression::Fast).unwrap();
             replica.create_root().unwrap();
@@ -1228,7 +1337,7 @@ mod test {
             // Now open the out-of-date copy we made and try to navigate it.
             let storage = LocalStorage::open(&copy_dir).unwrap();
             let replica = ServerReplica::new(
-                sqlite_file.to_str().unwrap(), key_chain.clone(),
+                &sqlite_file, key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
                 flate2::Compression::Fast).unwrap();
 
