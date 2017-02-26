@@ -38,14 +38,22 @@ pub struct ImplementationInfo {
     pub version: (u32, u32, u32),
     /// The protocol version the implementation supports.
     ///
-    /// Clients SHOULD send the latest protocol they support. The server
-    /// MUST respond to `ClientInfo` with `Error` if it does not support
-    /// the stated version. A server which supports a later version but
-    /// also supports that version MUST respond with a protocol version of
-    /// the same major version, but may include a different minor version.
-    /// A server which only supports protocol versions earlier than the
-    /// client's SHOULD respond with the latest protocol version it
-    /// supports; in this case, whether to continue is up to the client.
+    /// The version exchange works as follows:
+    ///
+    /// - The client sends the greatest (major,minor) version it supports.
+    ///
+    /// - If `major` is older than the oldest version the server supports, it
+    /// returns `FatalError` indicating the problem and terminates.
+    ///
+    /// - If `major` is a protocol version the server supports, it responds
+    /// with that major version and the latest minor version of that major
+    /// version it supports.
+    ///
+    /// - If `major` is later than anything the server supports, it responds
+    /// with the greatest (major,minor) version it supports.
+    ///
+    /// - The client fails if it does not support the major version sent back
+    /// by the server.
     ///
     /// A major version difference in the protocol indicates a change that both
     /// sides must be aware of. A minor version difference implies that the
@@ -607,8 +615,24 @@ impl RemoteStorage {
                 implementation: ImplementationInfo::this_implementation()
             }
         )) => {
-            Response::ServerInfo { implementation, motd } =>
-                Ok((implementation, motd)),
+            Response::ServerInfo { implementation, motd } => {
+                if implementation.protocol.0 > PROTOCOL_VERSION_MAJOR {
+                    return Err(format!(
+                        "The server negotiated protocol version {}.{}, \
+                         but {} {}.{}.{} only supports protocol version \
+                         {}.{}",
+                        implementation.protocol.0,
+                        implementation.protocol.1,
+                        env!("CARGO_PKG_NAME"),
+                        env!("CARGO_PKG_VERSION_MAJOR"),
+                        env!("CARGO_PKG_VERSION_MINOR"),
+                        env!("CARGO_PKG_VERSION_PATCH"),
+                        PROTOCOL_VERSION_MAJOR,
+                        PROTOCOL_VERSION_MINOR).into());
+                }
+
+                Ok((implementation, motd))
+            },
         })
     }
 }
