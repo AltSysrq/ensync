@@ -724,6 +724,8 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         },
     };
 
+    interrupt::install_signal_handler();
+
     if dry_run {
         let context = Arc::new(reconcile::Context::<
                 DryRunReplica<PosixReplica>,
@@ -748,6 +750,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
                 || "Error setting watch on client replica")?;
             server_replica.watch(Arc::downgrade(&watch_handle)).chain_err(
                 || "Error setting watch on server replica")?;
+            interrupt::notify_on_signal(watch_handle.clone());
         }
 
         // For some reason the type parms on `Context` are required
@@ -766,10 +769,9 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
         run_sync(context.clone(), level, num_threads, prepare_type, config)?;
 
-        if watch { loop {
-            // TODO Need to handle ^C / SIGTERM here more sensibly
-
+        if watch { while !interrupt::is_interrupted() {
             watch_handle.wait();
+            if interrupt::is_interrupted() { break; }
             if !watch_handle.check_dirty() { continue; }
 
             run_sync(context.clone(), level, num_threads,
@@ -832,8 +834,6 @@ fn run_sync<CLI : Replica + 'static,
     };
 
     let prepare_type = max(prepare_type, min_prepare_type);
-
-    interrupt::install_signal_handler();
 
     if level >= WARN {
         perrln!("Scanning files for changes...");

@@ -21,6 +21,7 @@ use std::sync::{Condvar, Mutex, Weak};
 
 use defs::*;
 use errors::Result;
+use interrupt;
 
 /// Controls the behaviour of `Replica::prepare`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -294,6 +295,11 @@ impl WatchHandle {
         context_lost
     }
 
+    /// Notify all waiters without changing state.
+    pub fn notify(&self) {
+        self.cond.notify_all();
+    }
+
     /// Sets the `dirty` flag on the `WatchHandle` and notifies all waiters.
     pub fn set_dirty(&self) {
         let mut lock = self.status.lock().unwrap();
@@ -310,10 +316,11 @@ impl WatchHandle {
         self.cond.notify_all();
     }
 
-    /// Delays the caller until the `dirty` flag is set.
+    /// Delays the caller until the `dirty` flag is set or the process has been
+    /// interrupted.
     pub fn wait(&self) {
         let mut lock = self.status.lock().unwrap();
-        while !lock.dirty {
+        while !lock.dirty && !interrupt::is_interrupted() {
             lock = self.cond.wait(lock).unwrap();
         }
     }
