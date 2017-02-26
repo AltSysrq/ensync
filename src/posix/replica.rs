@@ -43,6 +43,18 @@ use posix;
 use posix::dao::{Dao,InodeStatus};
 use posix::dir::*;
 
+type Inode = (u64, u64);
+
+trait MetadataExt2 {
+    fn inode(&self) -> Inode;
+}
+
+impl<T : MetadataExt> MetadataExt2 for T {
+    fn inode(&self) -> Inode {
+        (self.dev(), self.ino())
+    }
+}
+
 struct Config {
     hmac_secret: Vec<u8>,
     root: PathBuf,
@@ -53,12 +65,14 @@ struct Config {
 }
 
 struct WatcherStatus {
-    watcher: notify::RecommendedWatcher,
+    /// The inotify/etc front-end. We don't actually access this after
+    /// constructing it, but need to hold on to it to keep it running.
+    _watcher: notify::RecommendedWatcher,
     /// Map from inode number to path being watched (as would be passed to
     /// `Dao::set_dir_dirty`).
-    watched: HashMap<u64, OsString>,
+    watched: HashMap<Inode, OsString>,
     /// Inodes from `watched` which have become dirty while being watched.
-    dirty: HashSet<u64>,
+    dirty: HashSet<Inode>,
 }
 
 pub struct PosixReplica {
@@ -1046,14 +1060,8 @@ impl WatcherStatus {
         let inode = fs::metadata(&path)
             .chain_err(|| format!("Error getting inode of '{}'",
                                   Path::new(&path).display()))?
-            .ino();
+            .inode();
 
-        if self.watched.contains_key(&inode) { return Ok(()); }
-
-        self.watcher.watch(&path, notify::RecursiveMode::NonRecursive)
-            .chain_err(
-                || format!("Error setting watch on '{}'",
-                           Path::new(&path).display()))?;
         self.watched.insert(inode, path);
         Ok(())
     }
@@ -1069,11 +1077,14 @@ impl Watch for PosixReplica {
         }
 
         let (tx, rx) = mpsc::channel();
-        let notifier = notify::watcher(tx, Duration::new(DEBOUNCE_SECS, 0))
+        let mut notifier = notify::watcher(tx, Duration::new(DEBOUNCE_SECS, 0))
             .chain_err(|| "Error allocating filesystem notifier")?;
+        notifier.watch(&self.config.root, notify::RecursiveMode::Recursive)
+            .chain_err(|| format!("Error setting recursive watch on '{}'",
+                                  self.config.root.display()))?;
 
         let watcher = Arc::new(Mutex::new(WatcherStatus {
-            watcher: notifier,
+            _watcher: notifier,
             watched: HashMap::new(),
             dirty: HashSet::new(),
         }));
@@ -1088,24 +1099,34 @@ impl Watch for PosixReplica {
                 return;
             };
 
-            fn touch(watcher: &Mutex<WatcherStatus>, mut path: PathBuf) {
+            fn touch(watcher: &Mutex<WatcherStatus>, mut path: PathBuf)
+                     -> bool {
                 let _ = path.pop();
 
                 if let Ok(md) = fs::metadata(&path) {
-                    watcher.lock().unwrap().dirty.insert(md.ino());
+                    let mut lock = watcher.lock().unwrap();
+                    if lock.watched.contains_key(&md.inode()) {
+                        lock.dirty.insert(md.inode());
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
                 }
             }
 
             match event {
                 NoticeWrite(path) | NoticeRemove(path) | Create(path) |
                 Write(path) | Chmod(path) | Remove(path) => {
-                    touch(&watcher, path);
-                    watch.set_dirty();
+                    if touch(&watcher, path) {
+                        watch.set_dirty();
+                    }
                 },
                 Rename(from, to) => {
-                    touch(&watcher, from);
-                    touch(&watcher, to);
-                    watch.set_dirty();
+                    if touch(&watcher, from) || touch(&watcher, to) {
+                        watch.set_dirty();
+                    }
                 },
                 Rescan => watch.set_context_lost(),
                 Error(err, path) => {
