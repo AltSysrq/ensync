@@ -31,19 +31,21 @@ use server::*;
 pub fn connect_server_storage<R : Read + Send + 'static,
                               W : Write + Send + 'static>
     (mut child: process::Child, stdin: W, stdout: R,
-     command: &str) -> Result<RemoteStorage>
+     command: &str, show_connection: bool) -> Result<RemoteStorage>
 {
     let mut storage = RemoteStorage::new(stdout, stdin);
 
     match storage.exchange_client_info() {
         Ok((info, motd)) => {
-            let _ = writeln!(stderr(), "Connected to {} {}.{}.{} \
-                                        (proto {}.{}) via `{}`",
-                             info.name, info.version.0, info.version.1,
-                             info.version.2, info.protocol.0,
-                             info.protocol.1, command);
-            if let Some(motd) = motd {
-                let _ = writeln!(stderr(), "{}", motd);
+            if show_connection {
+                let _ = writeln!(stderr(), "Connected to {} {}.{}.{} \
+                                            (proto {}.{}) via `{}`",
+                                 info.name, info.version.0, info.version.1,
+                                 info.version.2, info.protocol.0,
+                                 info.protocol.1, command);
+                if let Some(motd) = motd {
+                    let _ = writeln!(stderr(), "{}", motd);
+                }
             }
         },
         Err(e) => {
@@ -75,7 +77,8 @@ pub fn connect_server_storage<R : Read + Send + 'static,
 ///
 /// If this spawns a process, there is no way to reap the process when it
 /// terminates.
-pub fn open_server_storage(config: &ServerConfig) -> Result<Arc<Storage>> {
+pub fn open_server_storage(config: &ServerConfig, show_connection: bool)
+                           -> Result<Arc<Storage>> {
     match *config {
         ServerConfig::Path(ref path) =>
             Ok(Arc::new(LocalStorage::open(path).chain_err(
@@ -113,7 +116,8 @@ pub fn open_server_storage(config: &ServerConfig) -> Result<Arc<Storage>> {
             let stdin = child.stdin.take()
                 .expect("Missing stdin pipe on child");
             Ok(Arc::new(
-                connect_server_storage(child, stdin, stdout, command)?))
+                connect_server_storage(child, stdin, stdout, command,
+                                       show_connection)?))
         },
     }
 }

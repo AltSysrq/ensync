@@ -804,7 +804,9 @@ pipe."))
         ($matches:ident, $config:ident, $storage:ident) => {
             set_up!($matches, $config);
             let $storage = cli::open_server::open_server_storage(
-                &$config.server)?;
+                &$config.server,
+                $matches.occurrences_of("quiet") <=
+                    $matches.occurrences_of("verbose"))?;
             fs::create_dir_all(&$config.private_root).chain_err(
                 || format!("Failed to create ensync private directory '{}'",
                            $config.private_root.display()))?;

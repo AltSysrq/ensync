@@ -854,7 +854,7 @@ fn run_sync<CLI : Replica + 'static,
 
     let prepare_type = max(prepare_type, min_prepare_type);
 
-    if level >= WARN && show_messages {
+    if level >= EDIT && show_messages {
         perrln!("Scanning files for changes...");
     }
     let client_prepare = spawn!(

@@ -154,7 +154,7 @@ Does this look reasonable? ", full_local.display(), remote_path,
         }
         server_spec = format!("shell:{}", command);
         storage = Arc::new(
-            connect_server_storage(child, input, output, &command)?);
+            connect_server_storage(child, input, output, &command, true)?);
     } else {
         sanity_check_remote(LocalPathAccess, remote)?;
 
