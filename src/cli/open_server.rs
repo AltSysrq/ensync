@@ -33,7 +33,7 @@ pub fn connect_server_storage<R : Read + Send + 'static,
     (mut child: process::Child, stdin: W, stdout: R,
      command: &str) -> Result<RemoteStorage>
 {
-    let storage = RemoteStorage::new(stdout, stdin);
+    let mut storage = RemoteStorage::new(stdout, stdin);
 
     match storage.exchange_client_info() {
         Ok((info, motd)) => {

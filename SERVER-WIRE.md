@@ -21,10 +21,11 @@ The server and the client send streams of fourleaf values conforming to the
 `Response` and `Request` enums defined in `rpc.rs`, respectively.
 
 Depending on the type, each client frame may require the server to send one or
-more response frames. The server MUST NOT send unsolicited frames, except that
-it MAY send an unsolicited `Error` response immediately before terminating
-communication to indicate a fatal error, since `Error` is an acceptable
-response for whatever frame the client may later send.
+more response frames. The server MUST NOT send unsolicited frames, except as
+enabled by specific requests and that it MAY send an unsolicited `FatalError`
+response immediately before terminating communication to indicate a fatal
+error, since `FatalError` is an acceptable response for whatever frame the
+client may later send.
 
 The client MAY continue sending frames even when the most recent frame is still
 pending a response from the server. The server MUST send responses in the same
