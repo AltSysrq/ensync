@@ -17,13 +17,18 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::ffi::{OsStr,OsString};
+use std::sync::{Condvar, Mutex, Weak};
 
 use defs::*;
 use errors::Result;
+use interrupt;
 
 /// Controls the behaviour of `Replica::prepare`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PrepareType {
+    /// Only check for the aftermath of events reported to the `WatchHandle`
+    /// associated with `Watch::watch()`.
+    Watched,
     /// The ordinary prepare mode. The replica may assume things marked clean
     /// are still clean provided their conditions are met.
     Fast,
@@ -235,4 +240,100 @@ pub trait Condemn : Replica {
     ///
     /// Uncondemning a name which is not condemned has no effect.
     fn uncondemn(&self, dir: &mut Self::Directory, file: &OsStr) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WatchStatus {
+    dirty: bool,
+    context_lost: bool,
+}
+
+impl Default for WatchStatus {
+    fn default() -> WatchStatus {
+        WatchStatus {
+            dirty: false,
+            context_lost: false,
+         }
+    }
+}
+
+/// Handle passed to `Replica::watch` to allow notifying higher-level code
+/// about changes within the replica.
+///
+/// Initially, the `Watch` is marked both `dirty` and `context_lost`.
+pub struct WatchHandle {
+    cond: Condvar,
+    status: Mutex<WatchStatus>,
+}
+
+impl Default for WatchHandle {
+    fn default() -> Self {
+        WatchHandle {
+            cond: Condvar::new(),
+            status: Mutex::new(WatchStatus::default()),
+        }
+    }
+}
+
+impl WatchHandle {
+    /// Checks whether this `WatchHandle` has the `dirty` flag set, indicating
+    /// that changes have been detected. The `dirty` flag is then cleared.
+    pub fn check_dirty(&self) -> bool {
+        let mut lock = self.status.lock().unwrap();
+        let dirty = lock.dirty;
+        lock.dirty = false;
+        dirty
+    }
+
+    /// Checks whether this `WatchHandle` has the `context_lost` flag set,
+    /// indicating that a full `Replica::prepare` call must be made. The
+    /// `context_lost` flag is then cleared.
+    pub fn check_context_lost(&self) -> bool {
+        let mut lock = self.status.lock().unwrap();
+        let context_lost = lock.context_lost;
+        lock.context_lost = false;
+        context_lost
+    }
+
+    /// Notify all waiters without changing state.
+    pub fn notify(&self) {
+        self.cond.notify_all();
+    }
+
+    /// Sets the `dirty` flag on the `WatchHandle` and notifies all waiters.
+    pub fn set_dirty(&self) {
+        let mut lock = self.status.lock().unwrap();
+        lock.dirty = true;
+        self.cond.notify_all();
+    }
+
+    /// Sets the `dirty` and `context_lost` flags on the `WatchHandle` and
+    /// notifies all waiters.
+    pub fn set_context_lost(&self) {
+        let mut lock = self.status.lock().unwrap();
+        lock.dirty = true;
+        lock.context_lost = true;
+        self.cond.notify_all();
+    }
+
+    /// Delays the caller until the `dirty` flag is set or the process has been
+    /// interrupted.
+    pub fn wait(&self) {
+        let mut lock = self.status.lock().unwrap();
+        while !lock.dirty && !interrupt::is_interrupted() {
+            lock = self.cond.wait(lock).unwrap();
+        }
+    }
+}
+
+/// Trait for replicas which can send notifications when clean directories have
+/// been changed.
+pub trait Watch : Replica {
+    /// Starts watching for changes to any directories in this replica marked
+    /// as clean. When such directories are changed, they are marked as dirty
+    /// and the watch is notified.
+    ///
+    /// These notifications continue until the `WatchHandle` or the `Replica`
+    /// is dropped.
+    fn watch(&mut self, watch: Weak<WatchHandle>) -> Result<()>;
 }

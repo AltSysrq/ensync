@@ -22,7 +22,9 @@ use std::fs;
 use std::io::{self, BufRead, Read, Seek, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use std::u32;
 
 use keccak::Keccak;
@@ -87,11 +89,16 @@ pub struct LocalStorage {
     dirdir: PathBuf,
     objdir: PathBuf,
     dirty_dir_buf: Mutex<fs::File>,
-    db: Mutex<SendConnection>,
+    db: Arc<Mutex<SendConnection>>,
     txns: Mutex<HashMap<Tx, TxData>>,
     // Permissions to use for new files. This is copied from the permissions on
     // the top-level directory.
     permissions: fs::Permissions,
+    /// If Some, directories being monitored by the asynchronous watcher mapped
+    /// to their expected version and length.
+    ///
+    /// Lock hierarchy: This is a leaf lock.
+    watch_list: Option<Arc<Mutex<HashMap<HashId, (HashId, u32)>>>>,
 }
 
 #[derive(Debug, Default)]
@@ -182,9 +189,10 @@ impl LocalStorage {
             objdir: objdir,
             dirdir: dirdir,
             dirty_dir_buf: Mutex::new(tmpfile),
-            db: Mutex::new(SendConnection(cxn)),
+            db: Arc::new(Mutex::new(SendConnection(cxn))),
             txns: Mutex::new(HashMap::default()),
             permissions: permissions,
+            watch_list: None,
         })
     }
 
@@ -415,7 +423,17 @@ impl LocalStorage {
 
     fn postcommit_cleanup(&self, tx: &TxData) {
         for op in &tx.ops { match *op {
+            TxOp::Mkdir { ref id, .. } | TxOp::Updir { ref id, .. } => {
+                if let Some(ref wl) = self.watch_list {
+                    wl.lock().unwrap().remove(id);
+                }
+            },
+
             TxOp::Rmdir { ref id, ref sver, .. } => {
+                if let Some(ref wl) = self.watch_list {
+                    wl.lock().unwrap().remove(id);
+                }
+
                 // `sver` has been overwritten with the normal version.
                 let _ = fs::remove_file(self.dir_path(id, sver));
             },
@@ -452,6 +470,19 @@ impl LocalStorage {
             Ok(())
         })
     }
+}
+
+fn dir_exists_with_version(db: &SendConnection, id: &HashId, ver: &HashId,
+                           len: u32) -> Result<bool> {
+    db.prepare(
+        "SELECT 1 FROM `dirs` \
+         WHERE `id` = ?1 AND ver = ?2 AND length = ?3")
+        .binding(1, &id[..])
+        .binding(2, &ver[..])
+        .binding(3, len as u64 as i64)
+        .exists()
+        .chain_err(|| format!("Error checking state of directory {}/{}",
+                              DisplayHash(*id), DisplayHash(*ver)))
 }
 
 impl Storage for LocalStorage {
@@ -512,15 +543,12 @@ impl Storage for LocalStorage {
 
     fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
                        -> Result<()> {
-        let exists = { let db = self.db.lock().unwrap(); let b = db.prepare(
-            "SELECT 1 FROM `dirs` \
-             WHERE `id` = ?1 AND ver = ?2 AND length = ?3")
-            .binding(1, &id[..])
-            .binding(2, &ver[..])
-            .binding(3, len as u64 as i64)
-            .exists()
-            .chain_err(|| format!("Error checking state of directory {}/{}",
-                                  DisplayHash(*id), DisplayHash(*ver))); b }?;
+        if let Some(ref watch_list) = self.watch_list {
+            watch_list.lock().unwrap().insert(*id, (*ver, len));
+        }
+
+        let exists = dir_exists_with_version(
+            &self.db.lock().unwrap(), id, ver, len)?;
 
         if !exists {
             self.dirty_dir_buf.lock().unwrap().write_all(id).chain_err(
@@ -707,6 +735,64 @@ impl Storage for LocalStorage {
             id: *id,
             linkid: *linkid,
         })
+    }
+
+    fn watch(&mut self, mut f: Box<FnMut (&HashId) + Send>) -> Result<()> {
+        if self.watch_list.is_some() {
+            return Err(ErrorKind::AlreadyWatching.into());
+        }
+
+        let watch_list = Arc::new(Mutex::new(HashMap::new()));
+        let weak_watch_list = Arc::downgrade(&watch_list);
+        self.watch_list = Some(watch_list);
+
+        let weak_db = Arc::downgrade(&self.db);
+
+        thread::spawn(move || loop {
+            // We implement watching by simple polling, which admittedly isn't
+            // the most efficient approach. This was chosen on account of
+            // several considerations:
+            //
+            // - We can't use the `notify` crate here, because we have no way
+            // to go from the directory filename to the directory id since it
+            // is SHA-3'ed.
+            //
+            // - Proper IPC systems would make ensync heavier and less
+            // portable.
+            //
+            // - Using polling means zero overhead for uses not requiring
+            // watching, nor do other parts of the code need to be aware of how
+            // change detection happens.
+            #[cfg(test)] const POLL_INTERVAL: u64 = 1;
+            #[cfg(not(test))] const POLL_INTERVAL: u64 = 30;
+
+            thread::sleep(Duration::new(POLL_INTERVAL, 0));
+
+            let (watch_list, db) = match (weak_watch_list.upgrade(),
+                                          weak_db.upgrade()) {
+                (Some(w), Some(d)) => (w, d),
+                _ => return,
+            };
+
+            let wl_copy = watch_list.lock().unwrap().clone();
+            for (id, (ver, len)) in wl_copy {
+                if let Ok(false) = dir_exists_with_version(
+                    &db.lock().unwrap(), &id, &ver, len)
+                {
+                    watch_list.lock().unwrap().remove(&id);
+                    f(&id);
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn watchdir(&self, id: &HashId, ver: &HashId, len: u32) -> Result<()> {
+        if let Some(ref watch_list) = self.watch_list {
+            watch_list.lock().unwrap().insert(*id, (*ver, len));
+        }
+        Ok(())
     }
 
     fn clean_up(&self) {

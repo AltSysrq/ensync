@@ -16,11 +16,18 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::sync::atomic::{AtomicBool, ATOMIC_BOOL_INIT};
-use std::sync::atomic::Ordering::Relaxed;
+use std::mem;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize,
+                        ATOMIC_BOOL_INIT, ATOMIC_USIZE_INIT};
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use libc;
 
+use replica::WatchHandle;
+
 static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
+// Should be `AtomicPtr<WatchHandle>` but there's no `ATOMIC_PTR_INIT`.
+static NOTIFY_WATCH: AtomicUsize = ATOMIC_USIZE_INIT;
 
 pub fn is_interrupted() -> bool {
     INTERRUPTED.load(Relaxed)
@@ -34,6 +41,12 @@ unsafe extern "C" fn handle_sigint(_: libc::c_int) {
     INTERRUPTED.store(true, Relaxed);
     libc::signal(libc::SIGTERM, libc::SIG_DFL);
     libc::signal(libc::SIGINT, libc::SIG_DFL);
+
+    let watch: *const WatchHandle =
+        NOTIFY_WATCH.load(SeqCst) as *const WatchHandle;
+    if !watch.is_null() {
+        (*watch).notify();
+    }
 }
 
 pub fn install_signal_handler() {
@@ -45,4 +58,12 @@ pub fn install_signal_handler() {
                      as unsafe extern "C" fn (libc::c_int)
                      as libc::sighandler_t);
     }
+}
+
+pub fn notify_on_signal(watch: Arc<WatchHandle>) {
+    let ptr = (&*watch) as *const WatchHandle;
+    mem::forget(watch);
+
+    assert!(0 == NOTIFY_WATCH.compare_and_swap(
+        0, ptr as usize, SeqCst));
 }

@@ -17,8 +17,10 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::io::{self, BufRead, Read, Write};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::thread;
 
 use fourleaf;
 
@@ -27,7 +29,7 @@ use errors::*;
 use server::storage::*;
 
 pub const PROTOCOL_VERSION_MAJOR: u32 = 0;
-pub const PROTOCOL_VERSION_MINOR: u32 = 0;
+pub const PROTOCOL_VERSION_MINOR: u32 = 1;
 
 /// Identifies a client or server implementation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,14 +40,22 @@ pub struct ImplementationInfo {
     pub version: (u32, u32, u32),
     /// The protocol version the implementation supports.
     ///
-    /// Clients SHOULD send the latest protocol they support. The server
-    /// MUST respond to `ClientInfo` with `Error` if it does not support
-    /// the stated version. A server which supports a later version but
-    /// also supports that version MUST respond with a protocol version of
-    /// the same major version, but may include a different minor version.
-    /// A server which only supports protocol versions earlier than the
-    /// client's SHOULD respond with the latest protocol version it
-    /// supports; in this case, whether to continue is up to the client.
+    /// The version exchange works as follows:
+    ///
+    /// - The client sends the greatest (major,minor) version it supports.
+    ///
+    /// - If `major` is older than the oldest version the server supports, it
+    /// returns `FatalError` indicating the problem and terminates.
+    ///
+    /// - If `major` is a protocol version the server supports, it responds
+    /// with that major version and the latest minor version of that major
+    /// version it supports.
+    ///
+    /// - If `major` is later than anything the server supports, it responds
+    /// with the greatest (major,minor) version it supports.
+    ///
+    /// - The client fails if it does not support the major version sent back
+    /// by the server.
     ///
     /// A major version difference in the protocol indicates a change that both
     /// sides must be aware of. A minor version difference implies that the
@@ -95,6 +105,8 @@ pub enum Request {
     /// Clients SHOULD send this as their first request.
     ///
     /// Response: One `ServerInfo` | `Error`.
+    ///
+    /// Since: 0.0
     ClientInfo {
         /// The implementation information about the client.
         implementation: ImplementationInfo,
@@ -102,61 +114,104 @@ pub enum Request {
     /// `Storage::getdir`.
     ///
     /// Response: One `DirData` | `NotFound` | `Error`
+    ///
+    /// Since: 0.0
     GetDir(HashId),
     /// `Storage::getobj`
     ///
     /// Response: One `ObjData` | `NotFound` | `Error`
+    ///
+    /// Since: 0.0
     GetObj(HashId),
     /// `Storage::check_dir_dirty`
     ///
     /// No response.
+    ///
+    /// Since: 0.0
     CheckDirDirty(HashId, HashId, u32),
     /// `Storgae::for_dirty_dir`
     ///
     /// - Any number of `DirtyDir`
     /// - One `Done` | `Error`
+    ///
+    /// Since: 0.0
     ForDirtyDir,
     /// `Storage::start_tx`
     ///
     /// No response.
+    ///
+    /// Since: 0.0
     StartTx(Tx),
     /// `Storage::commit`
     ///
     /// Response: One `Done` | `Fail` | `Error`
+    ///
+    /// Since: 0.0
     Commit(Tx),
     /// `Storage::abort`
     ///
     /// Response: One `Done` | `Error`
+    ///
+    /// Since: 0.0
     Abort(Tx),
     /// `Storage::mkdir`
     ///
     /// No response.
+    ///
+    /// Since: 0.0
     Mkdir { tx: Tx, id: HashId, ver: HashId, sver: HashId, data: Vec<u8>, },
     /// `Storage::updir`
     ///
     /// No response.
+    ///
+    /// Since: 0.0
     Updir { tx: Tx, id: HashId, sver: HashId, old_len: u32,
             append: Vec<u8>, },
     /// `Storage::rmdir`
     ///
     /// No response.
+    ///
+    /// Since: 0.0
     Rmdir { tx: Tx, id: HashId, sver: HashId, old_len: u32, },
     /// `Storage::linkobj`
     ///
     /// Response: One `Done` | `NotFound` | `Error`
+    ///
+    /// Since: 0.0
     Linkobj { tx: Tx, id: HashId, linkid: HashId },
     /// `Storage::putobj`
     ///
     /// No response.
+    ///
+    /// Since: 0.0
     Putobj { tx: Tx, id: HashId, linkid: HashId, data: Vec<u8>, },
     /// `Storage::unlinkobj`
     ///
     /// No response.
+    ///
+    /// Since: 0.0
     Unlinkobj { tx: Tx, id: HashId, linkid: HashId },
     /// `Storage::clean_up`
     ///
     /// Response: One `Done`.
+    ///
+    /// Since: 0.0
     CleanUp,
+    /// `Storage::watch`. Enables the sending of unsolicited `WatchNotify`
+    /// responses, and causes `Watchdir` and `CheckDirDirty` requests to add
+    /// their respective directories to the watch list.
+    ///
+    /// Response: One `Done` or `Error`.
+    ///
+    /// Since: 0.1
+    Watch,
+    /// `Storage::watchdir`. If `Watch` has been sent, causes the given
+    /// directory to be monitored for changes from the given state.
+    ///
+    /// No response.
+    ///
+    /// Since: 0.1
+    Watchdir { id: HashId, ver: HashId, len: u32 },
 }
 
 fourleaf_retrofit!(enum Request : {} {} {
@@ -240,6 +295,15 @@ fourleaf_retrofit!(enum Request : {} {} {
     [15] Request::CleanUp => {
         { Ok(Request::CleanUp) }
     },
+    [16] Request::Watch => {
+        { Ok(Request::Watch) }
+    },
+    [17] Request::Watchdir { ref id, ref ver, len } => {
+        [1] id: HashId = id,
+        [2] ver: HashId = ver,
+        [3] len: u32 = len,
+        { Ok(Request::Watchdir { id: id, ver: ver, len: len }) }
+    },
 });
 
 /// Responses correspoinding to various `Request`s above.
@@ -247,10 +311,16 @@ fourleaf_retrofit!(enum Request : {} {} {
 pub enum Response {
     /// The request was carried out successfully, and there is no
     /// information to return.
+    ///
+    /// Since: 0.0
     Done,
     /// The request was not executed due to conditions on the request.
+    ///
+    /// Since: 0.0
     Fail,
     /// The server tried to execute the request, but failed to do so.
+    ///
+    /// Since: 0.0
     Error(String),
     /// The server encountered an error and cannot continue.
     ///
@@ -259,16 +329,28 @@ pub enum Response {
     /// framing mechanism is still working correctly, if the request that
     /// was not understood did not take a response, returning an error
     /// would desynchronise the request/response pairing.)
+    ///
+    /// Since: 0.0
     FatalError(String),
     /// The item referenced by the request does not exist.
+    ///
+    /// Since: 0.0
     NotFound,
     /// A directory id which is to be considered dirty.
+    ///
+    /// Since: 0.0
     DirtyDir(HashId),
     /// The version and full data of a directory.
+    ///
+    /// Since: 0.0
     DirData(HashId, Vec<u8>),
     /// The full data of an object.
+    ///
+    /// Since: 0.0
     ObjData(Vec<u8>),
     /// Identifies information about the server.
+    ///
+    /// Since: 0.0
     ServerInfo {
         /// Information about the server implementation.
         implementation: ImplementationInfo,
@@ -276,6 +358,16 @@ pub enum Response {
         /// to the user.
         motd: Option<String>,
     },
+    /// Notifies the client that the named directory may have been changed away
+    /// from the state registered via `CheckDirDirty` or `Watchdir`. This may
+    /// also be sent spuriously even if the directory has not been changed.
+    ///
+    /// This response is sent unsolicited when these changes are detected. They
+    /// MUST NOT be sent unless the client has enabled them via a successful
+    /// `Watch` request.
+    ///
+    /// Since: 0.1
+    WatchNotify(HashId),
 }
 
 fourleaf_retrofit!(enum Response : {} {} {
@@ -309,6 +401,10 @@ fourleaf_retrofit!(enum Response : {} {} {
         [2] motd: Option<String> = motd,
         { Ok(Response::ServerInfo { implementation: implementation,
                                     motd: motd }) }
+    },
+    [10] Response::WatchNotify(ref id) => {
+        [1] id: HashId = id,
+        { Ok(Response::WatchNotify(id)) }
     },
 });
 
@@ -345,24 +441,24 @@ enum RequestResponse {
 ///
 /// Requests will be read from `unbuf_sin`, executed, and responses written to
 /// `unbuf_sout` until either input returns EOF or a fatal error occurs.
-pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
-    storage: S, unbuf_sin: R, unbuf_sout: W) -> Result<()>
+pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
+    mut storage: S, unbuf_sin: R, unbuf_sout: W) -> Result<()>
 {
     let mut sin = io::BufReader::new(unbuf_sin);
-    let mut sout = io::BufWriter::new(unbuf_sout);
+    let sout = Arc::new(Mutex::new(io::BufWriter::new(unbuf_sout)));
     let mut fatal_error = None;
     loop {
         let request: Request = match read_frame(&mut sin) {
             Ok(Some(r)) => r,
             Ok(None) => break,
             Err(e) => {
-                let _ = send_frame(&mut sout,
+                let _ = send_frame(&mut*sout.lock().unwrap(),
                                    Response::FatalError(format!("{}", e)));
                 break;
             },
         };
 
-        match process_frame(&storage, request, &mut sout) {
+        match process_frame(&mut storage, request, &sout) {
             RequestResponse::None => { },
             // We can't immediately send a `FatalError` when an async command
             // fails, because the client might have more async commands to
@@ -390,7 +486,7 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
                 } else {
                     false
                 };
-                try!(write_response(&mut sout, response));
+                try!(write_response(&mut*sout.lock().unwrap(), response));
 
                 if fatal {
                     return Ok(());
@@ -399,8 +495,8 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
         }
     }
 
-    fn process_frame<S : Storage, W : Write>(
-        storage: &S, request: Request, sout: &mut W)
+    fn process_frame<S : Storage, W : Write + Send + 'static>(
+        storage: &mut S, request: Request, sout: &Arc<Mutex<W>>)
         -> RequestResponse
     {
         macro_rules! err {
@@ -441,7 +537,8 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
 
             Request::ForDirtyDir => {
                 match storage.for_dirty_dir(&mut |id| {
-                    write_response(sout, Response::DirtyDir(*id))
+                    write_response(&mut*sout.lock().unwrap(),
+                                   Response::DirtyDir(*id))
                 }) {
                     Ok(()) => RequestResponse::SyncResponse(Response::Done),
                     Err(err) => err!(err),
@@ -490,6 +587,25 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write>(
                 storage.clean_up();
                 RequestResponse::SyncResponse(Response::Done)
             },
+
+            Request::Watch => {
+                let sout = Arc::downgrade(sout);
+                match storage.watch(Box::new(move |id| {
+                    let sout = match sout.upgrade() {
+                        Some(s) => s,
+                        None => return,
+                    };
+
+                    let _ = write_response(&mut*sout.lock().unwrap(),
+                                           Response::WatchNotify(*id));
+                })) {
+                    Ok(_) => RequestResponse::SyncResponse(Response::Done),
+                    Err(err) => err!(err),
+                }
+            },
+
+            Request::Watchdir { id, ver, len } =>
+                none_or_fatal!(storage.watchdir(&id, &ver, len)),
         }
     }
 
@@ -510,10 +626,16 @@ pub struct RemoteStorage {
     // with `sin` is not equal to the integer above, it waits on `cond`. Once
     // it does match, the response is read and then the integer on `sin` is
     // incremented and all waiters on `cond` are notified.
+    //
+    // Note that frames are read and parsed by another thread which handles
+    // unsolicited responses like `WatchNotify`.
     sout: Mutex<(Box<Write + Send>, u64)>,
-    sin: Mutex<(Box<BufRead + Send>, u64)>,
+    sin: Mutex<(mpsc::Receiver<Result<Response>>, u64)>,
     cond: Condvar,
     fatal: AtomicBool,
+    /// The protocol version negotiated by the server.
+    protocol: (u32, u32),
+    watch_fun: Arc<Mutex<Option<Box<FnMut (&HashId) + Send>>>>,
 }
 
 macro_rules! handle_response {
@@ -547,15 +669,44 @@ macro_rules! tryf {
     } }
 }
 
+fn recv<T>(r: &mpsc::Receiver<Result<T>>) -> Result<T> {
+    r.recv().chain_err(|| "Error obtaining response from worker")
+        .and_then(|r| r)
+}
+
 impl RemoteStorage {
     pub fn new<R : Read + Send + 'static, W : Write + Send + 'static>
         (sin: R, sout: W) -> Self
     {
+        let mut sin = io::BufReader::new(sin);
+        let (tx, rx) = mpsc::sync_channel(0);
+
+        let watch_fun: Arc<Mutex<Option<Box<FnMut (&HashId) + Send>>>> =
+            Arc::new(Mutex::new(None));
+        let watch_fun2 = watch_fun.clone();
+
+        thread::spawn(move || loop {
+            let resp = read_frame(&mut sin).and_then(
+                |r| r.ok_or(ErrorKind::ServerConnectionClosed.into()));
+
+            match resp {
+                Ok(Response::WatchNotify(ref id)) => {
+                    let mut wf = watch_fun2.lock().unwrap();
+                    if let Some(ref mut wf) = *wf {
+                        wf(id);
+                    }
+                },
+                _ => if tx.send(resp).is_err() { break; },
+            }
+        });
+
         RemoteStorage {
             sout: Mutex::new((Box::new(io::BufWriter::new(sout)), 0)),
-            sin: Mutex::new((Box::new(io::BufReader::new(sin)), 0)),
+            sin: Mutex::new((rx, 0)),
             cond: Condvar::new(),
             fatal: AtomicBool::new(false),
+            protocol: (0, 0),
+            watch_fun: watch_fun,
         }
     }
 
@@ -566,7 +717,8 @@ impl RemoteStorage {
         Ok(())
     }
 
-    fn send_sync_request<T, F : FnOnce (&mut BufRead) -> Result<T>>(
+    fn send_sync_request<T, F : FnOnce (&mpsc::Receiver<Result<Response>>)
+                                        -> Result<T>>(
         &self, req: Request, read: F) -> Result<T>
     {
         let ticket = {
@@ -585,30 +737,43 @@ impl RemoteStorage {
             }
             sin.1 += 1;
 
-            let ret = read(&mut*sin.0).chain_err(
-                || "Error reading server response");
+            let ret = read(&sin.0);
             self.cond.notify_all();
             ret
         }
     }
 
     fn send_single_sync_request(&self, req: Request) -> Result<Response> {
-        self.send_sync_request(req, |r| {
-            read_frame(r).and_then(
-                |r| r.ok_or(ErrorKind::ServerConnectionClosed.into()))
-        })
+        self.send_sync_request(req, |r| recv(r))
     }
 
     pub fn exchange_client_info
-        (&self) -> Result<(ImplementationInfo, Option<String>)>
+        (&mut self) -> Result<(ImplementationInfo, Option<String>)>
     {
         handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::ClientInfo {
                 implementation: ImplementationInfo::this_implementation()
             }
         )) => {
-            Response::ServerInfo { implementation, motd } =>
-                Ok((implementation, motd)),
+            Response::ServerInfo { implementation, motd } => {
+                if implementation.protocol.0 > PROTOCOL_VERSION_MAJOR {
+                    return Err(format!(
+                        "The server negotiated protocol version {}.{}, \
+                         but {} {}.{}.{} only supports protocol version \
+                         {}.{}",
+                        implementation.protocol.0,
+                        implementation.protocol.1,
+                        env!("CARGO_PKG_NAME"),
+                        env!("CARGO_PKG_VERSION_MAJOR"),
+                        env!("CARGO_PKG_VERSION_MINOR"),
+                        env!("CARGO_PKG_VERSION_PATCH"),
+                        PROTOCOL_VERSION_MAJOR,
+                        PROTOCOL_VERSION_MINOR).into());
+                }
+                self.protocol = implementation.protocol;
+
+                Ok((implementation, motd))
+            },
         })
     }
 }
@@ -644,12 +809,10 @@ impl Storage for RemoteStorage {
 
     fn for_dirty_dir(&self, f: &mut FnMut (&HashId) -> Result<()>)
                      -> Result<()> {
-        self.send_sync_request(Request::ForDirtyDir, |mut sin| {
+        self.send_sync_request(Request::ForDirtyDir, |sin| {
             let mut error = None;
             loop {
-                handle_response!(self, tryf!(self, read_frame(&mut sin).and_then(
-                    |r| r.ok_or(ErrorKind::ServerConnectionClosed.into())
-                )) => {
+                handle_response!(self, tryf!(self, recv(sin)) => {
                     Response::Done => break,
                     Response::DirtyDir(id) => match f(&id) {
                         Ok(()) => { },
@@ -736,6 +899,31 @@ impl Storage for RemoteStorage {
         })
     }
 
+    fn watch(&mut self, f: Box<FnMut (&HashId) + Send>) -> Result<()> {
+        if self.protocol < (0, 1) {
+            return Err(format!("\
+`--watch` requires the remote process to support protocol version 0.1 or later
+(Ensync 0.2.0 or later), but the remote process negotiated version {}.{}",
+                               self.protocol.0, self.protocol.1).into());
+        }
+
+        handle_response!(self, tryf!(self, self.send_single_sync_request(
+            Request::Watch
+        )) => {
+            Response::Done => {
+                *self.watch_fun.lock().unwrap() = Some(f);
+                Ok(())
+            },
+        })
+    }
+
+    fn watchdir(&self, dir: &HashId, ver: &HashId, len: u32) -> Result<()> {
+        assert!(self.protocol >= (0, 1));
+        self.send_async_request(Request::Watchdir {
+            id: *dir, ver: *ver, len: len
+        })
+    }
+
     fn clean_up(&self) {
         let _ = self.send_single_sync_request(Request::CleanUp);
     }
@@ -745,21 +933,10 @@ impl Storage for RemoteStorage {
 mod test {
     include!("storage_tests.rs");
 
-    use std::thread;
-
     use os_pipe::{self, PipeReader, PipeWriter};
 
     use server::local_storage::LocalStorage;
     use super::*;
-
-    #[test]
-    fn exchanging_impl_info_works() {
-        init!(_dir, storage);
-
-        let (imp, motd) = storage.exchange_client_info().unwrap();
-        assert_eq!(ImplementationInfo::this_implementation(), imp);
-        assert_eq!(None, motd);
-    }
 
     fn create_storage(dir: &Path) -> RemoteStorage {
         fn pipe() -> (PipeReader, PipeWriter) {
@@ -773,6 +950,10 @@ mod test {
         thread::spawn(move || run_server_rpc(
             local_storage, read_from_client, write_to_client));
 
-        RemoteStorage::new(read_from_server, write_to_server)
+        let mut rs = RemoteStorage::new(read_from_server, write_to_server);
+        let (imp, motd) = rs.exchange_client_info().unwrap();
+        assert_eq!(ImplementationInfo::this_implementation(), imp);
+        assert_eq!(None, motd);
+        rs
     }
 }

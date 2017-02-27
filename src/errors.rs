@@ -68,6 +68,9 @@ error_chain! {
             description("Not a directory")
             display("Not a directory")
         }
+        AlreadyWatching {
+            description("Watch already set")
+        }
         InvalidAncestorFileType(t: i64) {
             description("Bad file type in database")
             display("Bad file type in database: {}", t)

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::Ordering::SeqCst;
 use std::thread;
+use std::time::Duration;
 use libc::isatty;
 
 use ancestor::*;
@@ -41,10 +42,21 @@ use log::*;
 use posix::*;
 use reconcile::compute::*;
 use reconcile;
-use replica::{Condemn, NullTransfer, PrepareType, Replica};
+use replica::{Condemn, NullTransfer, PrepareType, Replica, Watch, WatchHandle};
 use rules;
 use server::*;
 use work_stack;
+
+macro_rules! perrln {
+    ($($arg:expr),+) => {
+        let _ = writeln!(stderr(), $($arg),+);
+    }
+}
+macro_rules! perr {
+    ($($arg:expr),+) => {
+        let _ = write!(stderr(), $($arg),+);
+    }
+}
 
 trait AsPath {
     fn as_path(&self) -> &Path;
@@ -120,15 +132,14 @@ impl LoggerImpl {
         let stderr_handle = stderr();
         let mut stderr_lock = stderr_handle.lock();
 
-        macro_rules! perr {
-            ($($arg:expr),+) => {
-                let _ = write!(stderr_lock, $($arg),+);
-            }
-        }
-
         macro_rules! perrln {
             ($($arg:expr),+) => {
                 let _ = writeln!(stderr_lock, $($arg),+);
+            }
+        }
+        macro_rules! perr {
+            ($($arg:expr),+) => {
+                let _ = write!(stderr_lock, $($arg),+);
             }
         }
 
@@ -639,6 +650,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
            colour: &str, spin: &str,
            include_ancestors: bool,
            dry_run: bool,
+           watch: bool,
            num_threads: u32,
            prepare_type: &str) -> Result<()> {
     let colour = match colour {
@@ -665,14 +677,14 @@ pub fn run(config: &Config, storage: Arc<Storage>,
     let key_chain = Arc::new(
         keymgmt::derive_key_chain(&*storage, &passphrase)?);
 
-    let server_replica = open_server_replica(
-        config, storage.clone(), Some(key_chain.clone()))?;
+    let mut server_replica = open_server_replica(
+        config, storage, Some(key_chain.clone()))?;
 
     let client_private_dir = config.private_root.join("client");
     fs::create_dir_all(&client_private_dir).chain_err(
         || format!("Failed to create client replica private directory '{}'",
                    client_private_dir.display()))?;
-    let client_replica = PosixReplica::new(
+    let mut client_replica = PosixReplica::new(
         config.client_root.clone(), client_private_dir,
         key_chain.obj_hmac_secret()?, config.block_size as usize)
         .chain_err(|| "Failed to set up client replica")?;
@@ -723,6 +735,8 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         },
     };
 
+    interrupt::install_signal_handler();
+
     if dry_run {
         let context = Arc::new(reconcile::Context::<
                 DryRunReplica<PosixReplica>,
@@ -739,8 +753,17 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads, prepare_type, config)
+        run_sync(context, level, num_threads, prepare_type, config, true)
     } else {
+        let watch_handle = Arc::new(WatchHandle::default());
+        if watch {
+            client_replica.watch(Arc::downgrade(&watch_handle)).chain_err(
+                || "Error setting watch on client replica")?;
+            server_replica.watch(Arc::downgrade(&watch_handle)).chain_err(
+                || "Error setting watch on server replica")?;
+            interrupt::notify_on_signal(watch_handle.clone());
+        }
+
         // For some reason the type parms on `Context` are required
         let context = Arc::new(reconcile::Context::<
                 PosixReplica, AncestorReplica, ServerReplica<Storage>,
@@ -755,7 +778,35 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads, prepare_type, config)
+        run_sync(context.clone(), level, num_threads, prepare_type,
+                 config, true)?;
+
+        if watch && !interrupt::is_interrupted() && level >= EDIT {
+            perrln!("Ensync will now continue to monitor for changes.\n\
+                     Note that it may take a minute or so for changes \
+                     to be noticed.\n\
+                     Press Control+C to stop.");
+        }
+
+        if watch { 'outer: while !interrupt::is_interrupted() {
+            watch_handle.wait();
+            // Sleep for a few seconds in case there are multiple notifications
+            // coming in, but bail immediately if we're responding to ^C.
+            for _ in 0..50 {
+                if interrupt::is_interrupted() { break; }
+                thread::sleep(Duration::new(0, 100_000_000));
+            }
+            if !watch_handle.check_dirty() { continue; }
+
+            run_sync(context.clone(), level, num_threads,
+                     if watch_handle.check_context_lost() {
+                         PrepareType::Fast
+                     } else {
+                         PrepareType::Watched
+                     }, config, false)?;
+        } }
+
+        Ok(())
     }
 }
 
@@ -766,7 +817,7 @@ fn run_sync<CLI : Replica + 'static,
     (context: Arc<reconcile::Context<CLI, ANC, SRV, LoggerImpl,
                                      rules::engine::DirEngine>>,
      level: LogLevel, num_threads: u32, prepare_type: PrepareType,
-     config: &Config)
+     config: &Config, show_messages: bool)
     -> Result<()>
 {
     macro_rules! spawn {
@@ -774,11 +825,6 @@ fn run_sync<CLI : Replica + 'static,
             let $context = $context.clone();
             thread::spawn(move || $body)
         } }
-    }
-    macro_rules! perrln {
-        ($($arg:expr),+) => {
-            let _ = writeln!(stderr(), $($arg),+);
-        }
     }
 
     let last_config_path = config.private_root.join("last-config.dat");
@@ -808,9 +854,7 @@ fn run_sync<CLI : Replica + 'static,
 
     let prepare_type = max(prepare_type, min_prepare_type);
 
-    interrupt::install_signal_handler();
-
-    if level >= WARN {
+    if level >= WARN && show_messages {
         perrln!("Scanning files for changes...");
     }
     let client_prepare = spawn!(
@@ -842,7 +886,11 @@ fn run_sync<CLI : Replica + 'static,
         let _ = thread.join().expect("Child thread panicked");
     }
     if context.log.spin.is_some() {
-        println!("");
+        if show_messages {
+            perrln!("");
+        } else {
+            perr!("\x1B[K");
+        }
     }
 
     if interrupt::is_interrupted() {
@@ -850,16 +898,16 @@ fn run_sync<CLI : Replica + 'static,
             perrln!("Syncing interrupted");
         }
     } else if root_state.success.load(SeqCst) {
-        if level >= EDIT {
+        if level >= EDIT && show_messages {
             perrln!("Syncing completed successfully");
         }
     } else {
-        if level >= ERROR {
+        if level >= ERROR && show_messages {
             perrln!("Syncing completed, but not clean");
         }
     }
 
-    if level >= EDIT {
+    if level >= EDIT && show_messages {
         perrln!("Cleaning up...");
     }
 

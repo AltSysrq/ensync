@@ -155,6 +155,21 @@ pub trait Storage : Send + Sync {
     fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
                  -> Result<()>;
 
+    /// Like `Replica::watch`, starts monitoring directories within storage for
+    /// changes to allow asynchronous notifications.
+    ///
+    /// When a notification is received, the affected directory is passed to
+    /// `f` and removed from the watch list.
+    ///
+    /// Directories are added to the watch list by being passed to
+    /// `check_dir_dirty` or `watchdir` after calling this function.
+    /// Directories are removed from the watch list when they are edited
+    /// through this storage object.
+    fn watch(&mut self, f: Box<FnMut (&HashId) + Send>) -> Result<()>;
+    /// If `watch()` has been called, add the given directory id to the watch
+    /// list.
+    fn watchdir(&self, dir: &HashId, ver: &HashId, len: u32) -> Result<()>;
+
     /// Performs cleanup of orphaned data on a best-effort basis.
     ///
     /// Any errors are silently ignored.

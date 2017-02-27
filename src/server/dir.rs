@@ -231,11 +231,11 @@ pub struct Dir<S : Storage + ?Sized + 'static> {
     pub parent: Option<Arc<Dir<S>>>,
     pub path: OsString,
     pub config: DirConfig,
+    pub storage: Arc<S>,
 
     // Lock hierarchy: Lock may not be acquired while lock on `content` is held.
     db: Arc<Mutex<SendConnection>>,
     key: Arc<KeyChain>,
-    storage: Arc<S>,
     tx_ctr: Arc<AtomicUsize>,
     block_size: usize,
     compression: flate2::Compression,

@@ -16,16 +16,22 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr,OsString};
 use std::fs;
+use std::mem;
 use std::io::{self,Read,Seek,Write};
 use std::os::unix;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::prelude::*;
-use std::path::{Path,PathBuf};
-use std::sync::{Arc,Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 use std::sync::atomic::{AtomicUsize,Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
+use notify::{self, Watcher};
 use tempfile::{NamedTempFile, NamedTempFileOptions};
 
 use defs::*;
@@ -37,6 +43,18 @@ use posix;
 use posix::dao::{Dao,InodeStatus};
 use posix::dir::*;
 
+type Inode = (u64, u64);
+
+trait MetadataExt2 {
+    fn inode(&self) -> Inode;
+}
+
+impl<T : MetadataExt> MetadataExt2 for T {
+    fn inode(&self) -> Inode {
+        (self.dev(), self.ino())
+    }
+}
+
 struct Config {
     hmac_secret: Vec<u8>,
     root: PathBuf,
@@ -44,6 +62,17 @@ struct Config {
     private_dir_dev: u64,
     block_size: usize,
     cache_generation: i64,
+}
+
+struct WatcherStatus {
+    /// The inotify/etc front-end. We don't actually access this after
+    /// constructing it, but need to hold on to it to keep it running.
+    _watcher: notify::RecommendedWatcher,
+    /// Map from inode number to path being watched (as would be passed to
+    /// `Dao::set_dir_dirty`).
+    watched: HashMap<Inode, OsString>,
+    /// Inodes from `watched` which have become dirty while being watched.
+    dirty: HashSet<Inode>,
 }
 
 pub struct PosixReplica {
@@ -55,6 +84,8 @@ pub struct PosixReplica {
     dao: Arc<Mutex<Dao>>,
     /// Suffix for the next temporary file generated
     tmpix: AtomicUsize,
+    /// If `watch()` has been called, the status of the watcher.
+    watcher: Option<Arc<Mutex<WatcherStatus>>>,
 }
 
 fn path_metadata(path: &Path) -> Result<fs::Metadata> {
@@ -166,6 +197,10 @@ impl Replica for PosixReplica {
             &dir.full_path_with_trailing_slash(), &dir.hash())
             .chain_err(|| format!("Failed to mark '{}' clean",
                                   dir.path().display()))?;
+        if let Some(ref watcher) = self.watcher {
+            watcher.lock().unwrap().watch(
+                dir.full_path_with_trailing_slash())?;
+        }
         Ok(true)
     }
 
@@ -453,6 +488,20 @@ impl Replica for PosixReplica {
         // Reclaim any files left over from a crashed run
         self.clean_scratch()?;
 
+        // If doing a `Watched` prepare, filter the dirs we inspect to those
+        // which the watcher has noticed are dirty.
+        let dir_filter: Option<HashSet<OsString>> =
+            if let (true, Some(watcher)) =
+            (typ <= PrepareType::Watched, self.watcher.as_ref())
+        {
+            let mut watcher = watcher.lock().unwrap();
+            Some(mem::replace(&mut watcher.dirty, HashSet::new())
+                 .into_iter().filter_map(|v| watcher.watched.get(&v))
+                 .map(|s| s.to_owned()).collect())
+        } else {
+            None
+        };
+
         // Walk all directories marked clean and check whether they are still
         // clean.
         let dao = self.dao.lock().unwrap();
@@ -462,11 +511,15 @@ impl Replica for PosixReplica {
         }
 
         if typ >= PrepareType::Clean {
-            dao.set_all_dirs_ditry()?;
+            dao.set_all_dirs_dirty()?;
         }
 
         for clean_dir in dao.iter_clean_dirs()? {
             let (path, expected_hash) = clean_dir?;
+            if dir_filter.as_ref().map_or(false, |f| !f.contains(&path)) {
+                continue;
+            }
+
             // device doesn't matter here; just use 0
             let dir = DirHandle::root(path.into(), 0);
 
@@ -494,6 +547,9 @@ impl Replica for PosixReplica {
 
             if error || expected_hash != dir.hash() {
                 dao.set_dir_dirty(&dir.full_path_with_trailing_slash())?;
+            } else if let Some(ref watcher) = self.watcher {
+                watcher.lock().unwrap().watch(
+                    dir.full_path_with_trailing_slash())?;
             }
         }
 
@@ -544,6 +600,7 @@ impl PosixReplica {
             }),
             dao: Arc::new(Mutex::new(dao)),
             tmpix: AtomicUsize::new(0),
+            watcher: None,
         })
     }
 
@@ -998,6 +1055,97 @@ impl StreamSource for FileStreamSource {
     }
 }
 
+impl WatcherStatus {
+    fn watch(&mut self, path: OsString) -> Result<()> {
+        let inode = fs::metadata(&path)
+            .chain_err(|| format!("Error getting inode of '{}'",
+                                  Path::new(&path).display()))?
+            .inode();
+
+        self.watched.insert(inode, path);
+        Ok(())
+    }
+}
+
+impl Watch for PosixReplica {
+    fn watch(&mut self, watch: Weak<WatchHandle>) -> Result<()> {
+        #[cfg(test)] const DEBOUNCE_SECS: u64 = 3;
+        #[cfg(not(test))] const DEBOUNCE_SECS: u64 = 30;
+
+        if self.watcher.is_some() {
+            return Err(ErrorKind::AlreadyWatching.into());
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let mut notifier = notify::watcher(tx, Duration::new(DEBOUNCE_SECS, 0))
+            .chain_err(|| "Error allocating filesystem notifier")?;
+        notifier.watch(&self.config.root, notify::RecursiveMode::Recursive)
+            .chain_err(|| format!("Error setting recursive watch on '{}'",
+                                  self.config.root.display()))?;
+
+        let watcher = Arc::new(Mutex::new(WatcherStatus {
+            _watcher: notifier,
+            watched: HashMap::new(),
+            dirty: HashSet::new(),
+        }));
+        self.watcher = Some(watcher.clone());
+
+        thread::spawn(move || while let Ok(event) = rx.recv() {
+            use notify::DebouncedEvent::*;
+
+            let watch = if let Some(w) = watch.upgrade() {
+                w
+            } else {
+                return;
+            };
+
+            fn touch(watcher: &Mutex<WatcherStatus>, mut path: PathBuf)
+                     -> bool {
+                let _ = path.pop();
+
+                if let Ok(md) = fs::metadata(&path) {
+                    let mut lock = watcher.lock().unwrap();
+                    if lock.watched.contains_key(&md.inode()) {
+                        lock.dirty.insert(md.inode());
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+
+            match event {
+                NoticeWrite(_) | NoticeRemove(_) => { },
+                Create(path) | Write(path) | Chmod(path) | Remove(path) => {
+                    if touch(&watcher, path) {
+                        watch.set_dirty();
+                    }
+                },
+                Rename(from, to) => {
+                    if touch(&watcher, from) || touch(&watcher, to) {
+                        watch.set_dirty();
+                    }
+                },
+                Rescan => watch.set_context_lost(),
+                Error(err, path) => {
+                    let path = match path.as_ref() {
+                        Some(path) => path,
+                        None => Path::new("<unknown>"),
+                    };
+
+                    let _ = writeln!(io::stderr(),
+                                     "Error monitoring '{}' for changes: {}",
+                                     path.display(), err);
+                }
+            }
+        });
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::collections::HashMap;
@@ -1008,6 +1156,8 @@ mod test {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
+    use std::thread;
     use libc;
 
     use tempdir::TempDir;
@@ -2045,6 +2195,38 @@ mod test {
 
         replica.prepare(PrepareType::Scrub).unwrap();
         assert!(replica.is_dir_dirty(&root));
+    }
+
+    #[test]
+    fn watch_notices_when_dir_changed() {
+        let (rootdir, _private, mut replica) = new_simple();
+
+        let watch = Arc::new(WatchHandle::default());
+        watch.check_dirty();
+        watch.check_context_lost();
+        assert!(!watch.check_dirty());
+        assert!(!watch.check_context_lost());
+
+        replica.watch(Arc::downgrade(&watch)).unwrap();
+
+        {
+            replica.prepare(PrepareType::Fast).unwrap();
+            let mut root = replica.root().unwrap();
+            replica.list(&mut root).unwrap();
+            replica.set_dir_clean(&root).unwrap();
+            replica.clean_up().unwrap();
+        }
+
+        spit(rootdir.path().join("foo"), "plugh");
+        thread::sleep(Duration::new(10, 0));
+        assert!(watch.check_dirty());
+        assert!(!watch.check_context_lost());
+
+        {
+            replica.prepare(PrepareType::Watched).unwrap();
+            let root = replica.root().unwrap();
+            assert!(replica.is_dir_dirty(&root));
+        }
     }
 
     #[test]
