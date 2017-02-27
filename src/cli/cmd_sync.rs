@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::Ordering::SeqCst;
 use std::thread;
+use std::time::Duration;
 use libc::isatty;
 
 use ancestor::*;
@@ -769,9 +770,14 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
         run_sync(context.clone(), level, num_threads, prepare_type, config)?;
 
-        if watch { while !interrupt::is_interrupted() {
+        if watch { 'outer: while !interrupt::is_interrupted() {
             watch_handle.wait();
-            if interrupt::is_interrupted() { break; }
+            // Sleep for a few seconds in case there are multiple notifications
+            // coming in, but bail immediately if we're responding to ^C.
+            for _ in 0..50 {
+                if interrupt::is_interrupted() { break; }
+                thread::sleep(Duration::new(0, 100_000_000));
+            }
             if !watch_handle.check_dirty() { continue; }
 
             run_sync(context.clone(), level, num_threads,
