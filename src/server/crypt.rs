@@ -879,6 +879,7 @@ mod test {
 mod fast_test {
     use defs::HashId;
 
+    use super::hmac;
     use super::*;
 
     fn test_crypt_obj(data: &[u8]) {
