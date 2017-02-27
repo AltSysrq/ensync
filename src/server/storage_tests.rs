@@ -493,7 +493,7 @@ fn watch_doesnt_notify_changes_by_self() {
 }
 
 #[test]
-fn wtach_notifies_changes_by_other() {
+fn watch_notifies_changes_by_other() {
     init!(dir, storage1);
     let mut storage1 = storage1;
     let storage2 = create_storage(&dir.path());
