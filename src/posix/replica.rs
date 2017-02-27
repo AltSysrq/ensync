@@ -93,9 +93,25 @@ fn path_metadata(path: &Path) -> Result<fs::Metadata> {
         || format!("Error reading metadata for '{}'", path.display()))
 }
 
-fn metadata_to_fd(path: &Path, md: &fs::Metadata,
-                  dao: &Dao, calc_hash_if_unknown: bool,
-                  config: &Config)
+trait OnDao {
+    fn on_dao<T, F : FnOnce (&Dao) -> T>(&self, f: F) -> T;
+}
+
+impl<'a> OnDao for &'a Dao {
+    fn on_dao<T, F : FnOnce (&Dao) -> T>(&self, f: F) -> T {
+        f(*self)
+    }
+}
+
+impl<'a> OnDao for &'a Mutex<Dao> {
+    fn on_dao<T, F : FnOnce (&Dao) -> T>(&self, f: F) -> T {
+        f(&*self.lock().unwrap())
+    }
+}
+
+fn metadata_to_fd<D : OnDao>(path: &Path, md: &fs::Metadata,
+                             dao: D, calc_hash_if_unknown: bool,
+                             config: &Config)
                   -> Result<FileData> {
     let typ = md.file_type();
 
@@ -131,13 +147,15 @@ fn metadata_to_fd(path: &Path, md: &fs::Metadata,
     }
 }
 
-fn get_or_compute_hash(path: &Path, dao: &Dao, stat: &InodeStatus,
-                       calc_hash_if_unknown: bool,
-                       config: &Config) -> Result<HashId> {
-    if let Some(cached) = dao.cached_file_hash(
+fn get_or_compute_hash<D : OnDao>
+    (path: &Path, dao: D, stat: &InodeStatus,
+     calc_hash_if_unknown: bool,
+     config: &Config) -> Result<HashId>
+{
+    if let Some(cached) = dao.on_dao(|dao| dao.cached_file_hash(
         path.as_os_str(), stat, config.cache_generation)
         .chain_err(|| format!("Error checking for cached hash for '{}'",
-                              path.display()))?
+                              path.display())))?
     {
         return Ok(cached);
     }
@@ -152,9 +170,9 @@ fn get_or_compute_hash(path: &Path, dao: &Dao, stat: &InodeStatus,
         file, config.block_size, &config.hmac_secret[..],
         |_,_| Ok(()))
         .chain_err(|| format!("Error reading '{}'", path.display()))?;
-    let _ = dao.cache_file_hashes(
+    let _ = dao.on_dao(|dao| dao.cache_file_hashes(
         path.as_os_str(), &blocklist.total, &blocklist.blocks[..],
-        config.block_size, stat, config.cache_generation);
+        config.block_size, stat, config.cache_generation));
     Ok(blocklist.total)
 }
 
@@ -250,8 +268,7 @@ impl Replica for PosixReplica {
                 || format!("Error reading file metadata for '{}'",
                            entry.path().display()))?;
             let fd = metadata_to_fd(
-                &entry.path(), &md,
-                &*self.dao.lock().unwrap(), true, &*self.config)?;
+                &entry.path(), &md, &*self.dao, true, &*self.config)?;
             dir.toggle_file(File(&name, &fd));
             ret.push((name, fd));
         }
@@ -282,8 +299,7 @@ impl Replica for PosixReplica {
         let old_path = dir.child(old);
         let old_md = path_metadata(&old_path)?;
         let fd = metadata_to_fd(
-            &old_path, &old_md,
-            &*self.dao.lock().unwrap(), false, &*self.config)?;
+            &old_path, &old_md, &*self.dao, false, &*self.config)?;
 
         fs::rename(&old_path, &new_path).chain_err(
             || format!("Failed to rename '{}' to '{}'",
@@ -973,10 +989,9 @@ impl PosixReplica {
     /// `Err`.
     fn check_matches(&self, path: &Path, fd: &FileData)
                      -> Result<()> {
-        let dao = self.dao.lock().unwrap();
         let curr_fd = metadata_to_fd(
             &path, &path_metadata(&path)?,
-            &dao, false, &*self.config)?;
+            &*self.dao, false, &*self.config)?;
         if !curr_fd.matches(fd) {
             Err(ErrorKind::ExpectationNotMatched.into())
         } else {
