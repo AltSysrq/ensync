@@ -1117,8 +1117,8 @@ impl Watch for PosixReplica {
             }
 
             match event {
-                NoticeWrite(path) | NoticeRemove(path) | Create(path) |
-                Write(path) | Chmod(path) | Remove(path) => {
+                NoticeWrite(_) | NoticeRemove(_) => { },
+                Create(path) | Write(path) | Chmod(path) | Remove(path) => {
                     if touch(&watcher, path) {
                         watch.set_dirty();
                     }
