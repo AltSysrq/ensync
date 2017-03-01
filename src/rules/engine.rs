@@ -89,6 +89,7 @@ impl Condition {
 #[derive(Clone,Debug,PartialEq,Eq)]
 enum Action {
     Mode(SyncMode),
+    TrustClientUnixMode(bool),
     Include(Vec<usize>),
     Switch(usize),
     Stop(StopType),
@@ -139,10 +140,12 @@ pub struct SyncRules {
 
 /// The current persistent state of the rules engine, inherited by files within
 /// directories, etc.
-#[derive(Clone,Debug,Default)]
+#[derive(Clone,Debug)]
 struct EngineState {
     /// The sync mode in effect.
     mode: SyncMode,
+    /// Whether `trust_client_unix_mode` is on.
+    trust_client_unix_mode: bool,
     /// The index of the `RuleState` in effect.
     state: usize,
     /// If present, the new value of `state` the next time the engine descends
@@ -156,8 +159,11 @@ struct EngineState {
 impl EngineState {
     fn new(init_state: usize) -> Self {
         EngineState {
+            mode: SyncMode::default(),
+            trust_client_unix_mode: true,
             state: init_state,
-            .. Default::default()
+            switch: None,
+            path: String::default(),
         }
     }
 
@@ -303,16 +309,17 @@ impl SyncRules {
                     this.states[i].siblings.iter())
                 {
                     for action in &this.rules[r_ix].actions {
-                        match action {
-                            &Action::Mode(..) |
-                            &Action::Stop(..) => (),
-                            &Action::Include(ref reffed) => {
+                        match *action {
+                            Action::Mode(..) |
+                            Action::TrustClientUnixMode(..) |
+                            Action::Stop(..) => (),
+                            Action::Include(ref reffed) => {
                                 for &r in reffed {
                                     keep_going |= !reachable[r];
                                     reachable[r] = true;
                                 }
                             },
-                            &Action::Switch(reffed) => {
+                            Action::Switch(reffed) => {
                                 keep_going |= !reachable[reffed];
                                 reachable[reffed] = true;
                             },
@@ -408,6 +415,9 @@ impl SyncRules {
                 } else if "mode" == e_name {
                     rule.actions.push(Action::Mode(
                         try!(parse_mode(e_val, loc))));
+                } else if "trust_client_unix_mode" == e_name {
+                    rule.actions.push(Action::TrustClientUnixMode(
+                        try!(convert_bool(e_val, loc))));
                 } else if "include" == e_name {
                     rule.actions.push(Action::Include(
                         try!(parse_state_ref_list(e_val, loc,
@@ -424,11 +434,12 @@ impl SyncRules {
                 }
             }
 
-            rule.actions.sort_by_key(|a| match a {
-                &Action::Mode(..) => 0,
-                &Action::Include(..) => 1,
-                &Action::Switch(..) => 2,
-                &Action::Stop(..) => 3,
+            rule.actions.sort_by_key(|a| match *a {
+                Action::Mode(..) => 0,
+                Action::TrustClientUnixMode(..) => 1,
+                Action::Include(..) => 2,
+                Action::Switch(..) => 3,
+                Action::Stop(..) => 4,
             });
 
             self.rules.push(rule);
@@ -436,6 +447,14 @@ impl SyncRules {
         } else {
             Err(Error::NotATable(format!("{} #{}", path, ref_ix + 1)))
         }
+    }
+}
+
+fn convert_bool(val: &toml::Value, loc: ErrorLocation)
+                -> Result<bool> {
+    match *val {
+        toml::Value::Boolean(r) => Ok(r),
+        _ => Err(Error::WrongType(loc, "boolean")),
     }
 }
 
@@ -573,6 +592,8 @@ impl SyncRules {
             for action in &self.rules[rule].actions {
                 match *action {
                     Action::Mode(mode) => engstate.mode = mode,
+                    Action::TrustClientUnixMode(trust) =>
+                        engstate.trust_client_unix_mode = trust,
                     Action::Include(ref subs) => for &sub in subs {
                         if !self.apply_rules_impl(occurs, sub, engstate,
                                                   group, matches) {
@@ -635,6 +656,10 @@ impl FileRules for FileEngine {
 
     fn sync_mode(&self) -> SyncMode {
         self.state.mode
+    }
+
+    fn trust_client_unix_mode(&self) -> bool {
+        self.state.trust_client_unix_mode
     }
 
     fn subdir(self) -> DirEngineBuilder {
@@ -729,6 +754,7 @@ type = "f"
 
 # These are expected to be sorted in exactly this order.
 mode = "cud/cud"
+trust_client_unix_mode = false
 include = [ "z1", "z2" ]
 switch = "z3"
 stop = "all"
@@ -757,11 +783,13 @@ stop = "return"
              &Condition::Type(..)) => (),
             unexpected => panic!("Conditions unexpected: {:?}", unexpected),
         }
-        assert_eq!(4, rr.actions.len());
+        assert_eq!(5, rr.actions.len());
         match (&rr.actions[0], &rr.actions[1],
-               &rr.actions[2], &rr.actions[3]) {
-            (&Action::Mode(mode), &Action::Include(ref included),
-             &Action::Switch(switched), &Action::Stop(stop)) => {
+               &rr.actions[2], &rr.actions[3],
+               &rr.actions[4]) {
+            (&Action::Mode(mode), &Action::TrustClientUnixMode(false),
+             &Action::Include(ref included), &Action::Switch(switched),
+             &Action::Stop(stop)) => {
                 assert_eq!("cud/cud".parse::<SyncMode>().unwrap(), mode);
                 assert_eq!(2, included.len());
                 assert_eq!(1, included[0]);
@@ -1010,10 +1038,12 @@ mode = "cud/cud"
         let de = engine(r#"
 [[rules.root.files]]
 mode = "cud/cud"
+trust_client_unix_mode = false
 "#);
 
         assert_eq!("cud/cud", regular(&de, "a", 0, 0)
                    .sync_mode().to_string());
+        assert!(!regular(&de, "a", 0, 0).trust_client_unix_mode());
     }
 
     #[test]
@@ -1027,6 +1057,7 @@ mode = "cud/cud"
         let sde = dir(&de, "dir", 0).subdir().build();
         assert_eq!("cud/cud", regular(&sde, "foo", 0, 0)
                    .sync_mode().to_string());
+        assert!(regular(&sde, "foo", 0, 0).trust_client_unix_mode());
     }
 
     #[test]

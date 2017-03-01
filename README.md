@@ -522,15 +522,22 @@ data:
 
 The most useful sync modes also have aliases:
 
-- "mirror" is an alias for "---/CUD" (all outbound set to "force", all inbound
+- `mirror` is an alias for `---/CUD` (all outbound set to "force", all inbound
   set to "off"). This causes the server replica to be modified to exactly match
   the client side, without making any modifications to the client side at all.
 
-- "conservative-sync" is an alias for "cud/cud", i.e., conservative
+- `conservative-sync` is an alias for `cud/cud`, i.e., conservative
   bidirectional sync.
 
-- "aggressive-sync" is an alias for "CUD/CUD", i.e., bidirectional sync with
+- `aggressive-sync` is an alias for `CUD/CUD`, i.e., bidirectional sync with
   automatic resolution of all conflicts.
+
+### Other Sync Flags
+
+There are other less commonly-used flags which adjust the reconciliation
+process. For more details, see the documentation for each flag.
+
+- [`trust_client_unix_mode`](#trust_client_unix_mode)
 
 ### Non-Conflicting States
 
@@ -831,6 +838,20 @@ the order listed below.
 
 Sets the current sync mode to the given value. This completely replaces the
 current sync mode.
+
+#### `trust_client_unix_mode`
+
+Either `true` or `false` (without quotes). Sets whether the reconciliation
+process trusts the UNIX mode for files on the local filesystem.
+
+If `false`, the reconciliation process will ignore the actual UNIX mode on
+files which are also present on the remote replica, substituting it with the
+mode of the corresponding file on the remote replica. This prevents propagation
+of mode changes in either direction, which is useful if one client is syncing
+to a local filesystem which does not store (e.g., FAT32) or return (e.g.,
+`noexec` mount option) UNIX modes.
+
+The default is `true`, i.e., sync UNIX permissions normally.
 
 #### `include`
 

@@ -516,8 +516,8 @@ pub mod test {
     use super::{replace_ancestor,replace_replica,try_rename_replica};
     #[allow(unused_imports)] use super::super::context::*;
 
-    #[derive(Clone,Debug)]
-    pub struct ConstantRules(SyncMode);
+    #[derive(Clone,Debug,Default)]
+    pub struct ConstantRules(pub SyncMode, pub bool);
 
     impl DirRules for ConstantRules {
         type Builder = Self;
@@ -530,6 +530,7 @@ pub mod test {
         type DirRules = Self;
 
         fn sync_mode(&self) -> SyncMode { self.0 }
+        fn trust_client_unix_mode(&self) -> bool { self.1 }
         fn subdir(self) -> Self { self }
     }
 
@@ -554,7 +555,7 @@ pub mod test {
         pub ancestor: MemoryReplica,
         pub server: MemoryReplica,
         pub logger: PrintlnLogger<W>,
-        pub mode: SyncMode,
+        pub rules: ConstantRules,
     }
 
     impl<W : Write> Fixture<W> {
@@ -564,7 +565,7 @@ pub mod test {
                 ancestor: MemoryReplica::empty(),
                 server: MemoryReplica::empty(),
                 logger: PrintlnLogger::new(out),
-                mode: Default::default(),
+                rules: Default::default(),
             }
         }
 
@@ -574,7 +575,7 @@ pub mod test {
                 anc: self.ancestor,
                 srv: self.server,
                 log: self.logger,
-                root_rules: ConstantRules(self.mode),
+                root_rules: self.rules.clone(),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
             }
@@ -588,7 +589,7 @@ pub mod test {
                 anc: mem::replace(&mut self.ancestor, MemoryReplica::empty()),
                 srv: mem::replace(&mut self.server, MemoryReplica::empty()),
                 log: self.logger.clone(),
-                root_rules: ConstantRules(self.mode),
+                root_rules: self.rules.clone(),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
             };
@@ -622,7 +623,7 @@ pub mod test {
                 files: BTreeMap::new(),
             },
             todo: BinaryHeap::new(),
-            rules: ConstantRules(fx.mode),
+            rules: fx.rules.clone(),
         }
     }
 

@@ -81,6 +81,22 @@ pub enum FileData {
 }
 
 impl FileData {
+    /// If both `self` and `other` have a `FileMode`, set `self`'s mode to
+    /// `other`'s.
+    pub fn transrich_unix_mode(&mut self, other: &FileData) {
+        match *self {
+            FileData::Directory(ref mut dst) |
+            FileData::Regular(ref mut dst, _, _, _) => {
+                match *other {
+                    FileData::Directory(src) |
+                    FileData::Regular(src, _, _, _) => *dst = src,
+                    _ => (),
+                }
+            },
+            _ => (),
+        }
+    }
+
     /// Returns whether this `FileData` is a directory.
     pub fn is_dir(&self) -> bool {
         match *self {
@@ -88,9 +104,7 @@ impl FileData {
             _ => false,
         }
     }
-}
 
-impl FileData {
     /// Returns whether both `self` and `other` are regular files and `self`'s
     /// modification time is greater than `other`'s.
     pub fn newer_than(&self, other: &Self) -> bool {

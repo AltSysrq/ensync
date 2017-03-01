@@ -93,12 +93,22 @@ fn process_file(
     dir_path: &OsStr, name: &OsStr,
     dirstate: &DirStateRef)
 {
-    let cli = dir.cli.files.get(name).cloned();
+    let mut cli = dir.cli.files.get(name).cloned();
     let anc = dir.anc.files.get(name).cloned();
     let srv = dir.srv.files.get(name).cloned();
+
     let rules = dir.rules.file(File(name, cli.as_ref().or(
         anc.as_ref()).or(srv.as_ref()).expect(
         "Attempted to reconcile a file that doesn't exist in any replica.")));
+
+    if let Some(ref mut cli) = cli {
+        if !rules.trust_client_unix_mode() {
+            if let Some(other) = srv.as_ref().or(anc.as_ref()) {
+                cli.transrich_unix_mode(other);
+            }
+        }
+    }
+
     let (recon, conflict) = choose_reconciliation(
         cli.as_ref(), anc.as_ref(), srv.as_ref(),
         rules.sync_mode());
@@ -739,9 +749,23 @@ mod test {
         }
     }
 
-    fn test_single(input: &Vec<En>, mode: &str, output: &Vec<En>) {
+    trait IntoRules {
+        fn into_rules(self) -> ConstantRules;
+    }
+    impl<'a> IntoRules for &'a str {
+        fn into_rules(self) -> ConstantRules {
+            ConstantRules(self.parse().unwrap(), true)
+        }
+    }
+    impl<'a> IntoRules for (&'a str, bool) {
+        fn into_rules(self) -> ConstantRules {
+            ConstantRules(self.0.parse().unwrap(), self.1)
+        }
+    }
+
+    fn test_single<R : IntoRules>(input: &Vec<En>, rules: R, output: &Vec<En>) {
         let mut fx = init(input, PrintWriter);
-        fx.mode = mode.parse().unwrap();
+        fx.rules = rules.into_rules();
         run_full(&mut fx);
         verify(&fx, output);
 
@@ -880,6 +904,26 @@ mod test {
             En("D3", (Dir(0),Z), (Dir(0),Z), (Dir(0),Z), vec![
                 En("D4", (Dir(0),Z), (Dir(0),Z), (Dir(0),Z), vec![]),
             ]),
+        ]);
+    }
+
+    #[test]
+    fn sync_no_trust_client_unix_mode_steady_state() {
+        test_single(&vec![
+            En("foo", (Dir(0),Z),       (Dir(7),Z),     (Dir(7),Z), vec![]),
+            En("bar", (Reg(0,9),Z),     (Reg(6,9),Z),   (Reg(6,9),Z), vec![]),
+        ], ("cud/cud", false), &vec![
+            En("foo", (Dir(0),Z),       (Dir(7),Z),     (Dir(7),Z), vec![]),
+            En("bar", (Reg(0,9),Z),     (Reg(6,9),Z),   (Reg(6,9),Z), vec![]),
+        ]);
+    }
+
+    #[test]
+    fn sync_no_trust_client_unix_mode_propagates_across_changes() {
+        test_single(&vec![
+            En("bar", (Reg(0,9),Z),     (Reg(6,0),Z),   (Reg(6,0),Z), vec![]),
+        ], ("cud/cud", false), &vec![
+            En("bar", (Reg(0,9),Z),     (Reg(6,9),Z),   (Reg(6,9),Z), vec![]),
         ]);
     }
 
@@ -1130,7 +1174,7 @@ mod test {
         fn converges_impl(fs: Vec<En>, mode: SyncMode,
                           out: &mut Write) -> bool {
             let mut fx = init(&fs, out);
-            fx.mode = mode;
+            fx.rules = ConstantRules(mode, true);
 
             run_full(&mut fx);
 
@@ -1223,7 +1267,7 @@ mod test {
         fn do_test_impl(fs: Vec<En>, mode: SyncMode,
                         out: &mut Write) -> bool {
             let mut fx = init(&fs, out);
-            fx.mode = mode;
+            fx.rules = ConstantRules(mode, true);
 
             let (orig_files_max, orig_files_min) = files_in_fs(&fs);
             run_full(&mut fx);
@@ -1270,7 +1314,7 @@ mod test {
             let orig_cli_sig = signature(&init(&fs, PrintWriter).client);
 
             let mut fx = init(&fs, out);
-            fx.mode = mode;
+            fx.rules = ConstantRules(mode, true);
 
             run_full(&mut fx);
 
