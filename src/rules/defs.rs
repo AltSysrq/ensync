@@ -231,6 +231,15 @@ pub trait FileRules : Sized + Clone + Send {
 
     /// Returns the sync mode for this particular file.
     fn sync_mode(&self) -> SyncMode;
+    /// Returns whether UNIX mode bits on the client replica can be trusted.
+    ///
+    /// If false, reconciliation must transrich the UNIX mode from the server
+    /// or ancestor replicas when available.
+    ///
+    /// This is useful for filesystems which do not support UNIX permissions,
+    /// such as FAT32, or for filesystems mounted with options like `noexec`
+    /// which prevent the mode from being returned accurately.
+    fn trust_client_unix_mode(&self) -> bool;
     /// Creates a builder for a subdirectory corresponding to this file.
     fn subdir(self) -> <Self::DirRules as DirRules>::Builder;
 }
