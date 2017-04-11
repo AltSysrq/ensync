@@ -458,7 +458,8 @@ required. By default, this prompts the terminal, but the `--root` argument \
 can be used to use other passphrase methods. Note that you cannot use the \
 passphrase of the key being deleted for this, even if that key is in the \
 `root` group."))
-            .subcommand(SubCommand::with_name("list")
+            .subcommand(SubCommand::with_name("ls")
+                        .alias("list")
                         .about("List the keys in the key store")
                         .max_term_width(100)
                         .setting(AppSettings::DontCollapseArgsInUsage)
