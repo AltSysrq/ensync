@@ -596,8 +596,13 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
                         None => return,
                     };
 
+                    let response = match id {
+                        Some(id) => Response::WatchNotify(*id),
+                        None => Response::FatalError(
+                            "Fatal error waiting for notification".to_owned()),
+                    };
                     let _ = write_response(&mut*sout.lock().unwrap(),
-                                           Response::WatchNotify(*id));
+                                           response);
                 })) {
                     Ok(_) => RequestResponse::SyncResponse(Response::Done),
                     Err(err) => err!(err),
@@ -635,7 +640,7 @@ pub struct RemoteStorage {
     fatal: AtomicBool,
     /// The protocol version negotiated by the server.
     protocol: (u32, u32),
-    watch_fun: Arc<Mutex<Option<Box<FnMut (&HashId) + Send>>>>,
+    watch_fun: Arc<Mutex<Option<Box<FnMut (Option<&HashId>) + Send>>>>,
 }
 
 macro_rules! handle_response {
@@ -681,7 +686,7 @@ impl RemoteStorage {
         let mut sin = io::BufReader::new(sin);
         let (tx, rx) = mpsc::sync_channel(0);
 
-        let watch_fun: Arc<Mutex<Option<Box<FnMut (&HashId) + Send>>>> =
+        let watch_fun: Arc<Mutex<Option<Box<FnMut (Option<&HashId>) + Send>>>> =
             Arc::new(Mutex::new(None));
         let watch_fun2 = watch_fun.clone();
 
@@ -689,11 +694,20 @@ impl RemoteStorage {
             let resp = read_frame(&mut sin).and_then(
                 |r| r.ok_or(ErrorKind::ServerConnectionClosed.into()));
 
+            if let Err(ref err) = resp {
+                if err.is_fatal() {
+                    let mut wf = watch_fun2.lock().unwrap();
+                    if let Some(ref mut wf) = *wf {
+                        wf(None);
+                    }
+                }
+            }
+
             match resp {
                 Ok(Response::WatchNotify(ref id)) => {
                     let mut wf = watch_fun2.lock().unwrap();
                     if let Some(ref mut wf) = *wf {
-                        wf(id);
+                        wf(Some(id));
                     }
                 },
                 _ => if tx.send(resp).is_err() { break; },
@@ -899,7 +913,7 @@ impl Storage for RemoteStorage {
         })
     }
 
-    fn watch(&mut self, f: Box<FnMut (&HashId) + Send>) -> Result<()> {
+    fn watch(&mut self, f: Box<FnMut (Option<&HashId>) + Send>) -> Result<()> {
         if self.protocol < (0, 1) {
             return Err(format!("\
 `--watch` requires the remote process to support protocol version 0.1 or later

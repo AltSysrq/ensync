@@ -737,7 +737,7 @@ impl Storage for LocalStorage {
         })
     }
 
-    fn watch(&mut self, mut f: Box<FnMut (&HashId) + Send>) -> Result<()> {
+    fn watch(&mut self, mut f: Box<FnMut (Option<&HashId>) + Send>) -> Result<()> {
         if self.watch_list.is_some() {
             return Err(ErrorKind::AlreadyWatching.into());
         }
@@ -780,7 +780,7 @@ impl Storage for LocalStorage {
                     &db.lock().unwrap(), &id, &ver, len)
                 {
                     watch_list.lock().unwrap().remove(&id);
-                    f(&id);
+                    f(Some(&id));
                 }
             }
         });

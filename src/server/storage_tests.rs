@@ -502,11 +502,13 @@ fn watch_notifies_changes_by_other() {
     let seen_notification2 = seen_notification.clone();
     let fail = Arc::new(AtomicBool::new(false));
     let fail2 = fail.clone();
-    storage1.watch(Box::new(move |&id| {
-        if id != hashid(1) {
-            fail2.store(true, SeqCst);
-        } else {
-            seen_notification2.fetch_add(1, SeqCst);
+    storage1.watch(Box::new(move |id| {
+        if let Some(&id) = id {
+            if id != hashid(1) {
+                fail2.store(true, SeqCst);
+            } else {
+                seen_notification2.fetch_add(1, SeqCst);
+            }
         }
     })).unwrap();
 

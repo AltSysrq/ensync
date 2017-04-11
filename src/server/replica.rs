@@ -341,9 +341,15 @@ impl<S : Storage + ?Sized> Watch for ServerReplica<S> {
         Arc::get_mut(&mut mut_pr.storage).expect(
             "ServerReplica::watch called while storage shared")
             .watch(Box::new(move |id| {
-                status2.lock().unwrap().dirty.insert(*id);
+                if let Some(id) = id {
+                    status2.lock().unwrap().dirty.insert(*id);
+                }
                 if let Some(wh) = watch.upgrade() {
-                    wh.set_dirty();
+                    if id.is_some() {
+                        wh.set_dirty();
+                    } else {
+                        wh.set_context_lost();
+                    }
                 }
             }))?;
         self.watcher = Some(status);
