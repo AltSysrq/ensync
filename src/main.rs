@@ -853,7 +853,7 @@ pipe."))
             let root = passphrase_or_prompt!(matches, "root-key");
             cli::cmd_keymgmt::add_key(&*storage, &old, &new, &root,
                                       matches.value_of("key-name").unwrap())
-        } else if let Some(matches) = matches.subcommand_matches("list") {
+        } else if let Some(matches) = matches.subcommand_matches("ls") {
             set_up!(matches, config, storage);
             cli::cmd_keymgmt::list_keys(&*storage)
         } else if let Some(matches) = matches.subcommand_matches("change") {
