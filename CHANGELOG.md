@@ -1,3 +1,7 @@
+# 0.2.3
+
+- Fix handling of `ensync key ls`.
+
 # 0.2.2
 
 - `ensync key list` is now `ensync key ls`. The old command name is
