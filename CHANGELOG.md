@@ -1,3 +1,9 @@
+# 0.2.4
+
+- Added `--reconnect` flag which can be used in conjunction with `--watch` to
+  automatically reconnect if errors occur.
+  https://github.com/altsysrq/ensync/issues/3
+
 # 0.2.3
 
 - Fix handling of `ensync key ls`.
