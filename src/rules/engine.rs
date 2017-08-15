@@ -269,7 +269,7 @@ quick_error! {
 pub type Result<T> = result::Result<T, Error>;
 
 impl SyncRules {
-    pub fn parse(rules: &toml::Table, base_section: &str)
+    pub fn parse(rules: &toml::value::Table, base_section: &str)
                  -> Result<SyncRules> {
         let mut this: SyncRules = Default::default();
         let mut state_indices: HashMap<&str,usize> = HashMap::new();
@@ -367,7 +367,7 @@ impl SyncRules {
     fn parse_group(&mut self, def_raw: &toml::Value,
                    path: String, state_indices: &HashMap<&str,usize>)
                    -> Result<Vec<usize>> {
-        if let Some(def) = def_raw.as_slice() {
+        if let Some(def) = def_raw.as_array() {
             let mut rules = Vec::new();
 
             for (r_ix, rule) in def.iter().enumerate() {
@@ -712,12 +712,8 @@ mod test {
     use super::{Condition,Action,StopType};
 
     fn parse_rules(s: &str) -> Result<SyncRules> {
-        let mut parser = toml::Parser::new(s);
-        if let Some(table) = parser.parse() {
-            SyncRules::parse(table["rules"].as_table().unwrap(), "rules")
-        } else {
-            panic!("TOML failed to parse.\n{:?}", parser.errors);
-        }
+        let table: toml::value::Table = toml::from_str(s).unwrap();
+        SyncRules::parse(table["rules"].as_table().unwrap(), "rules")
     }
 
     #[test]

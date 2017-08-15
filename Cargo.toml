@@ -16,24 +16,24 @@ location is not fully trusted.
 [dependencies]
 # Can't upgrade to 0.3 because of rust-crypto dependency
 chrono = { version = "0.2" }
-flate2 = "0.2.17"
+flate2 = "0.2.19"
 fourleaf = "0.1.1"
-error-chain = "0.9.0"
-lazy_static = "0.2.2"
-libc = "0.2.20"
-notify = "4.0.0"
-num_cpus = "1.2.1"
+error-chain = "0.10.0"
+lazy_static = "0.2.8"
+libc = "0.2.29"
+notify = "4.0.1"
+num_cpus = "1.6.2"
 quick-error = "1.2.0"
-rand = "0.3.15"
-regex = "0.2.1"
-rpassword = { version = "0.3.1", optional = true }
+rand = "0.3.16"
+regex = "0.2.2"
+rpassword = { version = "1.0.2", optional = true }
 # Non-1.0 status shouldn't be much of an issue since we're just using AES and
 # Scrypt.
 rust-crypto = "0.2.36"
-sqlite = "0.23.3"
-tempfile = "2.1.5"
-tiny-keccak = "1.1.1"
-toml = { version = "0.2.1", default-features = false }
+sqlite = "0.23.4"
+tempfile = "2.1.6"
+tiny-keccak = "1.3.1"
+toml = { version = "0.4.5", default-features = false }
 
 [dependencies.clap]
 version = "2.20"

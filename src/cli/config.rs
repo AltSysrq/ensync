@@ -145,15 +145,9 @@ impl Config {
         let parent = filename.parent().expect(
             "Config path missing parent");
 
-        let mut parser = toml::Parser::new(s);
-        let table = parser.parse().ok_or_else(||  {
-            let error = &parser.errors[0];
-            let (line, col) = parser.to_linecol(error.lo);
-
-
-            format!("{}: Syntax error in at line {}, column {}: {}",
-                    filename.display(), line + 1, col, error.desc)
-        })?;
+        let table: toml::value::Table = toml::from_str(s)
+            .map_err(|e| format!("{}: Syntax error: {}",
+                                 filename.display(), e))?;
 
         macro_rules! extract {
             ($from:expr, $section:expr, $type_prefix:expr, $key:expr,
