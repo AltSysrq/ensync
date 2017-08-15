@@ -311,6 +311,17 @@ exist."))
                                 directories to be scanned. \"scrub\" \
                                 additionally causes all cached hashes to be \
                                 purged (this will make the sync very slow)."))
+                    .arg(Arg::with_name("reconnect")
+                         .long("reconnect")
+                         .required(false)
+                         .takes_value(true)
+                         .requires("watch")
+                         .help("In conjunction with --watch, if an error \
+                                occurs, back off for the given number of \
+                                seconds, then attempt to restart the server \
+                                process and resume operations. If this flag \
+                                is given, `ensync sync` should not terminate \
+                                on its own."))
                     .after_help("\
 As one might expect, `ensync sync` is the main subcommand. When invoked, \
 `ensync sync` will scan for file changes and automatically propagate them \
@@ -795,6 +806,18 @@ handles exactly one client, the one connected on its standard input/output \
 pipe."))
         .get_matches();
 
+    fn create_storage(matches: &ArgMatches, config: &cli::config::Config)
+                      -> errors::Result<std::sync::Arc<server::Storage>> {
+        let storage = cli::open_server::open_server_storage(
+            &config.server,
+            matches.occurrences_of("quiet") <=
+                matches.occurrences_of("verbose"))?;
+        fs::create_dir_all(&config.private_root).chain_err(
+            || format!("Failed to create ensync private directory '{}'",
+                       config.private_root.display()))?;
+        Ok(storage)
+    }
+
     macro_rules! set_up {
         ($matches:ident, $config:ident) => {
             let $config = cli::config::Config::read(
@@ -804,13 +827,7 @@ pipe."))
 
         ($matches:ident, $config:ident, $storage:ident) => {
             set_up!($matches, $config);
-            let $storage = cli::open_server::open_server_storage(
-                &$config.server,
-                $matches.occurrences_of("quiet") <=
-                    $matches.occurrences_of("verbose"))?;
-            fs::create_dir_all(&$config.private_root).chain_err(
-                || format!("Failed to create ensync private directory '{}'",
-                           $config.private_root.display()))?;
+            let $storage = create_storage(&$matches, &$config)?;
         };
 
         ($matches:ident, $config:ident, $storage:ident, $replica:ident) => {
@@ -915,7 +932,7 @@ pipe."))
                             matches.value_of("local-path").unwrap(),
                             matches.value_of("remote-path").unwrap())
     } else if let Some(matches) = matches.subcommand_matches("sync") {
-        set_up!(matches, config, storage);
+        set_up!(matches, config);
 
         let num_threads = if let Some(threads) = matches.value_of("threads") {
             let nt = threads.parse::<u32>().chain_err(
@@ -931,18 +948,59 @@ pipe."))
             num_cpus::get() as u32 + 2
         };
 
-        cli::cmd_sync::run(&config, storage,
-                           matches.occurrences_of("verbose") as i32,
-                           matches.occurrences_of("quiet") as i32,
-                           matches.is_present("itemise"),
-                           matches.is_present("itemise-unchanged"),
-                           matches.value_of("colour").unwrap(),
-                           matches.value_of("spin").unwrap(),
-                           matches.is_present("include-ancestors"),
-                           matches.is_present("dry-run"),
-                           matches.is_present("watch"),
-                           num_threads,
-                           matches.value_of("strategy").unwrap())
+        let reconnect = if let Some(reconnect) = matches.value_of("reconnect") {
+            let seconds = reconnect.parse::<u64>().chain_err(
+                || format!("Value '{}' for --reconnect is not an integer",
+                           reconnect))?;
+            Some(seconds)
+        } else {
+            None
+        };
+
+        fn do_run(matches: &ArgMatches, config: &cli::config::Config,
+                  num_threads: u32,
+                  key_chain: &mut Option<std::sync::Arc<server::KeyChain>>)
+                  -> errors::Result<()> {
+            let storage = create_storage(matches, config)?;
+
+            cli::cmd_sync::run(config, storage,
+                               matches.occurrences_of("verbose") as i32,
+                               matches.occurrences_of("quiet") as i32,
+                               matches.is_present("itemise"),
+                               matches.is_present("itemise-unchanged"),
+                               matches.value_of("colour").unwrap(),
+                               matches.value_of("spin").unwrap(),
+                               matches.is_present("include-ancestors"),
+                               matches.is_present("dry-run"),
+                               matches.is_present("watch"),
+                               num_threads,
+                               matches.value_of("strategy").unwrap(),
+                               key_chain)
+        }
+
+        let mut key_chain = None;
+
+        loop {
+            use std::io::{stderr, Write};
+
+            match do_run(&matches, &config, num_threads, &mut key_chain) {
+                Ok(()) => return Ok(()),
+                Err(e) => if let Some(seconds) = reconnect {
+                    interrupt::clear_notify();
+
+                    let _ = writeln!(
+                        stderr(),
+                        "Connection terminated due to error: {}\n\
+                         Attempting reconnect in {} seconds...",
+                        e, seconds);
+                    ::std::thread::sleep(::std::time::Duration::new(
+                        seconds, 0));
+                    // Continue loop
+                } else {
+                    return Err(e);
+                }
+            }
+        }
     } else if let Some(matches) = matches.subcommand_matches("ls") {
         set_up!(matches, config, storage, replica);
         cli::cmd_manual::ls(&replica, matches.values_of_os("path").unwrap(),

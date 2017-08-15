@@ -652,7 +652,11 @@ pub fn run(config: &Config, storage: Arc<Storage>,
            dry_run: bool,
            watch: bool,
            num_threads: u32,
-           prepare_type: &str) -> Result<()> {
+           prepare_type: &str,
+           // Since --reconnect can cause multiple runs to occur, allow the
+           // caller to remember the derived keychain so we don't need to
+           // prompt for the passphrase again.
+           key_chain: &mut Option<Arc<KeyChain>>) -> Result<()> {
     let colour = match colour {
         "never" => false,
         "always" => true,
@@ -672,10 +676,14 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         _ => PrepareType::Fast,
     };
 
-    let passphrase = config.passphrase.read_passphrase(
-        "passphrase", false)?;
-    let key_chain = Arc::new(
-        keymgmt::derive_key_chain(&*storage, &passphrase)?);
+    if key_chain.is_none() {
+        let passphrase = config.passphrase.read_passphrase(
+            "passphrase", false)?;
+        *key_chain = Some(Arc::new(
+            keymgmt::derive_key_chain(&*storage, &passphrase)?));
+    }
+
+    let key_chain = key_chain.as_ref().unwrap().clone();
 
     let mut server_replica = open_server_replica(
         config, storage, Some(key_chain.clone()))?;

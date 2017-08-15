@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize,
                         ATOMIC_BOOL_INIT, ATOMIC_USIZE_INIT};
@@ -45,6 +44,7 @@ unsafe extern "C" fn handle_sigint(_: libc::c_int) {
     let watch: *const WatchHandle =
         NOTIFY_WATCH.load(SeqCst) as *const WatchHandle;
     if !watch.is_null() {
+        // XXX Is this call actually interrupt-safe?
         (*watch).notify();
     }
 }
@@ -61,9 +61,21 @@ pub fn install_signal_handler() {
 }
 
 pub fn notify_on_signal(watch: Arc<WatchHandle>) {
-    let ptr = (&*watch) as *const WatchHandle;
-    mem::forget(watch);
+    let ptr = Arc::into_raw(watch);
 
     assert!(0 == NOTIFY_WATCH.compare_and_swap(
         0, ptr as usize, SeqCst));
+}
+
+pub fn clear_notify() {
+    // Unset the global pointer, *then* check whether an interrupt has
+    // happened.
+    let ptr = NOTIFY_WATCH.swap(0, SeqCst) as *const WatchHandle;
+    let interrupted = INTERRUPTED.load(SeqCst);
+    // If an interrupt has occurred, leak the `WatchHandle` since the interrupt
+    // handler could be trying to use it from another thread. The leak is fine
+    // since the program will exit soon anyway.
+    if !interrupted && !ptr.is_null() {
+        drop(unsafe { Arc::from_raw(ptr) })
+    }
 }
