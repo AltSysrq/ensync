@@ -516,22 +516,18 @@ pub fn start_root(&self) -> Result<DirStateRef> {
 
 #[cfg(test)]
 mod test {
-    use std::cell::Cell;
     use std::collections::{HashMap,HashSet};
     use std::ffi::OsStr;
-    use std::io::Write;
     use std::iter::Iterator;
-    use std::panic::{self,AssertUnwindSafe};
     use std::sync::Arc;
     use std::sync::atomic::Ordering::SeqCst;
 
-    use quickcheck::*;
-    use rand;
+    use proptest;
+    use proptest::strategy::{BoxedStrategy, Singleton, Strategy};
 
     use defs::*;
     use replica::*;
     use memory_replica::*;
-    use log::PrintWriter;
     use rules::{SyncModeSetting,HalfSyncMode,SyncMode};
     use super::super::mutate::test::*;
     use super::*;
@@ -621,8 +617,8 @@ mod test {
         populate_dir(&replica, &mut replica.root().unwrap(), fs, &slot);
     }
 
-    fn init<W : Write>(fs: &Vec<En>, out: W) -> Fixture<W> {
-        let fx = Fixture::new(out);
+    fn init(fs: &Vec<En>) -> Fixture {
+        let fx = Fixture::new();
         init_replica(&fx.client, fs, |t| t.1);
         init_replica(&fx.ancestor, fs, |t| t.2);
         init_replica(&fx.server, fs, |t| t.3);
@@ -680,7 +676,7 @@ mod test {
                    fs, &slot);
     }
 
-    fn verify<W>(fx: &Fixture<W>, fs: &Vec<En>) {
+    fn verify(fx: &Fixture, fs: &Vec<En>) {
         verify_replica("client", &fx.client, fs, |t| t.1);
         verify_replica("server", &fx.server, fs, |t| t.3);
         verify_replica("ancestor", &fx.ancestor, fs, |t| t.2);
@@ -722,7 +718,7 @@ mod test {
         res
     }
 
-    fn run_once<W : Write>(fx: &mut Fixture<W>) -> DirState {
+    fn run_once(fx: &mut Fixture) -> DirState {
         fx.with_context(|context| {
             let dsr = context.start_root().unwrap();
             context.run_work();
@@ -730,7 +726,7 @@ mod test {
         })
     }
 
-    fn run_full<W : Write>(fx: &mut Fixture<W>) {
+    fn run_full(fx: &mut Fixture) {
         let res = run_once(fx);
         if !res.success.load(SeqCst) {
             assert!(!fx.client.data().faults.is_empty() ||
@@ -764,7 +760,7 @@ mod test {
     }
 
     fn test_single<R : IntoRules>(input: &Vec<En>, rules: R, output: &Vec<En>) {
-        let mut fx = init(input, PrintWriter);
+        let mut fx = init(input);
         fx.rules = rules.into_rules();
         run_full(&mut fx);
         verify(&fx, output);
@@ -927,13 +923,11 @@ mod test {
         ]);
     }
 
-    impl Arbitrary for FsFileE {
-        fn arbitrary<G : Gen>(g: &mut G) -> Self {
-            let (exists, regular, mode_and_content) =
-                <(bool,bool,u8) as Arbitrary>::arbitrary(g);
-            let mode = (mode_and_content & 0xF0) as FileMode;
-            let content = (mode_and_content & 0x0F) as u8;
-
+    prop_compose! {
+        fn arb_fs_file_e()(exists in proptest::bool::ANY,
+                           regular in proptest::bool::ANY,
+                           mode in proptest::bits::u32::between(0, 9),
+                           content in 0u8..16u8) -> FsFileE {
             if !exists {
                 Nil
             } else if !regular {
@@ -942,16 +936,12 @@ mod test {
                 Reg(mode, content)
             }
         }
+    }
 
-        fn shrink(&self) -> Box<Iterator<Item=Self>> {
-            match self {
-                &Nil => empty_shrinker(),
-                &Dir(0) => single_shrinker(Nil),
-                &Dir(_) => single_shrinker(Dir(0)),
-                &Reg(0,0) => single_shrinker(Dir(0)),
-                &Reg(_,0) => single_shrinker(Reg(0,0)),
-                &Reg(mode,_) => single_shrinker(Reg(mode,0)),
-            }
+    prop_compose! {
+        fn arb_fs_file()(e in arb_fs_file_e(), faults in arb_faults())
+                         -> FsFile {
+            (e, faults)
         }
     }
 
@@ -978,129 +968,55 @@ mod test {
         "J0~1", "J0~1", "J2~1", "J3~1", "J4~1", "J5~1", "J6~1", "J7~1", "J8~1", "J9~1",
     ];
 
-    // Hack so we can guarantee that the directory trees we generate have
-    // finite depth. Ideally we'd just pass this along the call chain, but then
-    // we wouldn't be able to reuse the builtins to arbitrary/shrink the rather
-    // large tuples.
-    thread_local!(static ARB_DIR_DEPTH: Cell<u32> = Cell::new(0));
-
-    impl Arbitrary for En {
-        fn arbitrary<G : Gen>(g: &mut G) -> Self {
-            let name = *g.choose(&NAMES).unwrap();
-
-            let permit_children = ARB_DIR_DEPTH.with(|c| {
-                c.set(c.get() + 1);
-                c.get() <= 4
-            });
-            let data : (FsFile, FsFile, FsFile, Vec<En>) =
-                if permit_children {
-                    Arbitrary::arbitrary(g)
-                } else {
-                    // No directory contents
-                    let (a, b, c) = Arbitrary::arbitrary(g);
-                    (a, b, c, vec![])
-                };
-            ARB_DIR_DEPTH.with(|c| c.set(c.get() - 1));
-
-            En(name, data.0, data.1, data.2, data.3)
+    fn arb_en() -> BoxedStrategy<En> {
+        fn en() -> BoxedStrategy<En> {
+            ((0..NAMES.len()).prop_map(|ix| NAMES[ix]),
+             arb_fs_file(), arb_fs_file(), arb_fs_file())
+                .prop_map(|(name, a, b, c)| En(name, a, b, c, vec![]))
+                .boxed()
         }
 
-        fn shrink(&self) -> Box<Iterator<Item=Self>> {
-            let name = self.0;
-            let data_in = (self.1, self.2, self.3, self.4.clone());
+        en().prop_recursive(
+            4, 32, 4,
+            |child| (en(), proptest::collection::vec(child, 1..4))
+                .prop_map(|(mut en, children)| {
+                    en.4 = children;
+                    en
+                }).boxed()).boxed()
+    }
 
-            Box::new(data_in.shrink().map(
-                move |data_out| En(name, data_out.0, data_out.1,
-                                   data_out.2, data_out.3)))
+    fn arb_sync_mode_setting() -> BoxedStrategy<SyncModeSetting> {
+        prop_oneof![
+            Singleton(SyncModeSetting::Off),
+            Singleton(SyncModeSetting::On),
+            Singleton(SyncModeSetting::Force),
+        ].boxed()
+    }
+
+    prop_compose! {
+        fn arb_half_sync_mode()(
+            create in arb_sync_mode_setting(),
+            update in arb_sync_mode_setting(),
+            delete in arb_sync_mode_setting(),
+        ) -> HalfSyncMode {
+            HalfSyncMode { create, update, delete }
         }
     }
 
-    static SYNC_MODE_SETTINGS: [SyncModeSetting;3] = [
-        SyncModeSetting::Off, SyncModeSetting::On, SyncModeSetting::Force,
-    ];
-
-    impl Arbitrary for SyncModeSetting {
-        fn arbitrary<G : Gen>(g: &mut G) -> Self {
-            *g.choose(&SYNC_MODE_SETTINGS).unwrap()
-        }
-
-        fn shrink(&self) -> Box<Iterator<Item=Self>> {
-            match *self {
-                SyncModeSetting::Off => empty_shrinker(),
-                SyncModeSetting::On => single_shrinker(SyncModeSetting::Off),
-                SyncModeSetting::Force =>
-                    Box::new(vec![SyncModeSetting::Off, SyncModeSetting::On]
-                             .into_iter()),
-            }
+    prop_compose! {
+        fn arb_sync_mode()(
+            inbound in arb_half_sync_mode(),
+            outbound in arb_half_sync_mode(),
+        ) -> SyncMode {
+            SyncMode { inbound, outbound }
         }
     }
 
-    impl Arbitrary for HalfSyncMode {
-        fn arbitrary<G : Gen>(g: &mut G) -> Self {
-            HalfSyncMode {
-                create: Arbitrary::arbitrary(g),
-                update: Arbitrary::arbitrary(g),
-                delete: Arbitrary::arbitrary(g),
-            }
-        }
-
-        fn shrink(&self) -> Box<Iterator<Item=Self>> {
-            Box::new((self.create, self.update,self.delete)
-                     .shrink().map(|(c,u,d)| {
-                         HalfSyncMode {
-                             create: c,
-                             update: u,
-                             delete: d,
-                         }
-                     }))
-        }
-    }
-
-    impl Arbitrary for SyncMode {
-        fn arbitrary<G : Gen>(g: &mut G) -> Self {
-            SyncMode {
-                inbound: Arbitrary::arbitrary(g),
-                outbound: Arbitrary::arbitrary(g),
-            }
-        }
-
-        fn shrink(&self) -> Box<Iterator<Item=Self>> {
-            Box::new((self.inbound, self.outbound).shrink().map(|(i,o)| {
-                SyncMode {
-                    inbound: i,
-                    outbound: o,
-                }
-            }))
-        }
-    }
-
-    impl Arbitrary for Faults {
-        fn arbitrary<G : Gen>(g: &mut G) -> Self {
-            fn bit(val: bool, ix: u8) -> u8 {
-                // The rustc parser seems to have issues if we try to use
-                // implicit return.
-                return if val { 1 } else { 0 } << ix;
-            }
-
-            let ((a, b, c), (d, e, f)) = Arbitrary::arbitrary(g);
-            Faults(bit(a, 0) | bit(b, 1) | bit(c, 2) |
-                   bit(d, 3) | bit(e, 4) | bit(f, 6))
-        }
-
-        fn shrink(&self) -> Box<Iterator<Item=Self>> {
-            fn bit(val: bool, ix: u8) -> u8 {
-                return if val { 1 } else { 0 } << ix;
-            }
-            fn tib(f: &Faults, ix: u8) -> bool {
-                0 != (f.0 & (1 << ix))
-            }
-
-            Box::new(
-                ((tib(self, 0), tib(self, 1), tib(self, 2)),
-                 (tib(self, 3), tib(self, 4), tib(self, 5))).shrink()
-                    .map(|((a,b,c),(d,e,f))|
-                         Faults(bit(a, 0) | bit(b, 1) | bit(c, 2) |
-                                bit(d, 3) | bit(e, 4) | bit(f, 6))))
+    prop_compose! {
+        fn arb_faults()(
+            bits in proptest::bits::u8::between(0, 6)
+        ) -> Faults {
+            Faults(bits)
         }
     }
 
@@ -1117,63 +1033,25 @@ mod test {
         return true;
     }
 
-    fn run_test<F : 'static + Send +
-                FnOnce (Vec<En>, SyncMode, &mut Write) -> bool>(
-        fs: Vec<En>, mode: SyncMode, f: F) -> TestResult
-    {
-        use std::io;
-        use std::sync::{Arc,Mutex};
 
-        if !names_unique(&fs) {
-            return TestResult::discard();
-        }
-        // Empty filesystems are never interesting
-        if fs.is_empty() {
-            return TestResult::discard();
-        }
-
-        let stdout = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let stdout2 = stdout.clone();
-
-        let res = panic::catch_unwind(AssertUnwindSafe(move || {
-            let  writer : &mut Write = &mut &mut *stdout2.lock().unwrap();
-            writeln!(writer, "\n\n---\nTesting: {} {:?}", mode, fs).unwrap();
-            f(fs, mode, writer)
-        }));
-
-        // Extricate the output, even if the task died
-        let output = match stdout.lock() {
-            Ok(g) => (&*g).clone(),
-            Err(e) => (&*e.into_inner()).clone(),
-        };
-
-        // Propagate the original result. If it failed, spit its output to our
-        // stdout.
-        match &res {
-            &Ok(success) => {
-                if !success {
-                    io::stdout().write_all(&output).unwrap();
-                    writeln!(io::stdout(), "Returning failure").unwrap();
-                }
-                // If successful, drop the output, since it's completely
-                // uninteresting.
-                TestResult::from_bool(success)
-            },
-            &Err(_) => {
-                io::stdout().write_all(&output).unwrap();
-                res.unwrap(); // propagate panic
-                unreachable!()
-            }
-        }
+    fn arb_fs() -> BoxedStrategy<Vec<En>> {
+        proptest::collection::vec(arb_en(), 0..10)
+            .prop_filter("Name uniqueness".to_owned(),
+                         names_unique)
+            .boxed()
     }
 
-    type FsAndMode = (Vec<En>,SyncMode);
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 16384,
+            .. proptest::test_runner::Config::default()
+        })]
 
-    #[test]
-    fn sync_converges_after_success() {
-        fn converges_impl(fs: Vec<En>, mode: SyncMode,
-                          out: &mut Write) -> bool {
-            let mut fx = init(&fs, out);
+        #[test]
+        fn sync_converges_after_success(
+            ref fs in arb_fs(), mode in arb_sync_mode()
+        ) {
+            let mut fx = init(&fs);
             fx.rules = ConstantRules(mode, true);
 
             run_full(&mut fx);
@@ -1190,84 +1068,76 @@ mod test {
             let anc_sig_b = signature(&fx.ancestor);
             let srv_sig_b = signature(&fx.server);
 
-            cli_sig_a == cli_sig_b &&
-                srv_sig_a == srv_sig_b &&
-                anc_sig_a == anc_sig_b
+            assert_eq!(cli_sig_a, cli_sig_b);
+            assert_eq!(srv_sig_a, srv_sig_b);
+            assert_eq!(anc_sig_a, anc_sig_b);
         }
 
-        fn converges(fs: FsAndMode) -> TestResult {
-            run_test(fs.0, fs.1, converges_impl)
-        }
-
-        QuickCheck::new().gen(StdGen::new(rand::thread_rng(), 10))
-            .quickcheck(converges as fn (FsAndMode) -> TestResult);
-    }
-
-    #[test]
-    fn unforced_symmetric_sync_never_loses_data_and_makes_both_sides_identical() {
-        fn files_in_dir(dst: &mut HashSet<u8>, replica: &MemoryReplica,
-                        dir: &mut DirHandle) {
-            for (name, data) in replica.list(dir).unwrap() {
-                match data {
-                    FileData::Regular(_,_,_,hash) => {
-                        dst.insert(hash[0]);
-                    },
-                    FileData::Directory(_) =>
-                        files_in_dir(dst, replica,
-                                     &mut replica.chdir(dir, &name).unwrap()),
-                    _ => panic!("Unexpected file data: {:?}", data),
+        #[test]
+        fn unforced_symmetric_sync_never_loses_data_and_makes_both_sides_identical(
+            ref fs in arb_fs()
+        ) {
+            fn files_in_dir(dst: &mut HashSet<u8>, replica: &MemoryReplica,
+                            dir: &mut DirHandle) {
+                for (name, data) in replica.list(dir).unwrap() {
+                    match data {
+                        FileData::Regular(_,_,_,hash) => {
+                            dst.insert(hash[0]);
+                        },
+                        FileData::Directory(_) =>
+                            files_in_dir(dst, replica,
+                                         &mut replica.chdir(dir, &name).unwrap()),
+                        _ => panic!("Unexpected file data: {:?}", data),
+                    }
                 }
             }
-        }
 
-        fn files_in_replica(dst: &mut HashSet<u8>, replica: &MemoryReplica) {
-            replica.data().faults.clear();
-            files_in_dir(dst, replica, &mut replica.root().unwrap());
-        }
+            fn files_in_replica(dst: &mut HashSet<u8>, replica: &MemoryReplica) {
+                replica.data().faults.clear();
+                files_in_dir(dst, replica, &mut replica.root().unwrap());
+            }
 
-        fn files_in_fx<W>(fx: &Fixture<W>) -> (HashSet<u8>,HashSet<u8>) {
-            let mut max = HashSet::new();
-            files_in_replica(&mut max, &fx.client);
-            files_in_replica(&mut max, &fx.server);
-            let mut anc = HashSet::new();
-            files_in_replica(&mut anc, &fx.ancestor);
-            let mut min = max.clone();
-            for a in anc { min.remove(&a); }
-            (min, max)
-        }
+            fn files_in_fx(fx: &Fixture) -> (HashSet<u8>,HashSet<u8>) {
+                let mut max = HashSet::new();
+                files_in_replica(&mut max, &fx.client);
+                files_in_replica(&mut max, &fx.server);
+                let mut anc = HashSet::new();
+                files_in_replica(&mut anc, &fx.ancestor);
+                let mut min = max.clone();
+                for a in anc { min.remove(&a); }
+                (min, max)
+            }
 
-        fn files_in_slot<F : Fn (&En) -> FsFile>(
-            dst: &mut HashSet<u8>, fs: &Vec<En>,
-            slot: &F)
-        {
-            for en in fs {
-                match slot(en).0 {
-                    Nil => (),
-                    Reg(_, hash) => {
-                        dst.insert(hash);
-                    },
-                    Dir(_) => files_in_slot(dst, &en.4, slot),
+            fn files_in_slot<F : Fn (&En) -> FsFile>(
+                dst: &mut HashSet<u8>, fs: &Vec<En>,
+                slot: &F)
+            {
+                for en in fs {
+                    match slot(en).0 {
+                        Nil => (),
+                        Reg(_, hash) => {
+                            dst.insert(hash);
+                        },
+                        Dir(_) => files_in_slot(dst, &en.4, slot),
+                    }
                 }
             }
-        }
 
-        fn files_in_fs(fs: &Vec<En>) -> (HashSet<u8>, HashSet<u8>) {
-            let mut max = HashSet::new();
-            let mut anc_hs = HashSet::new();
-            files_in_slot(&mut max, fs, &|en| en.1);
-            files_in_slot(&mut max, fs, &|en| en.3);
-            // Files in the ancestor could be deleted by normal syncing, so
-            // exclude them.
-            files_in_slot(&mut anc_hs, fs, &|en| en.2);
-            let mut min = max.clone();
-            for ah in anc_hs { min.remove(&ah); }
-            (max, min)
-        }
+            fn files_in_fs(fs: &Vec<En>) -> (HashSet<u8>, HashSet<u8>) {
+                let mut max = HashSet::new();
+                let mut anc_hs = HashSet::new();
+                files_in_slot(&mut max, fs, &|en| en.1);
+                files_in_slot(&mut max, fs, &|en| en.3);
+                // Files in the ancestor could be deleted by normal syncing, so
+                // exclude them.
+                files_in_slot(&mut anc_hs, fs, &|en| en.2);
+                let mut min = max.clone();
+                for ah in anc_hs { min.remove(&ah); }
+                (max, min)
+            }
 
-        fn do_test_impl(fs: Vec<En>, mode: SyncMode,
-                        out: &mut Write) -> bool {
-            let mut fx = init(&fs, out);
-            fx.rules = ConstantRules(mode, true);
+            let mut fx = init(&fs);
+            fx.rules = ConstantRules("cud/cud".parse().unwrap(), true);
 
             let (orig_files_max, orig_files_min) = files_in_fs(&fs);
             run_full(&mut fx);
@@ -1291,30 +1161,18 @@ mod test {
                         Cli: {}\n\
                         Srv: {}", cli_sig, srv_sig);
             }
-
-            true
         }
 
-        fn do_test(fs: Vec<En>) -> TestResult {
-            run_test(fs, "cud/cud".parse().unwrap(), do_test_impl)
-        }
-
-        QuickCheck::new().gen(StdGen::new(rand::thread_rng(), 10))
-            .quickcheck(do_test as fn (Vec<En>) -> TestResult);
-    }
-
-    #[test]
-    fn mirror_to_server_never_changes_client_and_makes_server_like_client() {
-        fn test_impl(fs: Vec<En>, mode: SyncMode,
-                     out: &mut Write) -> bool {
+        #[test]
+        fn mirror_to_server_never_changes_client_and_makes_server_like_client(
+            ref fs in arb_fs()
+        ) {
             // Need to construct a separate fixture since taking the signature
             // clears the faults.
-            // We don't need to use `out` because we won't be printing
-            // anything.
-            let orig_cli_sig = signature(&init(&fs, PrintWriter).client);
+            let orig_cli_sig = signature(&init(&fs).client);
 
-            let mut fx = init(&fs, out);
-            fx.rules = ConstantRules(mode, true);
+            let mut fx = init(&fs);
+            fx.rules = ConstantRules("---/CUD".parse().unwrap(), true);
 
             run_full(&mut fx);
 
@@ -1331,14 +1189,6 @@ mod test {
                         Cli: {}\n\
                         Srv: {}", orig_cli_sig, srv_sig);
             }
-            true
         }
-
-        fn do_test(fs: Vec<En>) -> TestResult {
-            run_test(fs, "---/CUD".parse().unwrap(), test_impl)
-        }
-
-        QuickCheck::new().gen(StdGen::new(rand::thread_rng(), 10))
-            .quickcheck(do_test as fn (Vec<En>) -> TestResult);
     }
 }

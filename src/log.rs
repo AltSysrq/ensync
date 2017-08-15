@@ -79,51 +79,14 @@ pub trait Logger {
 
 #[cfg(test)]
 mod println_logger {
-    use std::io::{Result,Write};
-    use std::sync::{Arc, Mutex};
-
     use super::*;
 
     /// Trivial implementation of `Logger` which simply dumps everything (in
-    /// debug format) to the given writer.
-    pub struct PrintlnLogger<W>(Arc<Mutex<W>>);
+    /// debug format) to stdout.
+    #[derive(Clone, Copy, Debug)]
+    pub struct PrintlnLogger;
 
-    impl<W> PrintlnLogger<W> {
-        pub fn new(w: W) -> Self {
-            PrintlnLogger(Arc::new(Mutex::new(w)))
-        }
-    }
-
-    impl<W> Clone for PrintlnLogger<W> {
-        fn clone(&self) -> Self {
-            PrintlnLogger(self.0.clone())
-        }
-    }
-
-    /// Writer which logs to the same "stdout" `print!` does, since for some
-    /// reason that's not accessible via any sane mechanism.
-    ///
-    /// Panics if a buffer written is not valid UTF-8.
-    pub struct PrintWriter;
-    impl Write for PrintWriter {
-        fn write(&mut self, buf: &[u8]) -> Result<usize> {
-            use std::str;
-            print!("{}", str::from_utf8(buf).unwrap());
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl PrintlnLogger<PrintWriter> {
-        pub fn stdout() -> Self {
-            PrintlnLogger::new(PrintWriter)
-        }
-    }
-
-    impl<W : Write> Logger for PrintlnLogger<W> {
+    impl Logger for PrintlnLogger {
         fn log(&self, level: LogLevel, what: &Log) {
             let level_str = match level {
                 FATAL => "FATAL",
@@ -133,11 +96,10 @@ mod println_logger {
                 INFO  => " INFO",
                 _     => "?????",
             };
-            writeln!(self.0.lock().unwrap(), "[{}] {:?}",
-                     level_str, what).unwrap();
+            println!("[{}] {:?}", level_str, what);
         }
     }
 }
 
 #[cfg(test)]
-pub use self::println_logger::{PrintlnLogger,PrintWriter};
+pub use self::println_logger::PrintlnLogger;

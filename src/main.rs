@@ -38,9 +38,9 @@ extern crate toml;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate quick_error;
 
-#[cfg(test)] extern crate quickcheck;
 #[cfg(test)] extern crate os_pipe;
 #[cfg(test)] extern crate tempdir;
+#[cfg(test)] #[macro_use] extern crate proptest;
 
 mod defs;
 mod errors;
