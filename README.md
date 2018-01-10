@@ -1025,8 +1025,8 @@ The basic procedure for this is:
 
 - Create the user with `ensync` as their shell.
 
-- In the user's home directory, make a symlink to the directory where Ensync
-  should store the server data.
+- In the user's home directory, make a symlink named `ensync-server-dir` to the
+  directory where Ensync should store the server data.
 
 You can then simply use `shell:ssh -T user@host` as the `server` configuration.
 For `ensync setup`, use `user@host:` as the remote path.
