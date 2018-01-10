@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2018, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -123,7 +123,7 @@ impl FromStr for SyncMode {
 
     fn from_str(s: &str) -> Result<Self, SyncModeParseError> {
         match s {
-            "mirror" => return Ok(SyncMode {
+            "mirror" | "reset-server" => return Ok(SyncMode {
                 inbound: HalfSyncMode {
                     create: SyncModeSetting::Off,
                     update: SyncModeSetting::Off,
@@ -133,6 +133,19 @@ impl FromStr for SyncMode {
                     create: SyncModeSetting::Force,
                     update: SyncModeSetting::Force,
                     delete: SyncModeSetting::Force,
+                }
+            }),
+
+            "reset-client" => return Ok(SyncMode {
+                inbound: HalfSyncMode {
+                    create: SyncModeSetting::Force,
+                    update: SyncModeSetting::Force,
+                    delete: SyncModeSetting::Force,
+                },
+                outbound: HalfSyncMode {
+                    create: SyncModeSetting::Off,
+                    update: SyncModeSetting::Off,
+                    delete: SyncModeSetting::Off,
                 }
             }),
 
@@ -345,6 +358,12 @@ mod test {
         assert_eq!(
             "---/CUD",
             &"mirror".parse::<SyncMode>().unwrap().to_string());
+        assert_eq!(
+            "---/CUD",
+            &"reset-server".parse::<SyncMode>().unwrap().to_string());
+        assert_eq!(
+            "CUD/---",
+            &"reset-client".parse::<SyncMode>().unwrap().to_string());
         assert_eq!(
             "cud/cud",
             &"sync".parse::<SyncMode>().unwrap().to_string());

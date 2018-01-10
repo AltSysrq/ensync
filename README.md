@@ -522,9 +522,15 @@ data:
 
 The most useful sync modes also have aliases:
 
-- `mirror` is an alias for `---/CUD` (all outbound set to "force", all inbound
-  set to "off"). This causes the server replica to be modified to exactly match
-  the client side, without making any modifications to the client side at all.
+- `mirror`, and `reset-server` are aliases for `---/CUD` (all outbound set to
+  "force", all inbound set to "off"). This causes the server replica to be
+  modified to exactly match the client side, without making any modifications
+  to the client side at all.
+
+- `reset-client` is an alias for `CUD/---` (all inbound set to "force", all
+  outbound set to "off"). This is the opposite of `mirror`/`reset-server` and
+  causes the local file system to be modified to exactly reflect the state of
+  the server side.
 
 - `conservative-sync` is an alias for `cud/cud`, i.e., conservative
   bidirectional sync.
