@@ -388,7 +388,7 @@ mod test {
             let $replica = ServerReplica::new(
                 ":memory:", $key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
-                flate2::Compression::Fast).unwrap();
+                flate2::Compression::fast()).unwrap();
             $replica.create_root().unwrap();
             let mut $root = $replica.root().unwrap();
         };
@@ -1089,7 +1089,7 @@ mod test {
         let replica1 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(storage1), "r00t", 1024,
-            flate2::Compression::Fast).unwrap();
+            flate2::Compression::fast()).unwrap();
         replica1.create_root().unwrap();
         let mut root1 = replica1.root().unwrap();
 
@@ -1097,7 +1097,7 @@ mod test {
         let replica2 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(storage2), "r00t", 1024,
-            flate2::Compression::Fast).unwrap();
+            flate2::Compression::fast()).unwrap();
         let root2 = replica1.root().unwrap();
 
         assert!(replica1.is_dir_dirty(&root1));
@@ -1153,7 +1153,7 @@ mod test {
         let replica1 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(storage1), "r00t", 1024,
-            flate2::Compression::Fast).unwrap();
+            flate2::Compression::fast()).unwrap();
         replica1.create_root().unwrap();
         let mut root1 = replica1.root().unwrap();
 
@@ -1161,7 +1161,7 @@ mod test {
         let replica2 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(storage2), "r00t", 1024,
-            flate2::Compression::Fast).unwrap();
+            flate2::Compression::fast()).unwrap();
         let mut root2 = replica1.root().unwrap();
 
         // Process 1 gets a snapshot of the root
@@ -1189,7 +1189,7 @@ mod test {
         let replica1 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(storage1), "r00t", 1024,
-            flate2::Compression::Fast).unwrap();
+            flate2::Compression::fast()).unwrap();
         replica1.create_root().unwrap();
         let mut root1 = replica1.root().unwrap();
 
@@ -1197,7 +1197,7 @@ mod test {
         let replica2 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(storage2), "r00t", 1024,
-            flate2::Compression::Fast).unwrap();
+            flate2::Compression::fast()).unwrap();
         let mut root2 = replica1.root().unwrap();
 
         // Process 1 gets a snapshot of the root
@@ -1254,11 +1254,11 @@ mod test {
         let mut replica1 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(LocalStorage::open(&storage_dir).unwrap()),
-            "r00t", 1024, flate2::Compression::Fast).unwrap();
+            "r00t", 1024, flate2::Compression::fast()).unwrap();
         let replica2 = ServerReplica::new(
             ":memory:", key_chain.clone(),
             Arc::new(LocalStorage::open(&storage_dir).unwrap()),
-            "r00t", 1024, flate2::Compression::Fast).unwrap();
+            "r00t", 1024, flate2::Compression::fast()).unwrap();
         replica1.create_root().unwrap();
 
         let watch = Arc::new(WatchHandle::default());
@@ -1319,7 +1319,7 @@ mod test {
             let replica = ServerReplica::new(
                 &sqlite_file, key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
-                flate2::Compression::Fast).unwrap();
+                flate2::Compression::fast()).unwrap();
             replica.create_root().unwrap();
             let mut root = replica.root().unwrap();
 
@@ -1345,7 +1345,7 @@ mod test {
             let replica = ServerReplica::new(
                 &sqlite_file, key_chain.clone(),
                 Arc::new(storage), "r00t", 1024,
-                flate2::Compression::Fast).unwrap();
+                flate2::Compression::fast()).unwrap();
 
             let mut root = replica.root().unwrap();
             // When the out-of-date directory is seen, it fails instead of
@@ -1387,7 +1387,7 @@ mod test {
             let replica = ServerReplica::new(
                 sqlite_file.to_str().unwrap(), Arc::new(key_chain),
                 storage.clone(), "r00t", 1024,
-                flate2::Compression::Fast).unwrap();
+                flate2::Compression::fast()).unwrap();
             replica.create_root().unwrap();
 
             let mut root = replica.root().unwrap();
@@ -1411,7 +1411,7 @@ mod test {
             let replica = ServerReplica::new(
                 sqlite_file.to_str().unwrap(), Arc::new(key_chain),
                 storage.clone(), "r00t", 1024,
-                flate2::Compression::Fast).unwrap();
+                flate2::Compression::fast()).unwrap();
 
             let mut root = replica.root().unwrap();
             let list = replica.list(&mut root).unwrap();
@@ -1452,7 +1452,7 @@ mod test {
             let replica = ServerReplica::new(
                 sqlite_file.to_str().unwrap(), Arc::new(key_chain),
                 storage.clone(), "r00t", 1024,
-                flate2::Compression::Fast).unwrap();
+                flate2::Compression::fast()).unwrap();
             replica.create_root().unwrap();
 
             let mut root = replica.root().unwrap();
@@ -1476,7 +1476,7 @@ mod test {
             let replica = ServerReplica::new(
                 sqlite_file.to_str().unwrap(), Arc::new(key_chain),
                 storage.clone(), "r00t", 1024,
-                flate2::Compression::Fast).unwrap();
+                flate2::Compression::fast()).unwrap();
 
             let mut root = replica.root().unwrap();
             let list = replica.list(&mut root).unwrap();

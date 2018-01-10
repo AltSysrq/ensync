@@ -48,6 +48,6 @@ impl<S : Storage + ?Sized> BlockFetch for ServerTransferOut<S> {
         decrypt_obj(&mut cleartext, &ciphertext[..], block)?;
 
         Ok(Box::new(flate2::read::GzDecoder::new(
-            io::Cursor::new(cleartext))?))
+            io::Cursor::new(cleartext))))
     }
 }

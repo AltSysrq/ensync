@@ -250,10 +250,10 @@ impl Config {
 pub fn parse_compression_name(filename: &Path, name: &str)
                               -> Result<flate2::Compression> {
     Ok(match name {
-        "none" | "off" => flate2::Compression::None,
-        "default" | "on" => flate2::Compression::Default,
-        "best" => flate2::Compression::Best,
-        "fast" => flate2::Compression::Fast,
+        "none" | "off" => flate2::Compression::none(),
+        "default" | "on" => flate2::Compression::default(),
+        "best" => flate2::Compression::best(),
+        "fast" => flate2::Compression::fast(),
         _ => bail!(format!(
             "{}: Invalid compression type '{}'",
             filename.display(), name)),
@@ -452,27 +452,10 @@ impl PassphraseConfig {
 mod test {
     use std::path::Path;
 
-    use flate2;
+    use flate2::Compression;
     use tempfile::NamedTempFile;
 
     use super::*;
-
-    // Since `Compression` is neither Debug or PartialEq
-    macro_rules! assert_compression {
-        ($expected:ident, $actual:expr) => {
-            match (true, $actual) {
-                (true, flate2::Compression::$expected) => (),
-                (_, flate2::Compression::None) =>
-                    panic!("Unexpected `None` compression"),
-                (_, flate2::Compression::Default) =>
-                    panic!("Unexpected `Default` compression"),
-                (_, flate2::Compression::Best) =>
-                    panic!("Unexpected `Best` compression"),
-                (_, flate2::Compression::Fast) =>
-                    panic!("Unexpected `Fast` compression"),
-            }
-        }
-    }
 
     #[test]
     fn parse_full() {
@@ -494,7 +477,7 @@ mode = "---/---"
         assert_eq!("r00t", &config.server_root);
         assert_eq!(PassphraseConfig::Prompt, config.passphrase);
         assert_eq!(65536, config.block_size);
-        assert_compression!(Best, config.compression);
+        assert_eq!(Compression::best(), config.compression);
     }
 
     #[test]
@@ -523,18 +506,24 @@ mode = "---/---"
     fn parse_compression_names() {
         let path: &Path = "".as_ref();
 
-        assert_compression!(
-            None, super::parse_compression_name(&path, "off").unwrap());
-        assert_compression!(
-            None, super::parse_compression_name(&path, "none").unwrap());
-        assert_compression!(
-            Default,  super::parse_compression_name(&path, "default").unwrap());
-        assert_compression!(
-            Default, super::parse_compression_name(&path, "on").unwrap());
-        assert_compression!(
-            Fast, super::parse_compression_name(&path, "fast").unwrap());
-        assert_compression!(
-            Best, super::parse_compression_name(&path, "best").unwrap());
+        assert_eq!(
+            Compression::none(),
+            super::parse_compression_name(&path, "off").unwrap());
+        assert_eq!(
+            Compression::none(),
+            super::parse_compression_name(&path, "none").unwrap());
+        assert_eq!(
+            Compression::default(),
+            super::parse_compression_name(&path, "default").unwrap());
+        assert_eq!(
+            Compression::default(),
+            super::parse_compression_name(&path, "on").unwrap());
+        assert_eq!(
+            Compression::fast(),
+            super::parse_compression_name(&path, "fast").unwrap());
+        assert_eq!(
+            Compression::best(),
+            super::parse_compression_name(&path, "best").unwrap());
     }
 
     #[test]

@@ -583,7 +583,7 @@ impl Cryptor for WDecryptor {
 /// forging SHA-3 HMAC. (Also note again that directories do not use PKCS
 /// padding.)
 fn crypt_stream<W : Write, R : Read, C : Cryptor>(
-    mut dst: W, mut src: R, mut crypt: &mut C,
+    mut dst: W, mut src: R, crypt: &mut C,
     panic_on_crypt_err: bool) -> Result<()>
 {
     let mut src_buf = [0u8;4096];
