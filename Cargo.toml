@@ -13,6 +13,9 @@ A flexible ENcrypted file SYNChroniser suitable for uses where the central
 location is not fully trusted.
 """
 
+[badges]
+travis-ci = { repository = "AltSysrq/ensync" }
+
 [dependencies]
 # Can't upgrade to 0.3 because of rust-crypto dependency
 chrono = { version = "0.2" }
