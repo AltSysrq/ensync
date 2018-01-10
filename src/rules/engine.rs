@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2018, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -269,6 +269,26 @@ quick_error! {
 pub type Result<T> = result::Result<T, Error>;
 
 impl SyncRules {
+    pub fn single_mode(mode: SyncMode) -> SyncRules {
+        SyncRules {
+            root_ix: 0,
+            states: vec![
+                RuleState {
+                    files: vec![0],
+                    siblings: vec![],
+                }
+            ],
+            rules: vec![
+                Rule {
+                    conditions: vec![],
+                    actions: vec![
+                        Action::Mode(mode),
+                    ],
+                }
+            ],
+        }
+    }
+
     pub fn parse(rules: &toml::value::Table, base_section: &str)
                  -> Result<SyncRules> {
         let mut this: SyncRules = Default::default();

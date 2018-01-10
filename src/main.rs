@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2018, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -303,8 +303,8 @@ exist."))
                          .long("strategy")
                          .required(false)
                          .takes_value(true)
-                         .default_value("fast")
-                         .possible_values(&["fast", "clean", "scrub"])
+                         .default_value("auto")
+                         .possible_values(&["fast", "clean", "scrub", "auto"])
                          .help("Control what is checked for syncing. \"fast\" \
                                 means to only scan directories that have \
                                 obviously changed. \"clean\" causes all \
@@ -322,6 +322,16 @@ exist."))
                                 process and resume operations. If this flag \
                                 is given, `ensync sync` should not terminate \
                                 on its own."))
+                    .arg(Arg::with_name("override-mode")
+                         .long("override-mode")
+                         .required(false)
+                         .takes_value(true)
+                         .help("Ignore all sync rules in the configuration \
+                                sync all files with the given sync mode. \
+                                This is most useful in conjunction with \
+                                the `reset-server` and `reset-client` mode \
+                                aliases. If `--strategy` is `auto`, \
+                                implies `--strategy=clean`."))
                     .after_help("\
 As one might expect, `ensync sync` is the main subcommand. When invoked, \
 `ensync sync` will scan for file changes and automatically propagate them \
@@ -957,8 +967,18 @@ pipe."))
             None
         };
 
+        let override_mode = {
+            if let Some(mode) = matches.value_of("override-mode") {
+                Some(mode.parse::<rules::SyncMode>().chain_err(
+                    || format!("Value '{}' for --override-mode is invalid",
+                               mode))?)
+            } else {
+                None
+            }
+        };
+
         fn do_run(matches: &ArgMatches, config: &cli::config::Config,
-                  num_threads: u32,
+                  num_threads: u32, override_mode: Option<rules::SyncMode>,
                   key_chain: &mut Option<std::sync::Arc<server::KeyChain>>)
                   -> errors::Result<()> {
             let storage = create_storage(matches, config)?;
@@ -975,6 +995,7 @@ pipe."))
                                matches.is_present("watch"),
                                num_threads,
                                matches.value_of("strategy").unwrap(),
+                               override_mode,
                                key_chain)
         }
 
@@ -983,7 +1004,8 @@ pipe."))
         loop {
             use std::io::{stderr, Write};
 
-            match do_run(&matches, &config, num_threads, &mut key_chain) {
+            match do_run(&matches, &config, num_threads, override_mode,
+                         &mut key_chain) {
                 Ok(()) => return Ok(()),
                 Err(e) => if let Some(seconds) = reconnect {
                     interrupt::clear_notify();

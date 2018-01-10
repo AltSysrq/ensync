@@ -1,3 +1,10 @@
+# Unreleased
+
+- Add `reset-server` and `reset-client` sync mode aliases.
+
+- Add `--mode-override` flag to `ensync sync` to force syncing to proceed with
+  a particular sync mode instead of the configured one.
+
 # 0.2.4
 
 - Added `--reconnect` flag which can be used in conjunction with `--watch` to

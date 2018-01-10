@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, Jason Lingle
+// Copyright (c) 2017, 2018, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -653,6 +653,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
            watch: bool,
            num_threads: u32,
            prepare_type: &str,
+           override_mode: Option<rules::SyncMode>,
            // Since --reconnect can cause multiple runs to occur, allow the
            // caller to remember the derived keychain so we don't need to
            // prompt for the passphrase again.
@@ -670,6 +671,11 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         _ => false,
     };
     let prepare_type = match prepare_type {
+        "auto" => if override_mode.is_some() {
+            PrepareType::Clean
+        } else {
+            PrepareType::Fast
+        },
         "fast" => PrepareType::Fast,
         "clean" => PrepareType::Clean,
         "scrub" => PrepareType::Scrub,
@@ -745,6 +751,12 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
     interrupt::install_signal_handler();
 
+    let rules = match override_mode {
+        None => config.sync_rules.clone(),
+        Some(overide) => Arc::new(
+            rules::engine::SyncRules::single_mode(overide)),
+    };
+
     if dry_run {
         let context = Arc::new(reconcile::Context::<
                 DryRunReplica<PosixReplica>,
@@ -755,8 +767,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             anc: DryRunReplica(ancestor_replica),
             srv: DryRunReplica(server_replica),
             log: log,
-            root_rules: rules::engine::FileEngine::new(
-                config.sync_rules.clone()),
+            root_rules: rules::engine::FileEngine::new(rules),
             work: work_stack::WorkStack::new(),
             tasks: reconcile::UnqueuedTasks::new(),
         });
@@ -780,8 +791,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
             anc: ancestor_replica,
             srv: server_replica,
             log: log,
-            root_rules: rules::engine::FileEngine::new(
-                config.sync_rules.clone()),
+            root_rules: rules::engine::FileEngine::new(rules),
             work: work_stack::WorkStack::new(),
             tasks: reconcile::UnqueuedTasks::new(),
         });
