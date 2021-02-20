@@ -1,7 +1,7 @@
 Ensync
 ======
 
-[![Build Status](https://travis-ci.org/AltSysrq/ensync.svg?branch=master)](https://travis-ci.org/AltSysrq/ensync)
+[![Build Status](https://github.com/AltSysrq/ensync/workflows/Rust/badge.svg?branch=master)](https://github.com/AltSysrq/ensync/actions)
 [![](http://meritbadge.herokuapp.com/ensync)](https://crates.io/crates/ensync)
 
 Introduction
