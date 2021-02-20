@@ -634,13 +634,13 @@ pub struct RemoteStorage {
     //
     // Note that frames are read and parsed by another thread which handles
     // unsolicited responses like `WatchNotify`.
-    sout: Mutex<(Box<Write + Send>, u64)>,
+    sout: Mutex<(Box<dyn Write + Send>, u64)>,
     sin: Mutex<(mpsc::Receiver<Result<Response>>, u64)>,
     cond: Condvar,
     fatal: AtomicBool,
     /// The protocol version negotiated by the server.
     protocol: (u32, u32),
-    watch_fun: Arc<Mutex<Option<Box<FnMut (Option<&HashId>) + Send>>>>,
+    watch_fun: Arc<Mutex<Option<Box<dyn FnMut (Option<&HashId>) + Send>>>>,
 }
 
 macro_rules! handle_response {
@@ -686,7 +686,7 @@ impl RemoteStorage {
         let mut sin = io::BufReader::new(sin);
         let (tx, rx) = mpsc::sync_channel(0);
 
-        let watch_fun: Arc<Mutex<Option<Box<FnMut (Option<&HashId>) + Send>>>> =
+        let watch_fun: Arc<Mutex<Option<Box<dyn FnMut (Option<&HashId>) + Send>>>> =
             Arc::new(Mutex::new(None));
         let watch_fun2 = watch_fun.clone();
 
@@ -821,7 +821,7 @@ impl Storage for RemoteStorage {
         self.send_async_request(Request::CheckDirDirty(*id, *ver, len))
     }
 
-    fn for_dirty_dir(&self, f: &mut FnMut (&HashId) -> Result<()>)
+    fn for_dirty_dir(&self, f: &mut dyn FnMut (&HashId) -> Result<()>)
                      -> Result<()> {
         self.send_sync_request(Request::ForDirtyDir, |sin| {
             let mut error = None;
@@ -913,7 +913,7 @@ impl Storage for RemoteStorage {
         })
     }
 
-    fn watch(&mut self, f: Box<FnMut (Option<&HashId>) + Send>) -> Result<()> {
+    fn watch(&mut self, f: Box<dyn FnMut (Option<&HashId>) + Send>) -> Result<()> {
         if self.protocol < (0, 1) {
             return Err(format!("\
 `--watch` requires the remote process to support protocol version 0.1 or later

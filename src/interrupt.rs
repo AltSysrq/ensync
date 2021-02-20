@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, Jason Lingle
+// Copyright (c) 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -17,16 +17,15 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize,
-                        ATOMIC_BOOL_INIT, ATOMIC_USIZE_INIT};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use libc;
 
 use replica::WatchHandle;
 
-static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
-// Should be `AtomicPtr<WatchHandle>` but there's no `ATOMIC_PTR_INIT`.
-static NOTIFY_WATCH: AtomicUsize = ATOMIC_USIZE_INIT;
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+// XXX Should be `AtomicPtr<WatchHandle>` but there was no `ATOMIC_PTR_INIT`.
+static NOTIFY_WATCH: AtomicUsize = AtomicUsize::new(0);
 
 pub fn is_interrupted() -> bool {
     INTERRUPTED.load(Relaxed)
@@ -63,8 +62,8 @@ pub fn install_signal_handler() {
 pub fn notify_on_signal(watch: Arc<WatchHandle>) {
     let ptr = Arc::into_raw(watch);
 
-    assert!(0 == NOTIFY_WATCH.compare_and_swap(
-        0, ptr as usize, SeqCst));
+    assert!(Ok(0) == NOTIFY_WATCH.compare_exchange(
+        0, ptr as usize, SeqCst, SeqCst));
 }
 
 pub fn clear_notify() {

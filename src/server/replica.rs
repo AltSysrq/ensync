@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -124,7 +124,7 @@ impl<S : Storage + ?Sized + 'static> ServerReplica<S> {
 
 impl<S : Storage + ?Sized + 'static> Replica for ServerReplica<S> {
     type Directory = Arc<Dir<S>>;
-    type TransferIn = Option<Box<StreamSource>>;
+    type TransferIn = Option<Box<dyn StreamSource>>;
     type TransferOut = Option<ContentAddressableSource>;
 
     fn is_fatal(&self) -> bool {

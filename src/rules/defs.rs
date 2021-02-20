@@ -115,7 +115,7 @@ impl Error for SyncModeParseError {
         self.message
     }
 
-    fn cause(&self) -> Option<&Error> { None }
+    fn cause(&self) -> Option<&dyn Error> { None }
 }
 
 impl FromStr for SyncMode {

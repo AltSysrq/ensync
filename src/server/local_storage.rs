@@ -558,7 +558,7 @@ impl Storage for LocalStorage {
         Ok(())
     }
 
-    fn for_dirty_dir(&self, f: &mut FnMut (&HashId) -> Result<()>)
+    fn for_dirty_dir(&self, f: &mut dyn FnMut (&HashId) -> Result<()>)
                      -> Result<()> {
         let mut d = self.dirty_dir_buf.lock().unwrap();
         d.seek(io::SeekFrom::Start(0)).chain_err(
@@ -737,7 +737,7 @@ impl Storage for LocalStorage {
         })
     }
 
-    fn watch(&mut self, mut f: Box<FnMut (Option<&HashId>) + Send>) -> Result<()> {
+    fn watch(&mut self, mut f: Box<dyn FnMut (Option<&HashId>) + Send>) -> Result<()> {
         if self.watch_list.is_some() {
             return Err(ErrorKind::AlreadyWatching.into());
         }

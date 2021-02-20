@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, 2018, Jason Lingle
+// Copyright (c) 2017, 2018, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -644,7 +644,7 @@ impl LoggerImpl {
     }
 }
 
-pub fn run(config: &Config, storage: Arc<Storage>,
+pub fn run(config: &Config, storage: Arc<dyn Storage>,
            verbosity: i32, quietness: i32,
            itemise: bool, itemise_unchanged: bool,
            colour: &str, spin: &str,
@@ -761,7 +761,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
         let context = Arc::new(reconcile::Context::<
                 DryRunReplica<PosixReplica>,
                 DryRunReplica<AncestorReplica>,
-                DryRunReplica<ServerReplica<Storage>>,
+                DryRunReplica<ServerReplica<dyn Storage>>,
                 LoggerImpl, rules::engine::DirEngine> {
             cli: DryRunReplica(client_replica),
             anc: DryRunReplica(ancestor_replica),
@@ -785,7 +785,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
 
         // For some reason the type parms on `Context` are required
         let context = Arc::new(reconcile::Context::<
-                PosixReplica, AncestorReplica, ServerReplica<Storage>,
+                PosixReplica, AncestorReplica, ServerReplica<dyn Storage>,
                 LoggerImpl, rules::engine::DirEngine> {
             cli: client_replica,
             anc: ancestor_replica,
@@ -806,7 +806,7 @@ pub fn run(config: &Config, storage: Arc<Storage>,
                      Press Control+C to stop.");
         }
 
-        if watch { 'outer: while !interrupt::is_interrupted() {
+        if watch { while !interrupt::is_interrupted() {
             watch_handle.wait();
             // Sleep for a few seconds in case there are multiple notifications
             // coming in, but bail immediately if we're responding to ^C.

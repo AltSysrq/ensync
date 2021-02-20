@@ -545,13 +545,13 @@ trait Cryptor {
     fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
              eof: bool) -> StdResult<BufferResult, SymmetricCipherError>;
 }
-struct WEncryptor(Box<Encryptor>);
+struct WEncryptor(Box<dyn Encryptor>);
 impl Cryptor for WEncryptor {
     fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
              eof: bool) -> StdResult<BufferResult, SymmetricCipherError>
     { self.0.encrypt(input, output, eof) }
 }
-struct WDecryptor(Box<Decryptor>);
+struct WDecryptor(Box<dyn Decryptor>);
 impl Cryptor for WDecryptor {
     fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
              eof: bool) -> StdResult<BufferResult, SymmetricCipherError>

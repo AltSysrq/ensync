@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, Jason Lingle
+// Copyright (c) 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -96,7 +96,7 @@ Should it be created too? ", config.parent().unwrap().display()))?;
     let full_local = cwd.join(local);
     let full_config = cwd.join(config);
 
-    let storage: Arc<Storage>;
+    let storage: Arc<dyn Storage>;
     let server_spec: String;
     if let Some((host, remote_path)) = remote.to_str()
         .and_then(|s| s.find(':').map(|ix| (&s[..ix], &s[ix+1..])))
@@ -520,7 +520,7 @@ fn shell_escape(s: &str) -> String {
     let mut safe = true;
     for ch in s.chars() {
         match ch {
-            'a'...'z' | 'A'...'Z' | '0'...'9' |
+            'a'..='z' | 'A'..='Z' | '0'..='9' |
             '.' | '/' | ':' | '@' | '-' | '_' => (),
             _ => { safe = false; break; },
         }

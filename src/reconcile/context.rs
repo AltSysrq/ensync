@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -41,7 +41,7 @@ impl<T, F : FnOnce(&T) + Send> TaskT<T> for TaskContainer<F> {
         self.0.lock().unwrap().take().unwrap()(t)
     }
 }
-pub type Task<T> = Box<TaskT<T>>;
+pub type Task<T> = Box<dyn TaskT<T>>;
 pub fn task<T, F : FnOnce(&T) + Send + 'static>(f: F) -> Task<T> {
     Box::new(TaskContainer(Mutex::new(Some(f))))
 }

@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -202,7 +202,7 @@ fn assert_sane_filename(name: &OsStr) -> Result<()> {
 impl Replica for PosixReplica {
     type Directory = DirHandle;
     type TransferIn = Option<ContentAddressableSource>;
-    type TransferOut = Option<Box<StreamSource>>;
+    type TransferOut = Option<Box<dyn StreamSource>>;
 
     fn is_dir_dirty(&self, dir: &DirHandle) -> bool {
         return !self.dao.lock().unwrap().is_dir_clean(
@@ -483,7 +483,7 @@ impl Replica for PosixReplica {
     }
 
     fn transfer(&self, dir: &DirHandle, file: File)
-                -> Result<Option<Box<StreamSource>>> {
+                -> Result<Option<Box<dyn StreamSource>>> {
         Ok(match *file.1 {
             FileData::Regular(mode, _, _, expected_hash) => Some(Box::new(
                 FileStreamSource {
@@ -925,8 +925,8 @@ impl PosixReplica {
     /// If a block matching `hash` is available locally, it is loaded into
     /// memory and returned. Otherwise, `fetch` is used to stream the data from
     /// the other replica.
-    fn xfer_block(&self, hash: &HashId, fetch: &BlockFetch)
-                  -> Result<Box<io::Read>> {
+    fn xfer_block(&self, hash: &HashId, fetch: &dyn BlockFetch)
+                  -> Result<Box<dyn io::Read>> {
         if let Some(data) = self.fetch_block_local(hash) {
             Ok(Box::new(io::Cursor::new(data)))
         } else {
@@ -1300,9 +1300,9 @@ mod test {
             root.path().join("dir")).unwrap();
         unix::fs::symlink("target", root.path().join("sym")).unwrap();
         unsafe {
-            assert_eq!(0, libc::mkfifo(
-                CString::new(root.path().join("fifo").to_str().unwrap())
-                    .unwrap().as_ptr(), 0o000));
+            let path = CString::new(root.path().join("fifo").to_str().unwrap())
+                .unwrap();
+            assert_eq!(0, libc::mkfifo(path.as_ptr(), 0o000));
         }
         fs::DirBuilder::new().mode(0o700).create(
             root.path().join(PRIVATE_DIR_NAME)).unwrap();

@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -40,7 +40,7 @@ impl<S : Storage + ?Sized> ServerTransferOut<S> {
 }
 
 impl<S : Storage + ?Sized> BlockFetch for ServerTransferOut<S> {
-    fn fetch(&self, block: &HashId) -> Result<Box<io::Read>> {
+    fn fetch(&self, block: &HashId) -> Result<Box<dyn io::Read>> {
         let ciphertext = self.storage.getobj(&xform_obj_id(block))?
             .ok_or(ErrorKind::ServerContentDeleted)?;
         let mut cleartext = Vec::<u8>::with_capacity(

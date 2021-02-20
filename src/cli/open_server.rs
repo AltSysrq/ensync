@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, Jason Lingle
+// Copyright (c) 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -78,7 +78,7 @@ pub fn connect_server_storage<R : Read + Send + 'static,
 /// If this spawns a process, there is no way to reap the process when it
 /// terminates.
 pub fn open_server_storage(config: &ServerConfig, show_connection: bool)
-                           -> Result<Arc<Storage>> {
+                           -> Result<Arc<dyn Storage>> {
     match *config {
         ServerConfig::Path(ref path) =>
             Ok(Arc::new(LocalStorage::open(path).chain_err(
@@ -128,9 +128,9 @@ pub fn open_server_storage(config: &ServerConfig, show_connection: bool)
 /// If the caller already has a key chain, it may pass it in so that the user
 /// is not prompted again. If `None`, the passphrase will be read within this
 /// call.
-pub fn open_server_replica(config: &Config, storage: Arc<Storage>,
+pub fn open_server_replica(config: &Config, storage: Arc<dyn Storage>,
                            key_chain: Option<Arc<KeyChain>>)
-                           -> Result<ServerReplica<Storage>> {
+                           -> Result<ServerReplica<dyn Storage>> {
     let key_chain = if let Some(key_chain) = key_chain {
         key_chain
     } else {

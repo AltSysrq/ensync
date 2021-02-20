@@ -251,14 +251,14 @@ pub struct ContentAddressableSource {
     /// The block size used for this object
     pub block_size: usize,
     /// Object from which to read actual block content.
-    pub fetch: Arc<BlockFetch>,
+    pub fetch: Arc<dyn BlockFetch>,
 }
 
 /// Trait for fetching blocks found in a `ContentAddressableSource`.
 pub trait BlockFetch {
     /// Fetches the block identified by `block`, returning a stream that can be
     /// used to obtain the data within.
-    fn fetch(&self, block: &HashId) -> Result<Box<io::Read>>;
+    fn fetch(&self, block: &HashId) -> Result<Box<dyn io::Read>>;
 }
 
 #[cfg(test)]

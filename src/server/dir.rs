@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -494,7 +494,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
     /// `remove_subdir()`.
     pub fn edit<F : Fn (Option<&FileData>) -> Result<()>>
         (&self, name: &OsStr, new: Option<&FileData>,
-         mut xfer: Option<Box<StreamSource>>, test: F)
+         mut xfer: Option<Box<dyn StreamSource>>, test: F)
          -> Result<Option<FileData>>
     {
         let mut content = self.content.lock().unwrap();

@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, 2018, Jason Lingle
+// Copyright (c) 2016, 2017, 2018, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -32,7 +32,7 @@ extern crate sqlite;
 extern crate tempfile;
 extern crate tiny_keccak as keccak;
 extern crate toml;
-#[macro_use] extern crate clap;
+extern crate clap;
 #[macro_use] extern crate fourleaf;
 #[macro_use] extern crate error_chain;
 #[macro_use] extern crate lazy_static;
@@ -817,7 +817,7 @@ pipe."))
         .get_matches();
 
     fn create_storage(matches: &ArgMatches, config: &cli::config::Config)
-                      -> errors::Result<std::sync::Arc<server::Storage>> {
+                      -> errors::Result<std::sync::Arc<dyn server::Storage>> {
         let storage = cli::open_server::open_server_storage(
             &config.server,
             matches.occurrences_of("quiet") <=

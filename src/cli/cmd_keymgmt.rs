@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, Jason Lingle
+// Copyright (c) 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -29,7 +29,7 @@ macro_rules! root_prompt {
         "passphrase in `root` group", false) }
 }
 
-pub fn init_keys(config: &Config, storage: &Storage, name: Option<&str>)
+pub fn init_keys(config: &Config, storage: &dyn Storage, name: Option<&str>)
                  -> Result<()> {
     keymgmt::init_keys(storage,
                        &config.passphrase.read_passphrase(
@@ -38,7 +38,7 @@ pub fn init_keys(config: &Config, storage: &Storage, name: Option<&str>)
         .map(|_| ())
 }
 
-pub fn add_key(storage: &Storage, old: &PassphraseConfig,
+pub fn add_key(storage: &dyn Storage, old: &PassphraseConfig,
                new: &PassphraseConfig, root: &PassphraseConfig,
                name: &str) -> Result<()> {
     let old_pass = old.read_passphrase("old passphrase", false)?;
@@ -47,7 +47,7 @@ pub fn add_key(storage: &Storage, old: &PassphraseConfig,
                      root_prompt!(root))
 }
 
-pub fn list_keys(storage: &Storage) -> Result<()> {
+pub fn list_keys(storage: &dyn Storage) -> Result<()> {
     fn format_date(date: Option<&DateTime<UTC>>) -> String {
         if let Some(date) = date {
             super::format_date::format_date(date)
@@ -71,7 +71,7 @@ pub fn list_keys(storage: &Storage) -> Result<()> {
     Ok(())
 }
 
-pub fn change_key(config: &Config, storage: &Storage, old: &PassphraseConfig,
+pub fn change_key(config: &Config, storage: &dyn Storage, old: &PassphraseConfig,
                   new: &PassphraseConfig, root: &PassphraseConfig,
                   name: Option<&str>,
                   allow_change_via_other_passphrase: bool)
@@ -89,13 +89,13 @@ pub fn change_key(config: &Config, storage: &Storage, old: &PassphraseConfig,
     Ok(())
 }
 
-pub fn del_key(storage: &Storage, name: &str, root: &PassphraseConfig)
+pub fn del_key(storage: &dyn Storage, name: &str, root: &PassphraseConfig)
                -> Result<()> {
     keymgmt::del_key(storage, name, root_prompt!(root))
 }
 
 pub fn create_group<IT : Iterator + Clone>
-    (storage: &Storage, key: &PassphraseConfig,
+    (storage: &dyn Storage, key: &PassphraseConfig,
      root: &PassphraseConfig, names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
     let pass = key.read_passphrase("passphrase", false)?;
@@ -104,7 +104,7 @@ where IT::Item : AsRef<str> {
 }
 
 pub fn assoc_group<IT : Iterator + Clone>
-    (storage: &Storage, from: &PassphraseConfig, to: &PassphraseConfig,
+    (storage: &dyn Storage, from: &PassphraseConfig, to: &PassphraseConfig,
      root: &PassphraseConfig, names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
     let from_pass = from.read_passphrase(
@@ -117,7 +117,7 @@ where IT::Item : AsRef<str> {
 }
 
 pub fn disassoc_group<IT : Iterator + Clone>
-    (storage: &Storage, from: &str, root: &PassphraseConfig,
+    (storage: &dyn Storage, from: &str, root: &PassphraseConfig,
      names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
     keymgmt::disassoc_group(storage, from, names, root_prompt!(root))
@@ -125,7 +125,7 @@ where IT::Item : AsRef<str> {
 
 
 pub fn destroy_group<IT : Iterator + Clone>
-    (storage: &Storage, dont_ask: bool, root: &PassphraseConfig,
+    (storage: &dyn Storage, dont_ask: bool, root: &PassphraseConfig,
      names: IT) -> Result<()>
 where IT::Item : AsRef<str> {
     if !dont_ask {

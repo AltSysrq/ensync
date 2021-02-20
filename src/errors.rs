@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -325,7 +325,7 @@ impl Error {
         // XXX Reaching into `error_chain` internals because `downcast_ref`
         // requires having an `&Error + 'static` but `Error::cause()` only
         // returns `&Error`.
-        let cause: Option<&(StdError + Send + 'static)> =
+        let cause: Option<&(dyn StdError + Send + 'static)> =
             self.1.next_error.as_ref().map(|e| &**e);
         cause.and_then(|c| c.downcast_ref::<Error>())
             .map(|c| c.is_fatal()).unwrap_or(false)

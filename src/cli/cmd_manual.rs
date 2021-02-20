@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, Jason Lingle
+// Copyright (c) 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -437,7 +437,7 @@ pub fn put<S : Storage + ?Sized, P1 : AsRef<Path>, P2 : AsRef<Path>>
                 }
             }
 
-            let xfer: Option<Box<block_xfer::StreamSource>> =
+            let xfer: Option<Box<dyn block_xfer::StreamSource>> =
                 Some(Box::new(Xfer(fs::File::open(src).chain_err(
                     || format!("Failed to open '{}' for reading",
                                src.display()))?)));

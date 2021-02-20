@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -61,7 +61,7 @@ pub trait Storage : Send + Sync {
 
     /// For each directory id buffered by calls to `check_dir_dirty`, invoke
     /// `f`. The dirty directory buffer is then cleared.
-    fn for_dirty_dir(&self, f: &mut FnMut (&HashId) -> Result<()>)
+    fn for_dirty_dir(&self, f: &mut dyn FnMut (&HashId) -> Result<()>)
                      -> Result<()>;
 
     /// Begins a write transaction private to this session.
@@ -168,7 +168,7 @@ pub trait Storage : Send + Sync {
     ///
     /// The watch function may be called without a hashid if a fatal error
     /// occurred while waiting for changes.
-    fn watch(&mut self, f: Box<FnMut (Option<&HashId>) + Send>) -> Result<()>;
+    fn watch(&mut self, f: Box<dyn FnMut (Option<&HashId>) + Send>) -> Result<()>;
     /// If `watch()` has been called, add the given directory id to the watch
     /// list.
     fn watchdir(&self, dir: &HashId, ver: &HashId, len: u32) -> Result<()>;
