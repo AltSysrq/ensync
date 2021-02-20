@@ -20,7 +20,7 @@ travis-ci = { repository = "AltSysrq/ensync" }
 [dependencies]
 # Can't upgrade to 0.3 because of rust-crypto dependency
 chrono = { version = "0.4.19" }
-flate2 = "1.0.1"
+flate2 = "1.0.20"
 fourleaf = "0.1.1"
 error-chain = "0.11.0"
 lazy_static = "1.0.0"
