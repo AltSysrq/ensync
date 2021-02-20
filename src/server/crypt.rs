@@ -220,7 +220,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::result::Result as StdResult;
 
-use chrono::{DateTime, NaiveDateTime, UTC};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use fourleaf::{self, UnknownFields};
 use fourleaf::adapt::Copied;
 use tiny_keccak;
@@ -259,9 +259,9 @@ fourleaf_retrofit!(struct KdfList : {} {} {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdfEntry {
     /// The time this (logical) entry was created.
-    pub created: DateTime<UTC>,
+    pub created: DateTime<Utc>,
     /// The time this (logical) entry was last updated.
-    pub updated: Option<DateTime<UTC>>,
+    pub updated: Option<DateTime<Utc>>,
     /// The algorithm used.
     ///
     /// This includes the parameters used. Note that these are not parsed;
@@ -282,7 +282,7 @@ pub struct KdfEntry {
 }
 
 #[derive(Clone, Copy)]
-struct SerDt(DateTime<UTC>);
+struct SerDt(DateTime<Utc>);
 fourleaf_retrofit!(struct SerDt : {} {} {
     |context, this|
     [1] secs: i64 = this.0.naive_utc().timestamp(),
@@ -290,7 +290,7 @@ fourleaf_retrofit!(struct SerDt : {} {} {
     { NaiveDateTime::from_timestamp_opt(secs, nsecs)
       .ok_or(fourleaf::de::Error::InvalidValueMsg(
           context.to_string(), "invalid timestamp"))
-      .map(|ndt| SerDt(DateTime::from_utc(ndt, UTC))) }
+      .map(|ndt| SerDt(DateTime::from_utc(ndt, Utc))) }
 });
 
 fourleaf_retrofit!(struct KdfEntry : {} {} {
@@ -468,8 +468,8 @@ fn hixor(a: &HashId, b: &HashId) -> HashId {
 /// The caller must provide the logic for determining the various date-time
 /// fields itself.
 pub fn create_key(passphrase: &[u8], chain: &mut KeyChain,
-                  created: DateTime<UTC>,
-                  updated: Option<DateTime<UTC>>)
+                  created: DateTime<Utc>,
+                  updated: Option<DateTime<Utc>>)
                   -> KdfEntry {
     let mut salt = HashId::default();
     rand(&mut salt);
@@ -830,14 +830,14 @@ pub fn secret_dir_ver(v: &HashId, key: &InternalKey) -> HashId {
 
 #[cfg(test)]
 mod test {
-    use chrono::UTC;
+    use chrono::Utc;
 
     use std::collections::BTreeMap;
 
     use super::*;
 
     fn ck(passphrase: &[u8], keychain: &mut KeyChain) -> KdfEntry {
-        create_key(passphrase, keychain, UTC::now(), None)
+        create_key(passphrase, keychain, Utc::now(), None)
     }
 
     #[test]

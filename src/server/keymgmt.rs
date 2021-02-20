@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, UTC};
+use chrono::{DateTime, Utc};
 use fourleaf;
 
 use crate::defs::HashId;
@@ -147,7 +147,7 @@ pub fn init_keys<S : Storage + ?Sized>(
         kdflist.keys.insert(
             key_name.to_owned(),
             create_key(passphrase, &mut key_chain,
-                       UTC::now(), None));
+                       Utc::now(), None));
 
         put_kdflist(storage, &kdflist, tx, None,
                     key_chain.key(GROUP_ROOT).expect(
@@ -182,7 +182,7 @@ pub fn add_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>
         if kdflist.keys.insert(
             new_name.to_owned(),
             create_key(new_passphrase, &mut key_chain,
-                       UTC::now(), None))
+                       Utc::now(), None))
             .is_some()
         {
             return Err(ErrorKind::KeyNameAlreadyInUse(new_name.to_owned())
@@ -282,7 +282,7 @@ pub fn change_key<S : Storage + ?Sized, P : FnMut () -> Result<Vec<u8>>>(
         kdflist.keys.insert(real_name,
                             create_key(new_passphrase, &mut new_chain,
                                        old_entry.created,
-                                       Some(UTC::now())));
+                                       Some(Utc::now())));
         Ok(())
     })
 }
@@ -458,8 +458,8 @@ where IT::Item : AsRef<str> {
 pub struct KeyInfo {
     pub name: String,
     pub algorithm: String,
-    pub created: DateTime<UTC>,
-    pub updated: Option<DateTime<UTC>>,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
     pub groups: Vec<String>,
 }
 

@@ -18,7 +18,7 @@
 
 use std::io::{self, Write};
 
-use chrono::{DateTime, UTC};
+use chrono::{DateTime, Utc};
 
 use crate::errors::*;
 use crate::server::*;
@@ -48,7 +48,7 @@ pub fn add_key(storage: &dyn Storage, old: &PassphraseConfig,
 }
 
 pub fn list_keys(storage: &dyn Storage) -> Result<()> {
-    fn format_date(date: Option<&DateTime<UTC>>) -> String {
+    fn format_date(date: Option<&DateTime<Utc>>) -> String {
         if let Some(date) = date {
             super::format_date::format_date(date)
         } else {

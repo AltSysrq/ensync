@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2017, Jason Lingle
+// Copyright (c) 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use chrono::{DateTime, NaiveDateTime, UTC};
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 use crate::defs::FileTime;
 
@@ -25,10 +25,10 @@ pub const ZERO:  &'static str = "1970-01-01 00:00Z";
 pub const EMPTY: &'static str = "                 ";
 
 pub fn format_timestamp(mtime: FileTime) -> String {
-    format_date(&DateTime::<UTC>::from_utc(
-        NaiveDateTime::from_timestamp(mtime, 0), UTC))
+    format_date(&DateTime::<Utc>::from_utc(
+        NaiveDateTime::from_timestamp(mtime, 0), Utc))
 }
 
-pub fn format_date(date: &DateTime<UTC>) -> String {
+pub fn format_date(date: &DateTime<Utc>) -> String {
     format!("{}", date.format("%Y-%m-%d %H:%MZ"))
 }
