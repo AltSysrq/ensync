@@ -214,7 +214,6 @@
 //! with surrogate 1-byte entries (see the directory format for more details).
 //! Appending is done by using the last ciphertext block as the IV.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Write};
@@ -224,7 +223,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use fourleaf::{self, UnknownFields};
 use fourleaf::adapt::Copied;
 use tiny_keccak;
-use rand::{Rng, OsRng};
+use rand::{Rng, rngs::OsRng};
 use crate::rust_crypto::{aes, blockmodes, scrypt};
 use crate::rust_crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer,
                           RefReadBuffer, RefWriteBuffer};
@@ -309,13 +308,8 @@ fourleaf_retrofit!(struct KdfEntry : {} {} {
                     unknown: unknown.0 }) }
 });
 
-thread_local! {
-    static RANDOM: RefCell<OsRng> = RefCell::new(
-        OsRng::new().expect("Failed to create OsRng"));
-}
-
 pub fn rand(buf: &mut [u8]) {
-    RANDOM.with(|r| r.borrow_mut().fill_bytes(buf))
+    OsRng.fill(buf)
 }
 
 pub fn rand_hashid() -> HashId {
