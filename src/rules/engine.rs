@@ -995,7 +995,6 @@ switch = "a"
     }
 
     fn engine(text: &str) -> DirEngine {
-        use std::sync::Arc;
         FileEngine::new(Arc::new(parse_rules(text).unwrap())).subdir().build()
     }
 
