@@ -364,9 +364,6 @@ mod test {
     use std::thread;
     use std::time::Duration;
 
-    use flate2;
-    use tempdir::TempDir;
-
     use crate::block_xfer;
     use crate::defs::*;
     use crate::defs::test_helpers::*;
@@ -382,7 +379,7 @@ mod test {
         };
 
         ($replica:ident, $root:ident, $key_chain:ident) => {
-            let dir = TempDir::new("storage").unwrap();
+            let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
             let storage = LocalStorage::open(dir.path()).unwrap();
             let $key_chain = Arc::new(KeyChain::generate_new());
             let $replica = ServerReplica::new(
@@ -1082,7 +1079,7 @@ mod test {
 
     #[test]
     fn clean_dirty_tracking() {
-        let dir = TempDir::new("storage").unwrap();
+        let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         let key_chain = Arc::new(KeyChain::generate_new());
 
         let storage1 = LocalStorage::open(dir.path()).unwrap();
@@ -1146,7 +1143,7 @@ mod test {
 
     #[test]
     fn setting_dir_clean_is_noop_if_concurrently_modified() {
-        let dir = TempDir::new("storage").unwrap();
+        let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         let key_chain = Arc::new(KeyChain::generate_new());
 
         let storage1 = LocalStorage::open(dir.path()).unwrap();
@@ -1182,7 +1179,7 @@ mod test {
 
     #[test]
     fn setting_dir_clean_is_noop_if_concurrently_modified_both() {
-        let dir = TempDir::new("storage").unwrap();
+        let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         let key_chain = Arc::new(KeyChain::generate_new());
 
         let storage1 = LocalStorage::open(dir.path()).unwrap();
@@ -1246,7 +1243,7 @@ mod test {
 
     #[test]
     fn watch_notifies_of_change_by_other_instance() {
-        let dir = TempDir::new("storage").unwrap();
+        let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         let storage_dir = dir.path().join("storage");
 
         let key_chain = Arc::new(KeyChain::generate_new());
@@ -1302,7 +1299,7 @@ mod test {
     fn directory_revert_detected() {
         use std::process::Command;
 
-        let dir = TempDir::new("storage").unwrap();
+        let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         // We need a real SQLite file so that we can close and reopen the
         // server replica without losing state.
         let sqlite_file = dir.path().join("state.sqlite");
@@ -1363,7 +1360,7 @@ mod test {
     fn read_protected_dirs_not_readable_by_non_group_members() {
         use crate::server::keymgmt;
 
-        let dir = TempDir::new("storage").unwrap();
+        let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         // We need a real SQLite file since there will be multiple replica
         // instances here.
         let sqlite_file = dir.path().join("state.sqlite");
@@ -1428,7 +1425,7 @@ mod test {
     fn write_protected_dirs_not_writable_by_non_group_members() {
         use crate::server::keymgmt;
 
-        let dir = TempDir::new("storage").unwrap();
+        let dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         // We need a real SQLite file since there will be multiple replica
         // instances here.
         let sqlite_file = dir.path().join("state.sqlite");

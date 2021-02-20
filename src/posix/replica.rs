@@ -1175,7 +1175,7 @@ mod test {
     use std::thread;
     use libc;
 
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::defs::*;
     use crate::defs::test_helpers::*;
@@ -1189,8 +1189,8 @@ mod test {
     const BLOCK_SZ: usize = 4;
 
     fn new_dirs() -> (TempDir, TempDir) {
-        let root = TempDir::new("posix-root").unwrap();
-        let private = TempDir::new("posix-private").unwrap();
+        let root = tempfile::Builder::new().prefix("posix-root").tempdir().unwrap();
+        let private = tempfile::Builder::new().prefix("posix-private").tempdir().unwrap();
         (root, private)
     }
 

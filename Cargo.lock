@@ -145,7 +145,6 @@ dependencies = [
  "rpassword",
  "rust-crypto",
  "sqlite",
- "tempdir",
  "tempfile",
  "tiny-keccak",
  "toml",
@@ -687,15 +686,6 @@ name = "strsim"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4d15c810519a91cf877e7e36e63fe068815c678181439f2f29e2562147c3694"
-
-[[package]]
-name = "tempdir"
-version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87974a6f5c1dfb344d733055601650059a3363de2a6104819293baff662132d6"
-dependencies = [
- "rand 0.3.20",
-]
 
 [[package]]
 name = "tempfile"

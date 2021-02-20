@@ -485,8 +485,6 @@ pub fn list_keys<S : Storage + ?Sized>(storage: &S) -> Result<Vec<KeyInfo>> {
 // into the scrypt stuff.
 #[cfg(test)]
 mod test {
-    use tempdir::TempDir;
-
     #[allow(unused_imports)] use crate::errors::*;
     use crate::server::local_storage::LocalStorage;
     use super::*;
@@ -497,7 +495,7 @@ mod test {
 
     macro_rules! init {
         ($storage:ident) => {
-            let dir = TempDir::new("keymgmt").unwrap();
+            let dir = tempfile::Builder::new().prefix("keymgmt").tempdir().unwrap();
             let $storage = LocalStorage::open(dir.path()).unwrap();
         }
     }

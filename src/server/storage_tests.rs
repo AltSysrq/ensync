@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017 Jason Lingle
+// Copyright (c) 2016, 2017, 2021 Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -35,14 +35,12 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::thread;
 use std::time::Duration;
 
-use tempdir::TempDir;
-
 #[allow(unused_imports)] use crate::defs::*;
 #[allow(unused_imports)] use crate::server::storage::*;
 
 macro_rules! init {
     ($dir:ident, $storage:ident) => {
-        let $dir = TempDir::new("storage").unwrap();
+        let $dir = tempfile::Builder::new().prefix("storage").tempdir().unwrap();
         let $storage = create_storage($dir.path());
     }
 }
