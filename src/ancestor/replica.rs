@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -99,11 +99,11 @@ impl DirHandle {
                 if let Some(v) = synth.id {
                     Ok(v)
                 } else {
-                    let parent = try!(synth.parent.mk_h(dao));
+                    let parent = synth.parent.mk_h(dao)?;
                     let created = {
                         let fd = FileData::Directory(synth.mode);
                         let file = File(&synth.name, &fd);
-                        try!(dao.create(&file.as_entry(parent)))
+                        dao.create(&file.as_entry(parent))?
                     };
                     if let Some(id) = created {
                         synth.id = Some(id);
@@ -155,7 +155,7 @@ impl AncestorReplica {
     /// ancestor replica.
     pub fn open(path: &str) -> sqlite::Result<Self> {
         Ok(AncestorReplica {
-            dao: Mutex::new(try!(Dao::open(path))),
+            dao: Mutex::new(Dao::open(path)?),
         })
     }
 }
@@ -231,8 +231,8 @@ impl Replica for AncestorReplica {
         let mut invalid_type = None;
         let mut hash_error = false;
 
-        let h = try!(dir.get_h());
-        let exists = try!(self.dao.lock().unwrap().list(true, h, |e| {
+        let h = dir.get_h()?;
+        let exists = self.dao.lock().unwrap().list(true, h, |e| {
             match e.name.as_nstr() {
                 Ok(name) => {
                     if let Some(d) = match e.typ {
@@ -274,7 +274,7 @@ impl Replica for AncestorReplica {
                     nul_error = Some(ne);
                 }
             }
-        }));
+        })?;
 
         if let Some(it) = invalid_type {
             Err(ErrorKind::InvalidAncestorFileType(it).into())
@@ -291,9 +291,9 @@ impl Replica for AncestorReplica {
 
     fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
               -> Result<()> {
-        let h = try!(dir.get_h());
-        match try!(self.dao.lock().unwrap().rename(
-            h, old.as_nbytes(), new.as_nbytes()))
+        let h = dir.get_h()?;
+        match self.dao.lock().unwrap().rename(
+            h, old.as_nbytes(), new.as_nbytes())?
         {
             RenameStatus::Ok => Ok(()),
             RenameStatus::SourceNotFound =>
@@ -304,8 +304,8 @@ impl Replica for AncestorReplica {
     }
 
     fn remove(&self, dir: &mut DirHandle, target: File) -> Result<()> {
-        let h = try!(dir.get_h());
-        match try!(self.dao.lock().unwrap().delete(&target.as_entry(h))) {
+        let h = dir.get_h()?;
+        match self.dao.lock().unwrap().delete(&target.as_entry(h))? {
             DeleteStatus::Ok => Ok(()),
             DeleteStatus::NotFound => Err(ErrorKind::NotFound.into()),
             DeleteStatus::NotMatched =>
@@ -318,8 +318,8 @@ impl Replica for AncestorReplica {
     fn create(&self, dir: &mut DirHandle, source: File,
               xfer: FileData) -> Result<FileData> {
         let dao = self.dao.lock().unwrap();
-        let h = try!(dir.mk_h(&*dao));
-        if try!(dao.create(&File(source.0, &xfer).as_entry(h))).is_some() {
+        let h = dir.mk_h(&*dao)?;
+        if dao.create(&File(source.0, &xfer).as_entry(h))?.is_some() {
             Ok(xfer)
         } else {
             Err(ErrorKind::CreateExists.into())
@@ -334,13 +334,13 @@ impl Replica for AncestorReplica {
             // This gets us an implicit emptyness check and clearing of the
             // condemnation list for free, and breaks any stale handles to the
             // now-non-directory since the new entry will have a different id.
-            try!(self.remove(dir, File(name, old)));
+            self.remove(dir, File(name, old))?;
             return self.create(dir, File(name, new_nonxfer), xfer);
         }
 
-        let h = try!(dir.get_h());
-        match try!(self.dao.lock().unwrap().update(
-            &File(name, old).as_entry(h), &File(name, &xfer).as_entry(h)))
+        let h = dir.get_h()?;
+        match self.dao.lock().unwrap().update(
+            &File(name, old).as_entry(h), &File(name, &xfer).as_entry(h))?
         {
             UpdateStatus::Ok => Ok(xfer),
             UpdateStatus::NotFound =>
@@ -351,9 +351,9 @@ impl Replica for AncestorReplica {
     }
 
     fn chdir(&self, dir: &DirHandle, subdir: &OsStr) -> Result<DirHandle> {
-        let h = try!(dir.get_h());
-        if let Some(f) = try!(self.dao.lock().unwrap().get_by_name(
-            h, subdir.as_nbytes()))
+        let h = dir.get_h()?;
+        if let Some(f) = self.dao.lock().unwrap().get_by_name(
+            h, subdir.as_nbytes())?
         {
             if T_DIRECTORY == f.typ {
                 Ok(DirHandle::Real(RealDir(f.id)))
@@ -377,8 +377,8 @@ impl Replica for AncestorReplica {
             return Ok(());
         }
 
-        let h = try!(dir.get_h());
-        match try!(self.dao.lock().unwrap().delete_raw(h)) {
+        let h = dir.get_h()?;
+        match self.dao.lock().unwrap().delete_raw(h)? {
             DeleteStatus::Ok | DeleteStatus::NotFound => Ok(()),
             DeleteStatus::DirNotEmpty => Err(ErrorKind::DirNotEmpty.into()),
             DeleteStatus::NotMatched =>
@@ -397,13 +397,13 @@ impl NullTransfer for AncestorReplica {
 
 impl Condemn for AncestorReplica {
     fn condemn(&self, dir: &mut DirHandle, name: &OsStr) -> Result<()> {
-        let h = try!(dir.get_h());
-        Ok(try!(self.dao.lock().unwrap().condemn(h, name.as_nbytes())))
+        let h = dir.get_h()?;
+        Ok(self.dao.lock().unwrap().condemn(h, name.as_nbytes())?)
     }
 
     fn uncondemn(&self, dir: &mut DirHandle, name: &OsStr) -> Result<()> {
-        let h = try!(dir.get_h());
-        Ok(try!(self.dao.lock().unwrap().uncondemn(h, name.as_nbytes())))
+        let h = dir.get_h()?;
+        Ok(self.dao.lock().unwrap().uncondemn(h, name.as_nbytes())?)
     }
 }
 

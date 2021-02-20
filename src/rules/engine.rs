@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, 2018, Jason Lingle
+// Copyright (c) 2016, 2017, 2018, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -310,9 +310,9 @@ impl SyncRules {
         // Now actually read all the states in
         for (state_name, state_def) in rules {
             let ix = state_indices[state_name.deref()];
-            try!(this.parse_state(state_def, ix,
+            this.parse_state(state_def, ix,
                                   format!("{}.{}", base_section, state_name),
-                                  &state_indices));
+                                  &state_indices)?;
         }
 
         // Check that all states are reachable
@@ -366,12 +366,12 @@ impl SyncRules {
                 let group_path = format!("{}.{}", path, group_name);
                 if "files" == group_name {
                     self.states[ix].files =
-                        try!(self.parse_group(group_def, group_path,
-                                              state_indices));
+                        self.parse_group(group_def, group_path,
+                                              state_indices)?;
                 } else if "siblings" == group_name {
                     self.states[ix].siblings =
-                        try!(self.parse_group(group_def, group_path,
-                                              state_indices));
+                        self.parse_group(group_def, group_path,
+                                              state_indices)?;
                 } else {
                     return Err(Error::InvalidRulesGroup(
                         path, group_name.to_owned()));
@@ -391,8 +391,8 @@ impl SyncRules {
             let mut rules = Vec::new();
 
             for (r_ix, rule) in def.iter().enumerate() {
-                rules.push(try!(self.parse_rule(
-                    rule, r_ix, &path, state_indices)));
+                rules.push(self.parse_rule(
+                    rule, r_ix, &path, state_indices)?);
             }
 
             Ok(rules)
@@ -413,41 +413,41 @@ impl SyncRules {
                                              e_name.to_owned());
                 if "name" == e_name {
                     rule.conditions.push(Condition::Name(
-                        try!(parse_regex(e_val, loc))));
+                        parse_regex(e_val, loc)?));
                 } else if "path" == e_name {
                     rule.conditions.push(Condition::Path(
-                        try!(parse_regex(e_val, loc))));
+                        parse_regex(e_val, loc)?));
                 } else if "permissions" == e_name {
                     rule.conditions.push(Condition::Permissions(
-                        try!(parse_regex(e_val, loc))));
+                        parse_regex(e_val, loc)?));
                 } else if "type" == e_name {
                     rule.conditions.push(Condition::Type(
-                        try!(parse_regex(e_val, loc))));
+                        parse_regex(e_val, loc)?));
                 } else if "target" == e_name {
                     rule.conditions.push(Condition::Target(
-                        try!(parse_regex(e_val, loc))));
+                        parse_regex(e_val, loc)?));
                 } else if "bigger" == e_name {
                     rule.conditions.push(Condition::Bigger(
-                        try!(parse_file_size(e_val, loc))));
+                        parse_file_size(e_val, loc)?));
                 } else if "smaller" == e_name {
                     rule.conditions.push(Condition::Smaller(
-                        try!(parse_file_size(e_val, loc))));
+                        parse_file_size(e_val, loc)?));
                 } else if "mode" == e_name {
                     rule.actions.push(Action::Mode(
-                        try!(parse_mode(e_val, loc))));
+                        parse_mode(e_val, loc)?));
                 } else if "trust_client_unix_mode" == e_name {
                     rule.actions.push(Action::TrustClientUnixMode(
-                        try!(convert_bool(e_val, loc))));
+                        convert_bool(e_val, loc)?));
                 } else if "include" == e_name {
                     rule.actions.push(Action::Include(
-                        try!(parse_state_ref_list(e_val, loc,
-                                                  &state_indices))));
+                        parse_state_ref_list(e_val, loc,
+                                                  &state_indices)?));
                 } else if "switch" == e_name {
                     rule.actions.push(Action::Switch(
-                        try!(parse_state_ref(e_val, &loc, &state_indices))));
+                        parse_state_ref(e_val, &loc, &state_indices)?));
                 } else if "stop" == e_name {
                     rule.actions.push(Action::Stop(
-                        try!(parse_stop_type(e_val, loc))));
+                        parse_stop_type(e_val, loc)?));
                 } else {
                     return Err(Error::InvalidRuleConfig(
                         loc, e_name.to_owned()));
@@ -481,7 +481,7 @@ fn convert_bool(val: &toml::Value, loc: ErrorLocation)
 fn parse_regex(val: &toml::Value, loc: ErrorLocation)
                -> Result<Regex> {
     if let Some(s) = val.as_str() {
-        Ok(try!(Regex::new(s).context(loc)))
+        Ok(Regex::new(s).context(loc)?)
     } else {
         Err(Error::WrongType(loc, "string"))
     }
@@ -503,7 +503,7 @@ fn parse_file_size(val: &toml::Value, loc: ErrorLocation)
 fn parse_mode(val: &toml::Value, loc: ErrorLocation)
               -> Result<SyncMode> {
     if let Some(s) = val.as_str() {
-        Ok(try!(s.parse().context((loc, s))))
+        Ok(s.parse().context((loc, s))?)
     } else {
         Err(Error::WrongType(loc, "string"))
     }
@@ -514,11 +514,11 @@ fn parse_state_ref_list(val: &toml::Value, loc: ErrorLocation,
                         -> Result<Vec<usize>> {
     match val {
         &toml::Value::String(_) =>
-            Ok(vec![try!(parse_state_ref(val, &loc, state_indices))]),
+            Ok(vec![parse_state_ref(val, &loc, state_indices)?]),
         &toml::Value::Array(ref elts) => {
             let mut accum = Vec::new();
             for elt in elts {
-                accum.push(try!(parse_state_ref(elt, &loc, state_indices)));
+                accum.push(parse_state_ref(elt, &loc, state_indices)?);
             }
             Ok(accum)
         },

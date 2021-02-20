@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -285,8 +285,8 @@ mod test {
     fn to_stream(blocklist: &BlockList, blocks: &HashMap<HashId,Vec<u8>>,
                  secret: &[u8]) -> Result<Vec<u8>> {
         let mut output = Vec::new();
-        try!(blocks_to_stream(&blocklist, &mut output, secret,
-                              |h| Ok(&blocks[h][..])));
+        blocks_to_stream(&blocklist, &mut output, secret,
+                              |h| Ok(&blocks[h][..]))?;
         Ok(output)
     }
 

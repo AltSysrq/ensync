@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -47,10 +47,10 @@ pub fn tx_gen<T, E, F : FnOnce () -> StdResult<T,E>>(
     cxn: &Connection, f: F)
     -> StdResult<T,E>
 where E : From<sqlite::Error> {
-    try!(cxn.execute("BEGIN TRANSACTION"));
+    cxn.execute("BEGIN TRANSACTION")?;
     match f() {
         Ok(v) => {
-            try!(cxn.execute("COMMIT"));
+            cxn.execute("COMMIT")?;
             Ok(v)
         },
         Err(e) => {
@@ -102,14 +102,14 @@ impl<'l> StatementEx for Statement<'l> {
     }
 
     fn run(mut self) -> Result<()> {
-        while State::Done != try!(self.next()) { }
+        while State::Done != self.next()? { }
         Ok(())
     }
 
     fn first<R, F : FnOnce (&Statement) -> Result<R>>
         (mut self, f: F) -> Result<Option<R>>
     {
-        if State::Done == try!(self.next()) {
+        if State::Done == self.next()? {
             Ok(None)
         } else {
             f(&self).map(Some)

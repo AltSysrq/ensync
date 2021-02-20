@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -156,13 +156,13 @@ impl LocalStorage {
             |md| md.permissions()).chain_err(
             || "Failed to read server directory permissions")?;
 
-        try!(create_dir_all(&tmpdir, &permissions));
-        try!(create_dir_all(&objdir, &permissions));
-        try!(create_dir_all(&dirdir, &permissions));
+        create_dir_all(&tmpdir, &permissions)?;
+        create_dir_all(&objdir, &permissions)?;
+        create_dir_all(&dirdir, &permissions)?;
         for i in 0..256 {
             let suffix = format!("{:02x}", i);
-            try!(create_dir_all(&objdir.join(&suffix), &permissions));
-            try!(create_dir_all(&dirdir.join(&suffix), &permissions));
+            create_dir_all(&objdir.join(&suffix), &permissions)?;
+            create_dir_all(&dirdir.join(&suffix), &permissions)?;
         }
 
         // SQLite doesn't respect umask. Making it do so is a C preprocessor
@@ -177,9 +177,9 @@ impl LocalStorage {
             permissions.mode() & NX).open(&sqlite_path)
             .chain_err(|| format!("Error creating '{}'",
                                   sqlite_path.display()))?;
-        let cxn = try!(sqlite::Connection::open(sqlite_path));
+        let cxn = sqlite::Connection::open(sqlite_path)?;
 
-        try!(cxn.execute(include_str!("storage-schema.sql")));
+        cxn.execute(include_str!("storage-schema.sql"))?;
 
         let tmpfile = tempfile::tempfile().chain_err(
             || "Failed to create temporary file")?;
@@ -242,21 +242,21 @@ impl LocalStorage {
                  -> Result<bool> {
         for op in &mut tx.ops { match *op {
             TxOp::Mkdir { ref id, ref ver, ref sver, ref data } => {
-                if try!(db.prepare("SELECT 1 FROM `dirs` WHERE `id` = ?1")
+                if db.prepare("SELECT 1 FROM `dirs` WHERE `id` = ?1")
                         .binding(1, &id[..])
-                        .exists()) {
+                        .exists()? {
                     return Ok(false);
                 }
 
-                try!(db.prepare("INSERT INTO `dirs` (`id`, `ver`, `sver`, `length`)\
+                db.prepare("INSERT INTO `dirs` (`id`, `ver`, `sver`, `length`)\
                                  VALUES (?1, ?2, ?3, ?4)")
                      .binding(1, &id[..])
                      .binding(2, &ver[..])
                      .binding(3, &sver[..])
                      .binding(4, data.len() as i64)
-                     .run());
-                let mut tmpfile = try!(self.named_temp_file());
-                try!(tmpfile.write_all(data));
+                     .run()?;
+                let mut tmpfile = self.named_temp_file()?;
+                tmpfile.write_all(data)?;
 
                 match tmpfile.persist(self.dir_path(&id, &ver)) {
                     Ok(persisted) => { persisted.sync_all()?; },
@@ -281,23 +281,23 @@ impl LocalStorage {
                 // Run the update in SQLite first to ensure we have a write
                 // lock on the database, thus preventing two processes from
                 // appending to the same offset simultaneously.
-                try!(db.prepare("UPDATE `dirs` SET `length` = ?2 \
+                db.prepare("UPDATE `dirs` SET `length` = ?2 \
                                  WHERE `id` = ?1")
                      .binding(1, &id[..])
                      .binding(2, (old_len as usize + append.len()) as i64)
-                     .run());
+                     .run()?;
 
-                let mut file = try!(
+                let mut file =
                     fs::OpenOptions::new()
                         .write(true)
                         .create(false)
-                        .open(self.dir_path(&id, &ver)));
-                try!(file.seek(io::SeekFrom::Start(old_len as u64)));
+                        .open(self.dir_path(&id, &ver))?;
+                file.seek(io::SeekFrom::Start(old_len as u64))?;
                 // This will have effect even if the transaction rolls
                 // back, but the length in SQLite will still reflect the
                 // correct length.
-                try!(file.write_all(append));
-                try!(file.sync_data());
+                file.write_all(append)?;
+                file.sync_data()?;
             },
 
             TxOp::Rmdir { ref id, ref mut sver, old_len } => {
@@ -307,10 +307,10 @@ impl LocalStorage {
                     None => return Ok(false),
                 };
 
-                try!(db.prepare("DELETE FROM `dirs` \
+                db.prepare("DELETE FROM `dirs` \
                                  WHERE `id` = ?1")
                      .binding(1, &id[..])
-                     .run());
+                     .run()?;
                 // We have to wait with removing the actual file until
                 // postexecute so that readers can see the fact that the
                 // entry has been deleted and because we wouldn't be able
@@ -325,7 +325,7 @@ impl LocalStorage {
                 // Write tho the database first so that we get a lock on
                 // the table. This will block cleaners from noticing the
                 // entry has no refs and trying to delete it.
-                try!(self.update_ref(db, id, linkid));
+                self.update_ref(db, id, linkid)?;
 
                 // Make sure the object actually exists.
                 //
@@ -341,15 +341,15 @@ impl LocalStorage {
                 // here if we lost a race to a cleaner.
                 let objpath = self.obj_path(&id);
                 if fs::symlink_metadata(&objpath).is_err() {
-                    let mut tmpfile = try!(self.named_temp_file());
-                    try!(io::copy(handle, &mut tmpfile));
-                    let persisted = try!(tmpfile.persist(&objpath));
-                    try!(persisted.sync_all());
+                    let mut tmpfile = self.named_temp_file()?;
+                    io::copy(handle, &mut tmpfile)?;
+                    let persisted = tmpfile.persist(&objpath)?;
+                    persisted.sync_all()?;
                 }
             },
 
             TxOp::UnlinkObj { ref id, ref linkid } => {
-                try!(self.update_ref(db, id, linkid));
+                self.update_ref(db, id, linkid)?;
                 // We cannot delete the backing file now even if the ref
                 // vector becomes zero, because there'd be no way to undo
                 // it if the transaction rolls back.
@@ -367,10 +367,10 @@ impl LocalStorage {
 
     fn update_ref(&self, db: &sqlite::Connection, id: &HashId, linkid: &HashId)
                   -> Result<()> {
-        let vold_refs: Option<Vec<u8>> = try!(
+        let vold_refs: Option<Vec<u8>> =
             db.prepare("SELECT `refs` FROM `objs` WHERE `id` = ?1")
                 .binding(1, &id[..])
-                .first(|s| s.read(0)));
+                .first(|s| s.read(0))?;
         if let Some(vold_refs) = vold_refs {
             let mut refs = UNKNOWN_HASH;
             if vold_refs.len() != refs.len() {
@@ -382,17 +382,17 @@ impl LocalStorage {
                 *accum ^= new;
             }
 
-            try!(db.prepare("UPDATE `objs` SET `refs` = ?2 \
+            db.prepare("UPDATE `objs` SET `refs` = ?2 \
                              WHERE `id` = ?1")
                  .binding(1, &id[..])
                  .binding(2, &refs[..])
-                 .run());
+                 .run()?;
         } else {
-            try!(db.prepare("INSERT INTO `objs` (`id`, `refs`) \
+            db.prepare("INSERT INTO `objs` (`id`, `refs`) \
                              VALUES (?1, ?2)")
                  .binding(1, &id[..])
                  .binding(2, &linkid[..])
-                 .run());
+                 .run()?;
         }
         Ok(())
     }
@@ -448,12 +448,12 @@ impl LocalStorage {
             // Make sure we have a write lock.
             db.prepare("DELETE FROM `lock`").run()?;
 
-            let mut stmt = try!(db.prepare(
+            let mut stmt = db.prepare(
                 "SELECT `id` FROM `objs` WHERE `refs` = ?1")
-                .binding(1, &UNKNOWN_HASH[..]));
+                .binding(1, &UNKNOWN_HASH[..])?;
 
-            while sqlite::State::Done != try!(stmt.next()) {
-                let vid: Vec<u8> = try!(stmt.read(0));
+            while sqlite::State::Done != stmt.next()? {
+                let vid: Vec<u8> = stmt.read(0)?;
                 let mut id = UNKNOWN_HASH;
                 if id.len() != vid.len() {
                     return Err(ErrorKind::InvalidObjectId.into());
@@ -461,9 +461,9 @@ impl LocalStorage {
                 id.copy_from_slice(&vid);
 
                 // Delete the entry first to be sure we have the SQLite lock
-                try!(db.prepare("DELETE FROM `objs` WHERE `id` = ?1")
+                db.prepare("DELETE FROM `objs` WHERE `id` = ?1")
                      .binding(1, &id[..])
-                     .run());
+                     .run()?;
 
                 let _ = fs::remove_file(self.obj_path(&id));
             }
@@ -490,10 +490,10 @@ impl Storage for LocalStorage {
         for _ in 0..256 {
             let r: Option<(Vec<u8>, i64)> = {
                 let db = self.db.lock().unwrap();
-                let r = try!(db.prepare(
+                let r = db.prepare(
                     "SELECT `ver`, `length` FROM `dirs` WHERE `id` = ?1")
                      .binding(1, &id[..])
-                     .first(|s| Ok((try!(s.read(0)), try!(s.read(1))))));
+                     .first(|s| Ok((s.read(0)?, s.read(1)?)))?;
                 r
             };
 
@@ -507,7 +507,7 @@ impl Storage for LocalStorage {
                 match fs::File::open(self.dir_path(id, &v)) {
                     Ok(mut file) => {
                         let mut data = vec![0u8; iv as usize];
-                        try!(file.read_exact(&mut data[..]));
+                        file.read_exact(&mut data[..])?;
                         return Ok(Some((v, data)));
                     },
                     // If the file was not found, we probably raced with
@@ -532,7 +532,7 @@ impl Storage for LocalStorage {
         match fs::File::open(self.obj_path(id)) {
             Ok(mut file) => {
                 let mut v = Vec::new();
-                try!(file.read_to_end(&mut v));
+                file.read_to_end(&mut v)?;
                 Ok(Some(v))
             },
             Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() =>
@@ -607,9 +607,9 @@ impl Storage for LocalStorage {
             }
         }
 
-        let mut txdat = try!(
+        let mut txdat =
             self.txns.lock().unwrap().remove(&tx)
-                .ok_or("No such transaction"));
+                .ok_or("No such transaction")?;
 
         {
             let db = self.db.lock().unwrap();
@@ -676,11 +676,11 @@ impl Storage for LocalStorage {
     fn linkobj(&self, tx: Tx, id: &HashId, linkid: &HashId) -> Result<bool> {
         match fs::File::open(self.obj_path(id)) {
             Ok(file) => {
-                try!(self.tx_add(tx, TxOp::LinkObj {
+                self.tx_add(tx, TxOp::LinkObj {
                     id: *id,
                     linkid: *linkid,
                     handle: file,
-                }));
+                })?;
                 Ok(true)
             },
             Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() =>
@@ -703,11 +703,11 @@ impl Storage for LocalStorage {
         // There is a possibility of a concurrent process noticing the file
         // with no links and deleting it. This is fine, as we hold onto a
         // handle to the file and can reconstitute it later as with `LinkObj`.
-        let mut tmpfile = try!(self.named_temp_file());
-        try!(tmpfile.write_all(data));
+        let mut tmpfile = self.named_temp_file()?;
+        tmpfile.write_all(data)?;
         {
             let db = self.db.lock().unwrap();
-            try!(sql::tx(&db, || {
+            sql::tx(&db, || {
                 // No need to invoke the `lock` table since we only do an
                 // insert here.
                 db.prepare("INSERT OR IGNORE INTO `objs` (\
@@ -715,12 +715,12 @@ impl Storage for LocalStorage {
                     .binding(1, &id[..])
                     .binding(2, &UNKNOWN_HASH[..])
                     .run()
-            }));
+            })?;
         }
 
-        let mut persisted = try!(tmpfile.persist(self.obj_path(id)));
-        try!(persisted.sync_all());
-        try!(persisted.seek(io::SeekFrom::Start(0)));
+        let mut persisted = tmpfile.persist(self.obj_path(id))?;
+        persisted.sync_all()?;
+        persisted.seek(io::SeekFrom::Start(0))?;
 
         self.tx_add(tx, TxOp::LinkObj {
             id: *id,

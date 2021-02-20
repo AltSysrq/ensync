@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -91,13 +91,13 @@ pub enum DeleteStatus {
 impl FileEntry<'static> {
     fn read(stmt: &Statement) -> Result<Self> {
         Ok(FileEntry {
-            id: try!(stmt.read(0)),
-            parent: try!(stmt.read(1)),
-            name: try!(stmt.read::<Vec<u8>>(2)).into(),
-            typ: try!(stmt.read(3)),
-            mode: try!(stmt.read(4)),
-            mtime: try!(stmt.read(5)),
-            content: try!(stmt.read::<Vec<u8>>(6)).into(),
+            id: stmt.read(0)?,
+            parent: stmt.read(1)?,
+            name: stmt.read::<Vec<u8>>(2)?.into(),
+            typ: stmt.read(3)?,
+            mode: stmt.read(4)?,
+            mtime: stmt.read(5)?,
+            content: stmt.read::<Vec<u8>>(6)?.into(),
         })
     }
 }
@@ -135,33 +135,33 @@ impl Dao {
     {
         tx(&self.0, || {
             if purge_condemned {
-                try!(self.0.prepare(
+                self.0.prepare(
                     "DELETE FROM `file` \
                      WHERE `parent` = ?1 \
                      AND   `name` IN ( \
                        SELECT `name` FROM `condemnation` \
                        WHERE `parent` = ?1)")
                      .binding(1, dir)
-                     .run());
+                     .run()?;
 
-                try!(self.0.prepare(
+                self.0.prepare(
                     "DELETE FROM `condemnation` \
                      WHERE `dir` = ?1")
                      .binding(1, dir)
-                     .run());
+                     .run()?;
             }
 
-            let mut stmt = try!(self.0.prepare(
+            let mut stmt = self.0.prepare(
                 "SELECT `id`, `parent`, `name`, `type`, `mode`, \
                         `mtime`, `content` \
                  FROM `file` \
                  WHERE `parent` = ?1 \
                  -- Exclude the root directory from seeing itself \n\
                  AND `id` != 0"
-            ).binding(1, dir));
+            ).binding(1, dir)?;
 
-            while State::Done != try!(stmt.next()) {
-                f(try!(FileEntry::read(&stmt)));
+            while State::Done != stmt.next()? {
+                f(FileEntry::read(&stmt)?);
             }
 
             self.0.prepare(
@@ -232,16 +232,16 @@ impl Dao {
     pub fn rename(&self, parent: i64, old: &[u8], new: &[u8])
                   -> Result<RenameStatus> {
         tx(&self.0, || {
-            if !try!(self.exists(parent, old)) {
+            if !self.exists(parent, old)? {
                 Ok(RenameStatus::SourceNotFound)
-            } else if try!(self.exists(parent, new)) {
+            } else if self.exists(parent, new)? {
                 Ok(RenameStatus::DestExists)
             } else {
-                try!(self.0.prepare(
+                self.0.prepare(
                     "UPDATE `file` SET `name` = ?3 \
                      WHERE `parent` = ?1 AND `name` = ?2")
                      .binding(1, parent).binding(2, old).binding(3, new)
-                     .run());
+                     .run()?;
                 Ok(RenameStatus::Ok)
             }
         })
@@ -253,18 +253,18 @@ impl Dao {
     /// and parent already exists, returns None.
     pub fn create(&self, e: &FileEntry) -> Result<Option<i64>> {
         tx(&self.0, || {
-            if try!(self.exists(e.parent, &*e.name)) {
+            if self.exists(e.parent, &*e.name)? {
                 Ok(None)
             } else {
-                try!(self.0.prepare(
+                self.0.prepare(
                     "INSERT INTO `file` ( \
                        `parent`, `name`, `type`, `mode`, `mtime`, `content` \
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
                      .binding(1, e.parent).binding(2, &*e.name)
                      .binding(3, e.typ).binding(4, e.mode)
                      .binding(5, e.mtime)
-                     .binding(6, &*e.content).run());
-                Ok(try!(self.get_id_of(e.parent, &*e.name)))
+                     .binding(6, &*e.content).run()?;
+                Ok(self.get_id_of(e.parent, &*e.name)?)
             }
         })
     }
@@ -276,8 +276,8 @@ impl Dao {
     pub fn update(&self, old: &FileEntry, new: &FileEntry)
                   -> Result<UpdateStatus> {
         tx(&self.0, || {
-            if let Some(id) = try!(self.get_matching(old)) {
-                try!(self.0.prepare(
+            if let Some(id) = self.get_matching(old)? {
+                self.0.prepare(
                     "UPDATE `file` \
                      SET `type` = ?2, `mode` = ?3, \
                          `mtime` = ?4, `content` = ?5 \
@@ -285,9 +285,9 @@ impl Dao {
                      .binding(1, id).binding(2, new.typ)
                      .binding(3, new.mode).binding(4, new.mtime)
                      .binding(5, &*new.content)
-                     .run());
+                     .run()?;
                 Ok(UpdateStatus::Ok)
-            } else if try!(self.exists(old.parent, &*old.name)) {
+            } else if self.exists(old.parent, &*old.name)? {
                 Ok(UpdateStatus::NotMatched)
             } else {
                 Ok(UpdateStatus::NotFound)
@@ -303,9 +303,9 @@ impl Dao {
     /// The surrogate id on `e` is not used.
     pub fn delete(&self, e: &FileEntry) -> Result<DeleteStatus> {
         tx(&self.0, || {
-            if let Some(id) = try!(self.get_matching(e)) {
+            if let Some(id) = self.get_matching(e)? {
                 self.delete_raw_impl(id)
-            } else if try!(self.exists(e.parent, &*e.name)) {
+            } else if self.exists(e.parent, &*e.name)? {
                 Ok(DeleteStatus::NotMatched)
             } else {
                 Ok(DeleteStatus::NotFound)
@@ -325,11 +325,11 @@ impl Dao {
     }
 
     fn delete_raw_impl(&self, id: i64) -> Result<DeleteStatus> {
-        if try!(self.has_children(id)) {
+        if self.has_children(id)? {
             Ok(DeleteStatus::DirNotEmpty)
         } else {
-            try!(self.0.prepare("DELETE FROM `file` WHERE `id` = ?1")
-                 .binding(1, id).run());
+            self.0.prepare("DELETE FROM `file` WHERE `id` = ?1")
+                 .binding(1, id).run()?;
             Ok(DeleteStatus::Ok)
         }
     }

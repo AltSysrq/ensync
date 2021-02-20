@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -142,7 +142,7 @@ fn process_file(
 /// Reads a directory out of a replica and builds the initial name->data map.
 ///
 /// If an error occurs, it is logged and returned (so that the caller can use
-/// `try!`).
+/// `?`).
 fn read_dir_contents<R : Replica, RB : DirRulesBuilder, LOG : Logger>(
     r: &R, dir: &mut R::Directory, dir_path: &OsStr,
     mut rb: Option<&mut RB>, log: &LOG, side : log::ReplicaSide)
@@ -174,7 +174,7 @@ def_context_impl! {
 /// spawned).
 ///
 /// This may return Err if it was unable to set the context up at all. Any
-/// errors have already been logged; this is simply an artefact of using `try!`
+/// errors have already been logged; this is simply an artefact of using `?`
 /// to simplify control flow.
 fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
     &self,
@@ -188,16 +188,16 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
 
     let dir_path = cli_dir.full_path().to_owned();
 
-    let cli_files = try!(read_dir_contents(
+    let cli_files = read_dir_contents(
         &self.cli, &mut cli_dir, &dir_path, Some(&mut rules_builder),
-        &self.log, log::ReplicaSide::Client));
-    let anc_files = try!(read_dir_contents(
+        &self.log, log::ReplicaSide::Client)?;
+    let anc_files = read_dir_contents(
         &self.anc, &mut anc_dir, &dir_path,
         None::<&mut <RULES as DirRules>::Builder>, &self.log,
-        log::ReplicaSide::Ancestor));
-    let srv_files = try!(read_dir_contents(
+        log::ReplicaSide::Ancestor)?;
+    let srv_files = read_dir_contents(
         &self.srv, &mut srv_dir, &dir_path, Some(&mut rules_builder),
-        &self.log, log::ReplicaSide::Server));
+        &self.log, log::ReplicaSide::Server)?;
     let rules = rules_builder.build();
 
     let mut dir = DirContext {
@@ -505,9 +505,9 @@ pub fn start_root(&self) -> Result<DirStateRef> {
         on_complete: AtomicUsize::new(0),
         quiet: true,
     });
-    self.recurse_and_then(try!(self.cli.root()),
-                          try!(self.anc.root()),
-                          try!(self.srv.root()),
+    self.recurse_and_then(self.cli.root()?,
+                          self.anc.root()?,
+                          self.srv.root()?,
                           self.root_rules.clone(), root_state.clone(),
                           |this, dir, _| this.mark_both_clean(&dir));
     Ok(root_state)

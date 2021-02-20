@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -47,12 +47,12 @@ fn replace_ancestor<A : Replica + NullTransfer>(
         replica: &A, dir: &mut A::Directory)
         -> Result<()>
     {
-        for (name, fd) in try!(replica.list(dir)) {
+        for (name, fd) in replica.list(dir)? {
             if let FileData::Directory(_) = fd {
-                try!(remove_recursively(
-                    replica, &mut try!(replica.chdir(dir, &name))));
+                remove_recursively(
+                    replica, &mut replica.chdir(dir, &name)?)?;
             }
-            try!(replica.remove(dir, File(&name, &fd)));
+            replica.remove(dir, File(&name, &fd))?;
         }
         Ok(())
     }
@@ -64,26 +64,26 @@ fn replace_ancestor<A : Replica + NullTransfer>(
 
     // If old is a directory and new isn't, recursively remove old
     if is_dir(old) && !is_dir(new) {
-        try!(remove_recursively(
-            replica, &mut try!(replica.chdir(&*in_dir, name))));
+        remove_recursively(
+            replica, &mut replica.chdir(&*in_dir, name)?)?;
     }
 
     match (old, new) {
         (None, None) => (),
         (Some(oldfd), None) => {
-            try!(replica.remove(in_dir, File(name, oldfd)));
+            replica.remove(in_dir, File(name, oldfd))?;
             files.remove(name).expect(
                 "Deleted ancestor not in table?");
         },
         (None, Some(newfd)) => {
-            try!(replica.create(in_dir, File(name, newfd),
-                                A::null_transfer(newfd)));
+            replica.create(in_dir, File(name, newfd),
+                                A::null_transfer(newfd))?;
             files.insert(name.to_owned(), newfd.clone())
                 .map(|_| panic!("Inserted ancestor already in table?"));
         },
         (Some(oldfd), Some(newfd)) => {
-            try!(replica.update(in_dir, name, oldfd, newfd,
-                                A::null_transfer(newfd)));
+            replica.update(in_dir, name, oldfd, newfd,
+                                A::null_transfer(newfd))?;
             files.insert(name.to_owned(), newfd.clone())
                 .expect("Updated ancestor not in table?");
         },

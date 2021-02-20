@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -310,13 +310,13 @@ impl Replica for MemoryReplica {
 
     fn root(&self) -> Result<DirHandle> {
         let mut d = self.data();
-        try!(d.test_op(&Op::ReadRoot));
+        d.test_op(&Op::ReadRoot)?;
         Ok(DirHandle { path: OsString::new(), synthetics: vec![] })
     }
 
     fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
         let mut d = self.data();
-        try!(d.test_op(&Op::List(dir.path.clone())));
+        d.test_op(&Op::List(dir.path.clone()))?;
 
         let mut prefices_to_remove = vec![];
 
@@ -372,7 +372,7 @@ impl Replica for MemoryReplica {
     fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
               -> Result<()> {
         let mut d = self.data();
-        try!(d.test_op(&Op::Rename(dir.path.clone(), old.to_owned())));
+        d.test_op(&Op::Rename(dir.path.clone(), old.to_owned()))?;
         let is_dir = if let Some(contents) = d.dirs.get_mut(&dir.path) {
             if contents.contents.contains_key(new) {
                 simple_error()
@@ -390,7 +390,7 @@ impl Replica for MemoryReplica {
             simple_error()
         };
 
-        if try!(is_dir) {
+        if is_dir? {
             let contents = d.dirs.remove(&catpath(&dir.path, old)).unwrap();
             d.dirs.insert(catpath(&dir.path, new), contents);
 
@@ -420,7 +420,7 @@ impl Replica for MemoryReplica {
 
     fn remove(&self, dir: &mut DirHandle, target: File) -> Result<()> {
         let mut d = self.data();
-        try!(d.test_op(&Op::Remove(dir.path.clone(), target.0.to_owned())));
+        d.test_op(&Op::Remove(dir.path.clone(), target.0.to_owned()))?;
         let dir_with_mode = if let Some(contents) = d.dirs.get_mut(&dir.path) {
             if contents.contents.get(target.0).map_or(
                 false, |fd| target.1.matches(&fd.into()))
@@ -437,7 +437,7 @@ impl Replica for MemoryReplica {
             simple_error()
         };
 
-        if let Some(mode) = try!(dir_with_mode) {
+        if let Some(mode) = dir_with_mode? {
             let dt = d.dirs.remove(&catpath(&dir.path, target.0)).unwrap();
             if !dt.contents.is_empty() {
                 // Can't remove it after all
@@ -456,14 +456,14 @@ impl Replica for MemoryReplica {
         use std::collections::hash_map::Entry::*;
 
         let mut d = self.data();
-        try!(d.test_op(&Op::Create(dir.path.clone(), source.0.to_owned())));
+        d.test_op(&Op::Create(dir.path.clone(), source.0.to_owned()))?;
 
         for &(ref synth_parent, ref synth_name, synth_mode)
         in &dir.synthetics {
             let full = catpath(synth_parent, synth_name);
             if !d.dirs.contains_key(&full) {
                 // Doesn't exist, try to create
-                try!(d.test_op(&Op::CreateSynthetic(synth_name.clone())));
+                d.test_op(&Op::CreateSynthetic(synth_name.clone()))?;
                 // Make sure the parent exists and there's nothing else there
                 // with that name.
                 if let Some(parent) = d.dirs.get_mut(synth_parent) {
@@ -486,8 +486,8 @@ impl Replica for MemoryReplica {
         let res = if let Some(contents) = d.dirs.get_mut(&dir.path) {
             match contents.contents.entry(source.0.to_owned()) {
                 Occupied(_) => simple_error(),
-                Vacant(entry) => Ok(entry.insert(try!(Entry::from_file_data(
-                    &source.1, xfer))).into()),
+                Vacant(entry) => Ok(entry.insert(Entry::from_file_data(
+                    &source.1, xfer)?).into()),
             }
         } else {
             simple_error()
@@ -505,7 +505,7 @@ impl Replica for MemoryReplica {
               xfer: Option<HashId>) -> Result<FileData> {
         {
             let mut d = self.data();
-            try!(d.test_op(&Op::Update(dir.path.clone(), name.to_owned())));
+            d.test_op(&Op::Update(dir.path.clone(), name.to_owned()))?;
 
             if let Some(contents) = d.dirs.get_mut(&dir.path) {
                 if let Some(entry) = contents.contents.get_mut(name) {
@@ -519,7 +519,7 @@ impl Replica for MemoryReplica {
                             (&Entry::Special, &FileData::Special) => {
                                 // No type change, we can atomically update the
                                 // attributes.
-                                *entry = try!(Entry::from_file_data(new, xfer));
+                                *entry = Entry::from_file_data(new, xfer)?;
                                 return Ok(entry.into());
                             },
                             // If the types change, we need to do
@@ -540,17 +540,17 @@ impl Replica for MemoryReplica {
 
         // Special case for old=directory (see `Replica::update()`).
         if let &FileData::Directory(mode) = old {
-            try!(self.remove(dir, File(name,
-                                       &FileData::Directory(mode))));
+            self.remove(dir, File(name,
+                                       &FileData::Directory(mode)))?;
             return self.create(dir, File(name, new), xfer);
         }
 
         let mut tmpname = name.to_owned();
         // Blindly assume this doesn't exist. Good enough for tests.
         tmpname.push("!testtmp");
-        try!(self.rename(dir, name, &tmpname));
-        let res = try!(self.create(dir, File(name, new), xfer));
-        try!(self.remove(dir, File(&tmpname, old)));
+        self.rename(dir, name, &tmpname)?;
+        let res = self.create(dir, File(name, new), xfer)?;
+        self.remove(dir, File(&tmpname, old))?;
         Ok(res)
     }
 
@@ -558,7 +558,7 @@ impl Replica for MemoryReplica {
              -> Result<DirHandle> {
         let mut d = self.data();
         let dirname = catpath(&dir.path, subdir);
-        try!(d.test_op(&Op::Chdir(dirname.clone())));
+        d.test_op(&Op::Chdir(dirname.clone()))?;
 
         if d.dirs.contains_key(&dirname) {
             Ok(DirHandle {
@@ -600,7 +600,7 @@ impl Replica for MemoryReplica {
             }
         }
 
-        let parent_data = try!(self.list(&mut parent))
+        let parent_data = self.list(&mut parent)?
             .into_iter().filter(|&(ref n, _)| n == &name)
             .map(|(_, d)| d).next().unwrap();
         self.remove(&mut parent, File(&name, &parent_data))
@@ -609,7 +609,7 @@ impl Replica for MemoryReplica {
     fn transfer(&self, dir: &DirHandle, file: File)
                 -> Result<Option<HashId>> {
         let mut d = self.data();
-        try!(d.test_op(&Op::Transfer(dir.path.clone(), file.0.to_owned())));
+        d.test_op(&Op::Transfer(dir.path.clone(), file.0.to_owned()))?;
 
         if let Some(contents) = d.dirs.get(&dir.path) {
             if let Some(&Entry::Regular(Regular { content, .. })) =

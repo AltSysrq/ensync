@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -592,7 +592,7 @@ fn crypt_stream<W : Write, R : Read, C : Cryptor>(
     while !eof {
         let mut nread = 0;
         while !eof && nread < src_buf.len() {
-            let n = try!(src.read(&mut src_buf[nread..]));
+            let n = src.read(&mut src_buf[nread..])?;
             eof |= 0 == n;
             nread += n;
         }
@@ -620,7 +620,7 @@ fn crypt_stream<W : Write, R : Read, C : Cryptor>(
             dstrbuf.position()
         };
 
-        try!(dst.write_all(&dst_buf[..dst_len]));
+        dst.write_all(&dst_buf[..dst_len])?;
     }
 
     Ok(())
@@ -645,7 +645,7 @@ fn write_cbc_prefix<W : Write>(dst: W, master: &[u8])
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, master, &[0u8;BLKSZ],
         blockmodes::NoPadding));
-    try!(crypt_stream(dst, &mut&key_and_iv[..], &mut cryptor, true));
+    crypt_stream(dst, &mut&key_and_iv[..], &mut cryptor, true)?;
 
     Ok(split_key_and_iv(&key_and_iv))
 }
@@ -654,14 +654,14 @@ fn write_cbc_prefix<W : Write>(dst: W, master: &[u8])
 fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
                              -> Result<([u8;BLKSZ],[u8;BLKSZ])> {
     let mut cipher_head = [0u8;32];
-    try!(src.read_exact(&mut cipher_head));
+    src.read_exact(&mut cipher_head)?;
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
         aes::KeySize::KeySize128, master, &[0u8;BLKSZ],
         blockmodes::NoPadding));
 
     let mut key_and_iv = [0u8;32];
-    try!(crypt_stream(&mut&mut key_and_iv[..], &mut&cipher_head[..],
-                      &mut cryptor, false));
+    crypt_stream(&mut&mut key_and_iv[..], &mut&cipher_head[..],
+                      &mut cryptor, false)?;
 
     Ok(split_key_and_iv(&key_and_iv))
 }
@@ -677,7 +677,7 @@ pub fn encrypt_obj<W : Write, R : Read>(dst: W, src: R, id: &HashId)
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
-    try!(crypt_stream(dst, src, &mut cryptor, true));
+    crypt_stream(dst, src, &mut cryptor, true)?;
     Ok(())
 }
 
@@ -691,7 +691,7 @@ pub fn decrypt_obj<W : Write, R : Read>(dst: W, src: R, id: &HashId)
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
-    try!(crypt_stream(dst, src, &mut cryptor, false));
+    crypt_stream(dst, src, &mut cryptor, false)?;
     Ok(())
 }
 
@@ -711,11 +711,11 @@ pub fn xform_obj_id(id: &HashId) -> HashId {
 pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
                                               key: &InternalKey)
                                               -> Result<[u8;BLKSZ]> {
-    let (key, iv) = try!(write_cbc_prefix(&mut dst, key.dir_key()));
+    let (key, iv) = write_cbc_prefix(&mut dst, key.dir_key())?;
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
-    try!(crypt_stream(dst, src, &mut cryptor, true));
+    crypt_stream(dst, src, &mut cryptor, true)?;
     Ok(key)
 }
 
@@ -728,7 +728,7 @@ pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
                                                -> Result<()> {
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
         aes::KeySize::KeySize128, key, iv, blockmodes::NoPadding));
-    try!(crypt_stream(dst, src, &mut cryptor, true));
+    crypt_stream(dst, src, &mut cryptor, true)?;
     Ok(())
 }
 
@@ -737,11 +737,11 @@ pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
 pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
                                               key: &InternalKey)
                                               -> Result<[u8;BLKSZ]> {
-    let (key, iv) = try!(read_cbc_prefix(&mut src, key.dir_key()));
+    let (key, iv) = read_cbc_prefix(&mut src, key.dir_key())?;
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
         aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
-    try!(crypt_stream(dst, src, &mut cryptor, false));
+    crypt_stream(dst, src, &mut cryptor, false)?;
     Ok(key)
 }
 

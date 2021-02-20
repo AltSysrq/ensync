@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, 2018, Jason Lingle
+// Copyright (c) 2016, 2017, 2018, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -215,14 +215,14 @@ impl FromStr for SyncMode {
 
         Ok(SyncMode {
             inbound: HalfSyncMode {
-                create: try!(conv('c', 'C', chars[0], 0)),
-                update: try!(conv('u', 'U', chars[1], 1)),
-                delete: try!(conv('d', 'D', chars[2], 2)),
+                create: conv('c', 'C', chars[0], 0)?,
+                update: conv('u', 'U', chars[1], 1)?,
+                delete: conv('d', 'D', chars[2], 2)?,
             },
             outbound: HalfSyncMode {
-                create: try!(conv('c', 'C', chars[4], 4)),
-                update: try!(conv('u', 'U', chars[5], 5)),
-                delete: try!(conv('d', 'D', chars[6], 6)),
+                create: conv('c', 'C', chars[4], 4)?,
+                update: conv('u', 'U', chars[5], 5)?,
+                delete: conv('d', 'D', chars[6], 6)?,
             },
         })
     }

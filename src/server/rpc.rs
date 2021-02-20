@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -486,7 +486,7 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
                 } else {
                     false
                 };
-                try!(write_response(&mut*sout.lock().unwrap(), response));
+                write_response(&mut*sout.lock().unwrap(), response)?;
 
                 if fatal {
                     return Ok(());

@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -61,8 +61,8 @@ impl<'a> Iterator for CleanDirs<'a> {
 
 impl<'a> CleanDirs<'a> {
     fn read_row(&mut self) -> Result<(OsString,HashId)> {
-        let path = try!(try!(self.0.read::<Vec<u8>>(0)).as_nstr()).to_owned();
-        let hash = try!(to_hashid(try!(self.0.read::<Vec<u8>>(1))));
+        let path = self.0.read::<Vec<u8>>(0)?.as_nstr()?.to_owned();
+        let hash = to_hashid(self.0.read::<Vec<u8>>(1)?)?;
         Ok((path, hash))
     }
 }
@@ -94,8 +94,8 @@ impl Dao {
     /// Until this iterator is dropped, one should not call any methods that
     /// operate on the `clean_dirs` table other than `set_dir_dirty`.
     pub fn iter_clean_dirs(&self) -> Result<CleanDirs> {
-        let stmt = try!(self.0.prepare(
-            "SELECT `path`, `hash` FROM `clean_dirs`"));
+        let stmt = self.0.prepare(
+            "SELECT `path`, `hash` FROM `clean_dirs`")?;
 
         Ok(CleanDirs(stmt))
     }
@@ -110,10 +110,10 @@ impl Dao {
         debug_assert!(b'/' == path[0]);
         debug_assert!(b'/' == path[path.len() - 1]);
 
-        try!(self.0.prepare(
+        self.0.prepare(
             "INSERT OR REPLACE INTO `clean_dirs` (`path`, `hash`) \
              VALUES (?1, ?2)")
-             .binding(1, path).binding(2, &hash[..]).run());
+             .binding(1, path).binding(2, &hash[..]).run()?;
         Ok(())
     }
 
@@ -134,8 +134,8 @@ impl Dao {
             debug_assert!(b'/' == path[0]);
             debug_assert!(b'/' == path[path.len() - 1]);
 
-            try!(self.0.prepare("DELETE FROM `clean_dirs` WHERE `path` = ?1")
-                 .binding(1, path).run());
+            self.0.prepare("DELETE FROM `clean_dirs` WHERE `path` = ?1")
+                 .binding(1, path).run()?;
 
             if let Some(slash) = path[0..path.len()-1].iter().rposition(
                 |c| b'/' == *c)
@@ -160,9 +160,9 @@ impl Dao {
             debug_assert!(b'/' == path[0]);
             debug_assert!(b'/' == path[path.len() - 1]);
 
-            if try!(self.0.prepare("SELECT 1 FROM `clean_dirs` \
+            if self.0.prepare("SELECT 1 FROM `clean_dirs` \
                                     WHERE `path` = ?1")
-                    .binding(1, path).exists()) {
+                    .binding(1, path).exists()? {
                 return Ok(true);
             }
 
@@ -185,9 +185,9 @@ impl Dao {
 
     /// Determines the new generation number for the cache.
     pub fn next_generation(&self) -> Result<i64> {
-        Ok(try!(self.0.prepare("SELECT MAX(`generation`) + 1 \
+        Ok(self.0.prepare("SELECT MAX(`generation`) + 1 \
                                 FROM `hash_cache`")
-                .first(|s| s.read(0)).map(|o| o.unwrap_or(0))))
+                .first(|s| s.read(0)).map(|o| o.unwrap_or(0))?)
     }
 
     /// Populates the hash and block caches with the given file.
@@ -205,10 +205,10 @@ impl Dao {
 
         // Kill any existing entry to transitively remove any block caches
         // as well.
-        try!(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
-             .binding(1, path).run());
+        self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
+             .binding(1, path).run()?;
 
-        try!(self.0.prepare("INSERT INTO `hash_cache` ( \
+        self.0.prepare("INSERT INTO `hash_cache` ( \
                              path, hash, block_size, inode, size, mtime, \
                              generation \
                              ) VALUES ( \
@@ -219,19 +219,19 @@ impl Dao {
              .binding(3, block_size as i64).binding(4, stat.ino as i64)
              .binding(5, stat.size as i64).binding(6, stat.mtime as i64)
              .binding(7, generation)
-             .run());
-        let id = try!(self.0.prepare("SELECT `id` FROM `hash_cache` \
+             .run()?;
+        let id = self.0.prepare("SELECT `id` FROM `hash_cache` \
                                       WHERE `path` = ?1")
                       .binding(1, path)
-                      .first(|s| s.read::<i64>(0)))
+                      .first(|s| s.read::<i64>(0))?
             .expect("Couldn't find the id of the row just inserted");
         for (ix, block) in blocks.iter().enumerate() {
-            try!(self.0.prepare("INSERT INTO `block_cache` ( \
+            self.0.prepare("INSERT INTO `block_cache` ( \
                                  file, offset, hash \
                                  ) VALUES ( \
                                  ?1,   ?2,     ?3)")
                  .binding(1, id).binding(2, ix as i64)
-                 .binding(3, &block[..]).run());
+                 .binding(3, &block[..]).run()?;
         }
         Ok(())
     }
@@ -248,7 +248,7 @@ impl Dao {
     pub fn cached_file_hash(&self, path: &OsStr, stat: &InodeStatus,
                             generation: i64)
                             -> Result<Option<HashId>> {
-        if let Some((id, hashvec)) = try!(
+        if let Some((id, hashvec)) =
             self.0.prepare(
                 "SELECT `id`, `hash` FROM `hash_cache` \
                  WHERE `path` = ?1 \
@@ -258,16 +258,16 @@ impl Dao {
                 .binding(2, stat.ino as i64)
                 .binding(3, stat.size as i64)
                 .binding(4, stat.mtime as i64)
-                .first(|s| Ok((try!(s.read::<i64>(0)),
-                               try!(s.read::<Vec<u8>>(1))))))
+                .first(|s| Ok((s.read::<i64>(0)?,
+                               s.read::<Vec<u8>>(1)?)))?
         {
-            try!(self.0.prepare(
+            self.0.prepare(
                 "UPDATE `hash_cache` \
                  SET `generation` = ?2 \
                  WHERE `id` = ?1")
                  .binding(1, id)
                  .binding(2, generation)
-                 .run());
+                 .run()?;
 
             Ok(Some(to_hashid(hashvec)?))
         } else {
@@ -286,12 +286,12 @@ impl Dao {
         let mut upper = lower.clone();
         *upper.last_mut().unwrap() = b'/' + 1;
 
-        try!(self.0.prepare("DELETE FROM `hash_cache` \
+        self.0.prepare("DELETE FROM `hash_cache` \
                              WHERE `path` >= ?1 AND path < ?2 \
                              AND `generation` < ?3")
              .binding(1, &lower[..]).binding(2, &upper[..])
              .binding(3, generation)
-             .run());
+             .run()?;
         Ok(())
     }
 
@@ -302,14 +302,14 @@ impl Dao {
     /// that matter.
     pub fn find_file_with_hash(&self, hash: &HashId)
                                -> Result<Option<OsString>> {
-        let pathvec = try!(self.0.prepare("SELECT `path` FROM `hash_cache` \
+        let pathvec = self.0.prepare("SELECT `path` FROM `hash_cache` \
                                            WHERE `hash` = ?1 \
                                            LIMIT 1")
                            .binding(1, &hash[..])
-                           .first(|s| s.read::<Vec<u8>>(0)));
+                           .first(|s| s.read::<Vec<u8>>(0))?;
 
         if let Some(pv) = pathvec {
-            Ok(Some(try!(pv.as_nstr()).to_owned()))
+            Ok(Some(pv.as_nstr()?.to_owned()))
         } else {
             Ok(None)
         }
@@ -328,19 +328,19 @@ impl Dao {
     /// that the file still exists.
     pub fn find_block_with_hash(&self, hash: &HashId)
                                 -> Result<Option<(OsString,i64,i64)>> {
-        let res = try!(self.0.prepare(
+        let res = self.0.prepare(
             "SELECT `hash_cache`.`path`, `hash_cache`.`block_size`, \
                     `block_cache`.`offset` \
              FROM `block_cache` JOIN `hash_cache` \
              ON   `block_cache`.`file` = `hash_cache`.`id` \
              WHERE `block_cache`.`hash` = ?1 LIMIT 1")
             .binding(1, &hash[..])
-            .first(|s| Ok((try!(s.read::<Vec<u8>>(0)),
-                           try!(s.read::<i64>(1)),
-                           try!(s.read::<i64>(2))))));
+            .first(|s| Ok((s.read::<Vec<u8>>(0)?,
+                           s.read::<i64>(1)?,
+                           s.read::<i64>(2)?)))?;
 
         if let Some((pathvec, bs, off)) = res {
-            Ok(Some((try!(pathvec.as_nstr()).to_owned(), bs, off)))
+            Ok(Some((pathvec.as_nstr()?.to_owned(), bs, off)))
         } else {
             Ok(None)
         }
@@ -359,16 +359,16 @@ impl Dao {
     /// Updates any cache for the file at path `old` to be at path `new`,
     /// preserving all caching information.
     pub fn rename_cache(&self, old: &OsStr, new: &OsStr) -> Result<()> {
-        Ok(try!(self.0.prepare("UPDATE `hash_cache` SET `path` = ?2 \
+        Ok(self.0.prepare("UPDATE `hash_cache` SET `path` = ?2 \
                                 WHERE `path` = ?1")
                 .binding(1, old.as_nbytes()).binding(2, new.as_nbytes())
-                .run()))
+                .run()?)
     }
 
     /// Deletes any cache entry for the file at `path`.
     pub fn delete_cache(&self, path: &OsStr) -> Result<()> {
-        Ok(try!(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
-                .binding(1, path.as_nbytes()).run()))
+        Ok(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
+                .binding(1, path.as_nbytes()).run()?)
     }
 
     /// Completely clears the hash cache.

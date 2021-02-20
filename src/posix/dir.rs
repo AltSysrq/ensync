@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, Jason Lingle
+// Copyright (c) 2016, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -218,10 +218,10 @@ impl DirHandle {
         let mut locked = self.0.mcontent.lock().unwrap();
         if let Some(mode) = locked.synth_mode {
             let mut parent = self.0.parent.clone().unwrap();
-            try!(parent.create_if_needed(replica, xfer.clone()));
-            try!(replica.create(&mut parent,
+            parent.create_if_needed(replica, xfer.clone())?;
+            replica.create(&mut parent,
                                 File(&self.0.name, &FileData::Directory(mode)),
-                                xfer));
+                                xfer)?;
             locked.synth_mode = None;
         }
         Ok(())
