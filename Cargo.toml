@@ -23,7 +23,7 @@ chrono = { version = "0.4.19" }
 flate2 = "1.0.20"
 fourleaf = "0.1.1"
 error-chain = "0.12.4"
-lazy_static = "1.0.0"
+lazy_static = "1.4.0"
 libc = "0.2.35"
 notify = "4.0.3"
 num_cpus = "1.8.0"

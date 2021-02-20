@@ -151,7 +151,7 @@ dependencies = [
  "error-chain",
  "flate2",
  "fourleaf",
- "lazy_static 1.0.0",
+ "lazy_static 1.4.0",
  "libc",
  "notify",
  "num_cpus",
@@ -280,9 +280,9 @@ checksum = "76f033c7ad61445c5b347c7382dd1237847eb1bce590fe50365dcb33d546be73"
 
 [[package]]
 name = "lazy_static"
-version = "1.0.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8f31047daa365f19be14b47c29df4f7c3b581832407daabe6ae77397619237d"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
@@ -650,7 +650,7 @@ version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "279ef31c19ededf577bfd12dfae728040a21f635b06a24cd670ff510edd38963"
 dependencies = [
- "lazy_static 1.0.0",
+ "lazy_static 1.4.0",
  "unreachable",
 ]
 
