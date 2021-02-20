@@ -52,7 +52,6 @@
 //! with POSIX filesystems.
 
 use std::ffi::CString;
-use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::io::AsRawFd;
@@ -70,7 +69,7 @@ pub use self::replica::PosixReplica;
 
 /// Set the atime and mtime of the given file handle to the given time, in
 /// seconds.
-pub fn set_mtime(file: &fs::File, mtime: FileTime) -> io::Result<()> {
+pub fn set_mtime(file: &impl AsRawFd, mtime: FileTime) -> io::Result<()> {
     let access_modified = [ timeval { tv_sec: mtime as c_long, tv_usec: 0 },
                             timeval { tv_sec: mtime as c_long, tv_usec: 0 } ];
     let code = unsafe {

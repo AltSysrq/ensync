@@ -35,7 +35,7 @@ rpassword = { version = "5.0.1", optional = true }
 # Scrypt.
 rust-crypto = "0.2.36"
 sqlite = "0.23.9"
-tempfile = "2.2.0"
+tempfile = "3.2.0"
 tiny-keccak = "1.4.0"
 toml = { version = "0.4.5", default-features = false }
 

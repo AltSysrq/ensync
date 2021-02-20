@@ -32,7 +32,7 @@ use std::thread;
 use std::time::Duration;
 
 use notify::{self, Watcher};
-use tempfile::{NamedTempFile, NamedTempFileOptions};
+use tempfile::NamedTempFile;
 
 use crate::defs::*;
 use crate::errors::*;
@@ -621,16 +621,16 @@ impl PosixReplica {
     }
 
     fn named_temp_file(&self, dir: &DirHandle) -> io::Result<NamedTempFile> {
-        let mut opts = NamedTempFileOptions::new();
+        let mut opts = tempfile::Builder::new();
         opts.prefix(INVASIVE_TMP_PREFIX);
 
         // If possible, create temporary files non-invasively. But if it's on a
         // different device, we have no choice but to create them in the target
         // directory.
         if self.config.private_dir_dev == dir.dev() {
-            opts.create_in(&self.config.private_dir)
+            opts.tempfile_in(&self.config.private_dir)
         } else {
-            opts.create_in(dir.path())
+            opts.tempfile_in(dir.path())
         }
     }
 
@@ -765,14 +765,14 @@ impl PosixReplica {
             },
 
             FileData::Regular(mode, _, time, _) => {
-                let mut scratch_file = self.named_temp_file(dir).chain_err(
+                let (mut scratch_file, scratch_path) = self.named_temp_file(dir).chain_err(
                     || format!("Failed to create temporary file in '{}'",
-                               dir.path().display()))?;
-                let scratch_path = scratch_file.path().to_owned();
+                               dir.path().display()))?
+                    .into_parts();
 
                 if let Some(xfer) = xfer {
                     // Copy the file to the local filesystem
-                    self.xfer_file(&mut* scratch_file, &xfer).chain_err(
+                    self.xfer_file(&mut scratch_file, &xfer).chain_err(
                         || format!("Failed to transfer content of '{}'",
                                    dir.child(source.0).display()))?;
                     // Move anything out of the way as needed
@@ -788,12 +788,12 @@ impl PosixReplica {
                     posix::set_mtime(&scratch_file, time).chain_err(
                         || format!("Failed to set mtime on '{}'",
                                    scratch_path.display()))?;
-                    let persisted = scratch_file.persist(&new_path)
-                        .chain_err(|| format!("Failed to persist '{}'",
-                                              new_path.display()))?;
-                    persisted.sync_all().chain_err(
+                    scratch_file.sync_all().chain_err(
                         || format!("Error fsync'ing '{}'",
                                    new_path.display()))?;
+                    scratch_path.persist(&new_path)
+                        .chain_err(|| format!("Failed to persist '{}'",
+                                              new_path.display()))?;
                     // Cache the content of the file, assuming that nobody
                     // modified it between us renaming it there and `stat()`ing
                     // it now.
@@ -887,7 +887,7 @@ impl PosixReplica {
     /// no file is known to have content matching `hash`; this may occur even
     /// though data was written to `dst`. Returns `true` if a file was found
     /// matching `hash`.
-    fn copy_file_local(&self, dst: &mut fs::File, hash: &HashId,
+    fn copy_file_local(&self, dst: &mut (impl Write + Seek), hash: &HashId,
                        block_size: usize) -> bool {
         let srcname = self.dao.lock().unwrap().find_file_with_hash(hash);
         if let Ok(Some(srcname)) = srcname {

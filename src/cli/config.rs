@@ -555,7 +555,7 @@ mode = "---/---"
             "file:{}", tempfile.path().to_str().unwrap());
         let pconf: PassphraseConfig = configstr.parse().unwrap();
 
-        writeln!(&mut*tempfile, "hunter2\r\n").unwrap();
+        writeln!(tempfile, "hunter2\r\n").unwrap();
         assert_eq!(b"hunter2", &pconf.read_passphrase("", false).unwrap()[..]);
     }
 
