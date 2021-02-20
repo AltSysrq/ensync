@@ -18,28 +18,13 @@
 
 #![recursion_limit = "1024"]
 
-extern crate chrono;
 // Not sure why the `rust_` prefix gets stripped by cargo
 extern crate crypto as rust_crypto;
-extern crate flate2;
-extern crate libc;
-extern crate notify;
-extern crate num_cpus;
-extern crate rand;
-extern crate regex;
-#[cfg(feature = "passphrase-prompt")] extern crate rpassword;
-extern crate sqlite;
-extern crate tempfile;
-extern crate tiny_keccak;
-extern crate toml;
-extern crate clap;
 #[macro_use] extern crate fourleaf;
 #[macro_use] extern crate error_chain;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate quick_error;
 
-#[cfg(test)] extern crate os_pipe;
-#[cfg(test)] extern crate tempdir;
 #[cfg(test)] #[macro_use] extern crate proptest;
 
 mod defs;
