@@ -33,8 +33,8 @@ use quick_error::ResultExt;
 use regex::{self,Regex};
 use toml;
 
-use defs::*;
-use rules::defs::*;
+use crate::defs::*;
+use crate::rules::defs::*;
 
 /// A single rule condition. These correspond directly to the conditions
 /// described in the project README.
@@ -725,9 +725,9 @@ impl DirRulesBuilder for DirEngineBuilder {
 mod test {
     use toml;
 
-    use defs::*;
-    use defs::test_helpers::*;
-    use rules::defs::*;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    use crate::rules::defs::*;
     use super::*;
     use super::{Condition,Action,StopType};
 

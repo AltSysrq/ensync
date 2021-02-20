@@ -37,8 +37,8 @@ use std::time::Duration;
 
 use tempdir::TempDir;
 
-#[allow(unused_imports)] use defs::*;
-#[allow(unused_imports)] use server::storage::*;
+#[allow(unused_imports)] use crate::defs::*;
+#[allow(unused_imports)] use crate::server::storage::*;
 
 macro_rules! init {
     ($dir:ident, $storage:ident) => {

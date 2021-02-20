@@ -30,7 +30,7 @@ extern crate regex;
 #[cfg(feature = "passphrase-prompt")] extern crate rpassword;
 extern crate sqlite;
 extern crate tempfile;
-extern crate tiny_keccak as keccak;
+extern crate tiny_keccak;
 extern crate toml;
 extern crate clap;
 #[macro_use] extern crate fourleaf;
@@ -60,7 +60,7 @@ mod posix;
 mod server;
 mod cli;
 
-use errors::{Result, ResultExt};
+use crate::errors::{Result, ResultExt};
 
 fn main() {
     use std::io::{Write, stderr};
@@ -88,7 +88,7 @@ fn main_impl() -> Result<()> {
 
     use clap::*;
 
-    use cli::config::PassphraseConfig;
+    use crate::cli::config::PassphraseConfig;
 
     {
         let mut args = env::args().fuse();

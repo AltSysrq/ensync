@@ -26,11 +26,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use keccak::Keccak;
+use tiny_keccak::Keccak;
 
-use defs::*;
-use errors::*;
-use replica::{Replica, ReplicaDirectory};
+use crate::defs::*;
+use crate::errors::*;
+use crate::replica::{Replica, ReplicaDirectory};
 
 #[derive(Debug,Clone)]
 struct DirContentMut {

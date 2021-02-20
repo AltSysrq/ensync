@@ -19,9 +19,9 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 
-use defs::*;
-use errors::*;
-use replica::*;
+use crate::defs::*;
+use crate::errors::*;
+use crate::replica::*;
 
 #[derive(Debug, Clone)]
 pub struct DryRunDirectory<T> {
@@ -184,10 +184,10 @@ impl<T : Condemn> Condemn for DryRunReplica<T> {
 
 #[cfg(test)]
 mod test {
-    use defs::*;
-    use defs::test_helpers::*;
-    use replica::*;
-    use memory_replica::*;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    use crate::replica::*;
+    use crate::memory_replica::*;
     use super::DryRunReplica;
 
     #[test]

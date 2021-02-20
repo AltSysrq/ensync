@@ -24,9 +24,9 @@ use std::thread;
 
 use fourleaf;
 
-use defs::HashId;
-use errors::*;
-use server::storage::*;
+use crate::defs::HashId;
+use crate::errors::*;
+use crate::server::storage::*;
 
 pub const PROTOCOL_VERSION_MAJOR: u32 = 0;
 pub const PROTOCOL_VERSION_MINOR: u32 = 1;
@@ -949,7 +949,7 @@ mod test {
 
     use os_pipe::{self, PipeReader, PipeWriter};
 
-    use server::local_storage::LocalStorage;
+    use crate::server::local_storage::LocalStorage;
     use super::*;
 
     fn create_storage(dir: &Path) -> RemoteStorage {

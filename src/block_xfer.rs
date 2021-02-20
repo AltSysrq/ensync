@@ -62,10 +62,10 @@
 use std::io;
 use std::sync::Arc;
 
-use keccak::Keccak;
+use tiny_keccak::Keccak;
 
-use defs::*;
-use errors::*;
+use crate::defs::*;
+use crate::errors::*;
 
 /// The representation of a list of blocks into which an input stream was
 /// split.
@@ -265,8 +265,8 @@ pub trait BlockFetch {
 mod test {
     use std::collections::HashMap;
 
-    use defs::*;
-    #[allow(unused_imports)] use errors::*;
+    use crate::defs::*;
+    #[allow(unused_imports)] use crate::errors::*;
     use super::*;
 
     fn to_blocklist(text: &[u8], secret: &[u8])

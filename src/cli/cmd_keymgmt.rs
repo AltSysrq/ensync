@@ -20,9 +20,9 @@ use std::io::{self, Write};
 
 use chrono::{DateTime, UTC};
 
-use errors::*;
-use server::*;
-use cli::config::*;
+use crate::errors::*;
+use crate::server::*;
+use crate::cli::config::*;
 
 macro_rules! root_prompt {
     ($root:expr) => { || $root.read_passphrase(

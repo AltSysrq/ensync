@@ -27,14 +27,14 @@ use std::thread;
 use std::time::Duration;
 use std::u32;
 
-use keccak::Keccak;
+use tiny_keccak::Keccak;
 use sqlite;
 use tempfile::{self, NamedTempFile, PersistError};
 
-use defs::{DisplayHash, HashId, UNKNOWN_HASH};
-use errors::*;
-use sql::{self, SendConnection, StatementEx};
-use server::storage::*;
+use crate::defs::{DisplayHash, HashId, UNKNOWN_HASH};
+use crate::errors::*;
+use crate::sql::{self, SendConnection, StatementEx};
+use crate::server::storage::*;
 
 const NX: u32 = !0o7111;
 

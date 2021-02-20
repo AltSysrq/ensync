@@ -85,17 +85,17 @@ use std::usize;
 
 use fourleaf::{self, Deserialize, Serialize, UnknownFields};
 use flate2;
-use keccak;
+use tiny_keccak;
 
-use defs::*;
-use errors::*;
-use block_xfer::*;
-use replica::ReplicaDirectory;
-use sql::{SendConnection, StatementEx};
-use server::crypt::*;
-use server::dir_config::DirConfig;
-use server::storage::*;
-use server::transfer::ServerTransferOut;
+use crate::defs::*;
+use crate::errors::*;
+use crate::block_xfer::*;
+use crate::replica::ReplicaDirectory;
+use crate::sql::{SendConnection, StatementEx};
+use crate::server::crypt::*;
+use crate::server::dir_config::DirConfig;
+use crate::server::storage::*;
+use crate::server::transfer::ServerTransferOut;
 
 /// The well-known directory id of the "directory" object which stores the key
 /// list.
@@ -139,7 +139,7 @@ mod v0 {
     use fourleaf::UnknownFields;
     use fourleaf::adapt::Copied;
 
-    use defs::*;
+    use crate::defs::*;
 
     /// Describes the content of a single file.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -862,7 +862,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         *data = &data[len_blocks * BLKSZ ..];
 
         // Verify this chunk's HMAC
-        let mut kc = keccak::Keccak::new_sha3_256();
+        let mut kc = tiny_keccak::Keccak::new_sha3_256();
         kc.update(hmac_data);
         kc.update(prev_hmac);
         kc.update(self.dir_key()?.hmac_secret());
@@ -1033,7 +1033,7 @@ impl<S : Storage + ?Sized + 'static> Dir<S> {
         }
 
         // And generate the HMAC
-        let mut kc = keccak::Keccak::new_sha3_256();
+        let mut kc = tiny_keccak::Keccak::new_sha3_256();
         kc.update(&dst[start + UNKNOWN_HASH.len() ..]);
         kc.update(prev_hmac);
         kc.update(self.dir_key()?.hmac_secret());

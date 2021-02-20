@@ -27,12 +27,12 @@ use std::os::unix::fs::*;
 
 use tempfile::NamedTempFile;
 
-use block_xfer;
-use defs::*;
-use errors::*;
-use replica::{Replica, ReplicaDirectory};
-use posix;
-use server::{ServerReplica, Storage};
+use crate::block_xfer;
+use crate::defs::*;
+use crate::errors::*;
+use crate::replica::{Replica, ReplicaDirectory};
+use crate::posix;
+use crate::server::{ServerReplica, Storage};
 
 pub fn ls<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
     (replica: &ServerReplica<S>, paths: IT,

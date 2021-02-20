@@ -18,7 +18,7 @@
 
 use chrono::{DateTime, NaiveDateTime, UTC};
 
-use defs::FileTime;
+use crate::defs::FileTime;
 
 #[allow(dead_code)]
 pub const ZERO:  &'static str = "1970-01-01 00:00Z";

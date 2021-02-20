@@ -19,9 +19,9 @@
 use std::ffi::{OsStr,OsString};
 use std::path::PathBuf;
 
-use defs::*;
-use rules::*;
-use log::ReplicaSide;
+use crate::defs::*;
+use crate::rules::*;
+use crate::log::ReplicaSide;
 
 /// Generates a new string based on `orig` for which `in_use` returns `false`.
 ///
@@ -246,7 +246,7 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
               mode: SyncMode,
               use_client: Reconciliation, use_server: Reconciliation)
               -> (Reconciliation, Conflict) {
-        use rules::SyncModeSetting::*;
+        use crate::rules::SyncModeSetting::*;
 
         // What to do on an edit/edit conflict that can't be reconciled
         // automatically.
@@ -386,9 +386,9 @@ mod test {
     use std::collections::HashSet;
 
     use super::*;
-    #[allow(unused_imports)] use defs::*;
-    use defs::test_helpers::*;
-    #[allow(unused_imports)] use rules::*;
+    #[allow(unused_imports)] use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    #[allow(unused_imports)] use crate::rules::*;
 
     #[test]
     fn simple_gen_alternate_name() {

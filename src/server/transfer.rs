@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use flate2;
 
-use block_xfer::BlockFetch;
-use defs::HashId;
-use errors::*;
-use server::crypt::{decrypt_obj, xform_obj_id};
-use server::storage::Storage;
+use crate::block_xfer::BlockFetch;
+use crate::defs::HashId;
+use crate::errors::*;
+use crate::server::crypt::{decrypt_obj, xform_obj_id};
+use crate::server::storage::Storage;
 
 pub struct ServerTransferOut<S : Storage + ?Sized> {
     storage: Arc<S>,

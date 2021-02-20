@@ -20,11 +20,11 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr,OsString};
 use std::result;
 
-use defs::*;
-use errors::*;
-use log;
-use log::{Logger,ReplicaSide,ErrorOperation,Log};
-use replica::{Replica, NullTransfer};
+use crate::defs::*;
+use crate::errors::*;
+use crate::log;
+use crate::log::{Logger,ReplicaSide,ErrorOperation,Log};
+use crate::replica::{Replica, NullTransfer};
 use super::compute::{Reconciliation,ReconciliationSide,gen_alternate_name};
 use super::compute::SplitAncestorState;
 use super::context::*;
@@ -501,13 +501,13 @@ pub mod test {
     use std::ffi::{OsString,OsStr};
     use std::mem;
 
-    use defs::*;
-    use defs::test_helpers::*;
-    use work_stack::WorkStack;
-    use log::{PrintlnLogger,ReplicaSide};
-    use replica::{Replica,NullTransfer};
-    use memory_replica::{self,MemoryReplica,DirHandle,simple_error};
-    use rules::*;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    use crate::work_stack::WorkStack;
+    use crate::log::{PrintlnLogger,ReplicaSide};
+    use crate::replica::{Replica,NullTransfer};
+    use crate::memory_replica::{self,MemoryReplica,DirHandle,simple_error};
+    use crate::rules::*;
 
     use super::super::compute::{Reconciliation,ReconciliationSide};
     use super::super::compute::{SplitAncestorState};

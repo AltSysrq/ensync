@@ -34,14 +34,14 @@ use std::time::Duration;
 use notify::{self, Watcher};
 use tempfile::{NamedTempFile, NamedTempFileOptions};
 
-use defs::*;
-use errors::*;
-use replica::*;
-use block_xfer::{BlockList,StreamSource,ContentAddressableSource,BlockFetch};
-use block_xfer::{blocks_to_stream,hash_block,stream_to_blocks};
-use posix;
-use posix::dao::{Dao,InodeStatus};
-use posix::dir::*;
+use crate::defs::*;
+use crate::errors::*;
+use crate::replica::*;
+use crate::block_xfer::{BlockList,StreamSource,ContentAddressableSource,BlockFetch};
+use crate::block_xfer::{blocks_to_stream,hash_block,stream_to_blocks};
+use crate::posix;
+use crate::posix::dao::{Dao,InodeStatus};
+use crate::posix::dir::*;
 
 type Inode = (u64, u64);
 
@@ -1177,12 +1177,12 @@ mod test {
 
     use tempdir::TempDir;
 
-    use defs::*;
-    use defs::test_helpers::*;
-    #[allow(unused_imports)] use errors::*;
-    use replica::*;
-    use block_xfer;
-    use posix::set_mtime_path;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    #[allow(unused_imports)] use crate::errors::*;
+    use crate::replica::*;
+    use crate::block_xfer;
+    use crate::posix::set_mtime_path;
     use super::*;
 
     static SECRET: &'static str = "secret";
@@ -1225,7 +1225,7 @@ mod test {
     }
 
     impl block_xfer::BlockFetch for MemoryBlockFetch {
-        fn fetch(&self, block: &HashId) -> Result<Box<Read>> {
+        fn fetch(&self, block: &HashId) -> Result<Box<dyn Read>> {
             Ok(Box::new(io::Cursor::new(
                 self.blocks.get(block).expect("Unexpected block fetched")
                     .clone())))

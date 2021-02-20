@@ -20,9 +20,9 @@ use std::io::{Read, Write, stderr};
 use std::process;
 use std::sync::Arc;
 
-use cli::config::*;
-use errors::*;
-use server::*;
+use crate::cli::config::*;
+use crate::errors::*;
+use crate::server::*;
 
 /// Connect to a server process in `child` which writes to `stdout` and reads
 /// from `stdin`.

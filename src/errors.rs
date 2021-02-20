@@ -24,9 +24,9 @@ use fourleaf;
 use sqlite;
 use tempfile;
 
-use defs::{DisplayHash, HashId};
-use log;
-use server;
+use crate::defs::{DisplayHash, HashId};
+use crate::log;
+use crate::server;
 
 error_chain! {
     types {
@@ -343,7 +343,7 @@ impl Error {
 
 #[cfg(test)]
 mod test {
-    use errors::*;
+    use crate::errors::*;
 
     #[test]
     fn nested_server_closed_is_fatal() {

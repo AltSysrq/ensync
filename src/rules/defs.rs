@@ -20,7 +20,7 @@ use std::fmt;
 use std::error::Error;
 use std::str::FromStr;
 
-use defs::File;
+use crate::defs::File;
 
 /// A single field of a sync mode.
 #[derive(Clone,Copy,PartialEq,Eq,Debug,PartialOrd,Ord)]

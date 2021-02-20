@@ -39,9 +39,9 @@ use std::collections::{HashMap,HashSet};
 use std::ffi::{OsStr,OsString};
 use std::sync::{Mutex,MutexGuard};
 
-use defs::*;
-use errors::*;
-use replica::{Replica,ReplicaDirectory,NullTransfer,Condemn};
+use crate::defs::*;
+use crate::errors::*;
+use crate::replica::{Replica,ReplicaDirectory,NullTransfer,Condemn};
 
 /// Identifies an operation for purposes of mapping to a fault.
 #[derive(Clone,Debug,Hash,PartialEq,Eq)]
@@ -168,7 +168,7 @@ pub struct MemoryReplicaImpl {
     /// manipulate the key of the operation it matched. If the fault function
     /// returns Err, the operation does not take place and that error is
     /// returned from the method.
-    pub faults: HashMap<Op, Box<Fault<Output = Result<()>>>>,
+    pub faults: HashMap<Op, Box<dyn Fault<Output = Result<()>>>>,
     /// Tables for existing directories.
     ///
     /// The root directory is "". Subdirectories follow UNIX convention,
@@ -660,10 +660,10 @@ impl Condemn for MemoryReplica {
 
 #[cfg(test)]
 mod test {
-    use defs::*;
-    use defs::test_helpers::*;
-    #[allow(unused_imports)] use errors::*;
-    use replica::*;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    #[allow(unused_imports)] use crate::errors::*;
+    use crate::replica::*;
     use super::*;
 
     fn init() -> (MemoryReplica, DirHandle) {

@@ -22,12 +22,12 @@ use std::sync::atomic::{AtomicBool,AtomicUsize};
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
 
-use defs::*;
-use errors::*;
-use interrupt::is_interrupted;
-use log::{self,Log,Logger};
-use replica::{Replica,ReplicaDirectory};
-use rules::*;
+use crate::defs::*;
+use crate::errors::*;
+use crate::interrupt::is_interrupted;
+use crate::log::{self,Log,Logger};
+use crate::replica::{Replica,ReplicaDirectory};
+use crate::rules::*;
 use super::context::*;
 use super::compute::*;
 use super::mutate::ApplyResult;
@@ -525,10 +525,10 @@ mod test {
     use proptest;
     use proptest::strategy::{BoxedStrategy, Singleton, Strategy};
 
-    use defs::*;
-    use replica::*;
-    use memory_replica::*;
-    use rules::{SyncModeSetting,HalfSyncMode,SyncMode};
+    use crate::defs::*;
+    use crate::replica::*;
+    use crate::memory_replica::*;
+    use crate::rules::{SyncModeSetting,HalfSyncMode,SyncMode};
     use super::super::mutate::test::*;
     use super::*;
 

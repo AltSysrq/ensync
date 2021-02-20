@@ -16,8 +16,8 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use defs::HashId;
-use errors::Result;
+use crate::defs::HashId;
+use crate::errors::Result;
 
 pub type Tx = u64;
 

@@ -223,15 +223,15 @@ use std::result::Result as StdResult;
 use chrono::{DateTime, NaiveDateTime, UTC};
 use fourleaf::{self, UnknownFields};
 use fourleaf::adapt::Copied;
-use keccak;
+use tiny_keccak;
 use rand::{Rng, OsRng};
-use rust_crypto::{aes, blockmodes, scrypt};
-use rust_crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer,
+use crate::rust_crypto::{aes, blockmodes, scrypt};
+use crate::rust_crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer,
                           RefReadBuffer, RefWriteBuffer};
-use rust_crypto::symmetriccipher::{Decryptor, Encryptor, SymmetricCipherError};
+use crate::rust_crypto::symmetriccipher::{Decryptor, Encryptor, SymmetricCipherError};
 
-use defs::{HashId, UNKNOWN_HASH};
-use errors::*;
+use crate::defs::{HashId, UNKNOWN_HASH};
+use crate::errors::*;
 
 const SCRYPT_18_14_12_8_1: &'static str = "scrypt-18/14/12-8-1";
 pub const BLKSZ: usize = 16;
@@ -434,7 +434,7 @@ fn scrypt_18_14_12_8_1(passphrase: &[u8], salt: &[u8]) -> HashId {
 
 fn sha3(data: &[u8]) -> HashId {
     let mut hash = HashId::default();
-    let mut kc = keccak::Keccak::new_sha3_256();
+    let mut kc = tiny_keccak::Keccak::new_sha3_256();
     kc.update(data);
     kc.finalize(&mut hash);
     hash
@@ -442,7 +442,7 @@ fn sha3(data: &[u8]) -> HashId {
 
 fn hmac(data: &[u8], secret: &[u8]) -> HashId {
     let mut hash = HashId::default();
-    let mut kc = keccak::Keccak::new_sha3_256();
+    let mut kc = tiny_keccak::Keccak::new_sha3_256();
     kc.update(data);
     kc.update(secret);
     kc.finalize(&mut hash);
@@ -877,7 +877,7 @@ mod test {
 // Separate module so only the fast tess can be run when so desired
 #[cfg(test)]
 mod fast_test {
-    use defs::HashId;
+    use crate::defs::HashId;
 
     use super::hmac;
     use super::*;

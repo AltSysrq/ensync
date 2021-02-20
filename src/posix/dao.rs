@@ -21,9 +21,9 @@ use std::path::Path;
 
 use sqlite::{State, Statement};
 
-use defs::*;
-use errors::*;
-use sql::*;
+use crate::defs::*;
+use crate::errors::*;
+use crate::sql::*;
 
 /// Front-end to SQLite for the POSIX (client-side) replica.
 ///
@@ -381,8 +381,8 @@ impl Dao {
 mod test {
     use std::collections::HashSet;
 
-    use defs::*;
-    use defs::test_helpers::*;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
     use super::*;
 
     fn new() -> Dao {

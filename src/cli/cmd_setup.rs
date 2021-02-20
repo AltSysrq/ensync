@@ -30,15 +30,15 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 use toml;
 
-use cli::cmd_server::SHELL_IDENTITY;
-use cli::config::*;
-use cli::open_server::{connect_server_storage, open_server_replica};
-use defs::{File, FileData};
-use errors::*;
-use replica::Replica;
-use rules::SyncMode;
-use server::keymgmt;
-use server::{self, LocalStorage, Storage};
+use crate::cli::cmd_server::SHELL_IDENTITY;
+use crate::cli::config::*;
+use crate::cli::open_server::{connect_server_storage, open_server_replica};
+use crate::defs::{File, FileData};
+use crate::errors::*;
+use crate::replica::Replica;
+use crate::rules::SyncMode;
+use crate::server::keymgmt;
+use crate::server::{self, LocalStorage, Storage};
 
 // `Path::parent()` for a relative path in the current dir returns "", but
 // `exists()` and `is_dir()` return `false` for "".

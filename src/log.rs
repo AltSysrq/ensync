@@ -23,10 +23,10 @@
 //! itemised output.
 
 use std::ffi::OsStr;
-use reconcile::compute::{Reconciliation,Conflict};
+use crate::reconcile::compute::{Reconciliation,Conflict};
 
-use defs::*;
-use errors::Error;
+use crate::defs::*;
+use crate::errors::Error;
 
 pub type LogLevel = u8;
 /// Log level indicating an unrecoverable, non-localised error.

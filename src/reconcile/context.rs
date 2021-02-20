@@ -22,11 +22,11 @@ use std::num::Wrapping;
 use std::ffi::{OsStr,OsString};
 use std::sync::Mutex;
 
-use defs::*;
-use work_stack::WorkStack;
-use replica::*;
-use log::Logger;
-use rules::DirRules;
+use crate::defs::*;
+use crate::work_stack::WorkStack;
+use crate::replica::*;
+use crate::log::Logger;
+use crate::rules::DirRules;
 
 // This whole thing is basically stable-man's-FnBox. We wrap an FnOnce in an
 // option and a box so we can make something approximating an FnMut (and which

@@ -26,13 +26,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use flate2;
-use keccak;
+use tiny_keccak;
 #[cfg(feature = "passphrase-prompt")] use rpassword;
 use toml;
 
-use defs::{PRIVATE_DIR_NAME, HashId};
-use errors::*;
-use rules::engine::SyncRules;
+use crate::defs::{PRIVATE_DIR_NAME, HashId};
+use crate::errors::*;
+use crate::rules::engine::SyncRules;
 
 const CONFIG_FILE_NAME: &'static str = "config.toml";
 
@@ -134,7 +134,7 @@ impl Config {
     pub fn parse<P : AsRef<Path>>(filename: P, s: &str) -> Result<Self> {
         let hash = {
             let mut hash = HashId::default();
-            let mut kc = keccak::Keccak::new_sha3_256();
+            let mut kc = tiny_keccak::Keccak::new_sha3_256();
             kc.update(s.as_bytes());
             kc.finalize(&mut hash);
             hash

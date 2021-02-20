@@ -30,22 +30,22 @@ use std::thread;
 use std::time::Duration;
 use libc::isatty;
 
-use ancestor::*;
-use cli::open_server::open_server_replica;
-use cli::config::Config;
-use cli::format_date;
-use defs::*;
-use dry_run_replica::DryRunReplica;
-use errors::*;
-use interrupt;
-use log::*;
-use posix::*;
-use reconcile::compute::*;
-use reconcile;
-use replica::{Condemn, NullTransfer, PrepareType, Replica, Watch, WatchHandle};
-use rules;
-use server::*;
-use work_stack;
+use crate::ancestor::*;
+use crate::cli::open_server::open_server_replica;
+use crate::cli::config::Config;
+use crate::cli::format_date;
+use crate::defs::*;
+use crate::dry_run_replica::DryRunReplica;
+use crate::errors::*;
+use crate::interrupt;
+use crate::log::*;
+use crate::posix::*;
+use crate::reconcile::compute::*;
+use crate::reconcile;
+use crate::replica::{Condemn, NullTransfer, PrepareType, Replica, Watch, WatchHandle};
+use crate::rules;
+use crate::server::*;
+use crate::work_stack;
 
 macro_rules! perrln {
     ($($arg:expr),+) => {

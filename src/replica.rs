@@ -19,9 +19,9 @@
 use std::ffi::{OsStr,OsString};
 use std::sync::{Condvar, Mutex, Weak};
 
-use defs::*;
-use errors::Result;
-use interrupt;
+use crate::defs::*;
+use crate::errors::Result;
+use crate::interrupt;
 
 /// Controls the behaviour of `Replica::prepare`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -76,7 +76,7 @@ pub trait Replica : Sync + Send {
     ///
     /// Returns true if the directory cannot be accessed (including if the
     /// directory is synthetic).
-    fn is_dir_dirty(&self, &Self::Directory) -> bool;
+    fn is_dir_dirty(&self, _: &Self::Directory) -> bool;
     /// Marks the given directory as clean, if no modifications to its contents
     /// have occurred since the last call to list() except through the
     /// directory handle itself.
@@ -92,7 +92,7 @@ pub trait Replica : Sync + Send {
     ///
     /// If the directory is synthetic and does not exist in any concrete form,
     /// this call succeeds and returns true.
-    fn set_dir_clean(&self, &Self::Directory) -> Result<bool>;
+    fn set_dir_clean(&self, _: &Self::Directory) -> Result<bool>;
     /// Returns the root directory for this replica.
     fn root(&self) -> Result<Self::Directory>;
     /// Reads the contents of the given directory.
@@ -100,12 +100,12 @@ pub trait Replica : Sync + Send {
     /// On success, the full conents of the directory (excluding "." and ".."
     /// if returned by the underlying system) after transform/filtering are
     /// returned, in no particular order.
-    fn list(&self, &mut Self::Directory) -> Result<Vec<(OsString,FileData)>>;
+    fn list(&self, _: &mut Self::Directory) -> Result<Vec<(OsString,FileData)>>;
     /// Renames a file within a directory.
     ///
     /// The file of any type named by `old` is renamed to `new`. A best effort
     /// is made to prevent renaming onto an existing file.
-    fn rename(&self, &mut Self::Directory, old: &OsStr, new: &OsStr)
+    fn rename(&self, _: &mut Self::Directory, old: &OsStr, new: &OsStr)
               -> Result<()>;
     /// Deletes the file within a directory.
     ///
@@ -115,7 +115,7 @@ pub trait Replica : Sync + Send {
     ///
     /// If `target` is a directory, this call must fail if the directory is not
     /// actually empty.
-    fn remove(&self, &mut Self::Directory, target: File) -> Result<()>;
+    fn remove(&self, _: &mut Self::Directory, target: File) -> Result<()>;
     /// Creates a file within a directory.
     ///
     /// A file in the given directory is created conforming to `source`. If
@@ -131,7 +131,7 @@ pub trait Replica : Sync + Send {
     ///
     /// Returns the actual file version resulting from this creation. This may
     /// be different from `source` if the hash on `source` is incorrect.
-    fn create(&self, &mut Self::Directory, source: File,
+    fn create(&self, _: &mut Self::Directory, source: File,
               xfer: Self::TransferIn) -> Result<FileData>;
     /// Updates a file within a directory.
     ///
@@ -155,11 +155,11 @@ pub trait Replica : Sync + Send {
     ///
     /// Returns the actual file version resulting from this update. This may be
     /// different from `new` if the hash on `new` was incorrect.
-    fn update(&self, &mut Self::Directory, name: &OsStr,
+    fn update(&self, _: &mut Self::Directory, name: &OsStr,
               old: &FileData, new: &FileData,
               xfer: Self::TransferIn) -> Result<FileData>;
     /// Creates a new context within the subdirectory identified by `subdir`.
-    fn chdir(&self, &Self::Directory, subdir: &OsStr)
+    fn chdir(&self, _: &Self::Directory, subdir: &OsStr)
              -> Result<Self::Directory>;
     /// Creates a "synthetic" subdirectory and returns a context that can be
     /// used to manipulate it.
@@ -171,7 +171,7 @@ pub trait Replica : Sync + Send {
     ///
     /// `Replica::ls()` always returns the empty vector for synthetic
     /// directories that have not yet materialised.
-    fn synthdir(&self, &mut Self::Directory, subdir: &OsStr, mode: FileMode)
+    fn synthdir(&self, _: &mut Self::Directory, subdir: &OsStr, mode: FileMode)
                 -> Self::Directory;
     /// Deletes the directory identified by the given handle, if it is empty.
     ///
@@ -181,11 +181,11 @@ pub trait Replica : Sync + Send {
     /// If the path indicated by the directory exists but is not actually a
     /// directory, a best effort should be made to not remove that object;
     /// whether the call succeeds in this case is unspecified.
-    fn rmdir(&self, &mut Self::Directory) -> Result<()>;
+    fn rmdir(&self, _: &mut Self::Directory) -> Result<()>;
 
     /// Returns an object which can be used to transfer `file` out of this
     /// replica.
-    fn transfer(&self, &Self::Directory, file: File)
+    fn transfer(&self, _: &Self::Directory, file: File)
                 -> Result<Self::TransferOut>;
 
     /// Performs any initial setup of this replica.

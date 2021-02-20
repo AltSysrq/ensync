@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use libc;
 
-use replica::WatchHandle;
+use crate::replica::WatchHandle;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 // XXX Should be `AtomicPtr<WatchHandle>` but there was no `ATOMIC_PTR_INIT`.

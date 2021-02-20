@@ -22,10 +22,10 @@ use std::sync::{Arc,Mutex};
 
 use sqlite;
 
-use defs::*;
-use errors::*;
-use replica::*;
-use sql::{AsNBytes,AsNStr};
+use crate::defs::*;
+use crate::errors::*;
+use crate::replica::*;
+use crate::sql::{AsNBytes,AsNStr};
 use super::dao::*;
 
 const T_REGULAR : i64 = 0;
@@ -409,10 +409,10 @@ impl Condemn for AncestorReplica {
 
 #[cfg(test)]
 mod test {
-    use defs::*;
-    use defs::test_helpers::*;
-    #[allow(unused_imports)] use errors::*;
-    use replica::*;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    #[allow(unused_imports)] use crate::errors::*;
+    use crate::replica::*;
     use super::*;
 
     fn new() -> (AncestorReplica,DirHandle) {

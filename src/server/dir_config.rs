@@ -18,8 +18,8 @@
 
 use regex::Regex;
 
-use errors::*;
-use server::crypt::{GROUP_EVERYONE, GROUP_ROOT};
+use crate::errors::*;
+use crate::server::crypt::{GROUP_EVERYONE, GROUP_ROOT};
 
 lazy_static! {
     static ref NAME_PATTERN: Regex = Regex::new(
@@ -136,7 +136,7 @@ impl DirConfig {
 #[cfg(test)]
 mod test {
     use super::DirConfig;
-    use errors::*;
+    use crate::errors::*;
 
     #[test]
     fn sub_no_config() {

@@ -23,11 +23,11 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, UTC};
 use fourleaf;
 
-use defs::HashId;
-use errors::*;
-use server::crypt::*;
-use server::storage::*;
-use server::dir::DIRID_KEYS;
+use crate::defs::HashId;
+use crate::errors::*;
+use crate::server::crypt::*;
+use crate::server::storage::*;
+use crate::server::dir::DIRID_KEYS;
 
 /// Caches a `root` internal key.
 ///
@@ -487,8 +487,8 @@ pub fn list_keys<S : Storage + ?Sized>(storage: &S) -> Result<Vec<KeyInfo>> {
 mod test {
     use tempdir::TempDir;
 
-    #[allow(unused_imports)] use errors::*;
-    use server::local_storage::LocalStorage;
+    #[allow(unused_imports)] use crate::errors::*;
+    use crate::server::local_storage::LocalStorage;
     use super::*;
 
     fn no_prompt() -> Result<Vec<u8>> {

@@ -26,11 +26,11 @@ use std::u32;
 use flate2;
 use sqlite;
 
-use block_xfer::*;
-use defs::*;
-use errors::*;
-use replica::*;
-use sql::{SendConnection, StatementEx};
+use crate::block_xfer::*;
+use crate::defs::*;
+use crate::errors::*;
+use crate::replica::*;
+use crate::sql::{SendConnection, StatementEx};
 use super::crypt::{KeyChain, encrypt_dir_ver};
 use super::dir::*;
 use super::storage::*;
@@ -367,13 +367,13 @@ mod test {
     use flate2;
     use tempdir::TempDir;
 
-    use block_xfer;
-    use defs::*;
-    use defs::test_helpers::*;
-    #[allow(unused_imports)] use errors::*;
-    use replica::*;
-    use server::crypt::KeyChain;
-    use server::local_storage::LocalStorage;
+    use crate::block_xfer;
+    use crate::defs::*;
+    use crate::defs::test_helpers::*;
+    #[allow(unused_imports)] use crate::errors::*;
+    use crate::replica::*;
+    use crate::server::crypt::KeyChain;
+    use crate::server::local_storage::LocalStorage;
     use super::*;
 
     macro_rules! init {
@@ -1361,7 +1361,7 @@ mod test {
 
     #[test]
     fn read_protected_dirs_not_readable_by_non_group_members() {
-        use server::keymgmt;
+        use crate::server::keymgmt;
 
         let dir = TempDir::new("storage").unwrap();
         // We need a real SQLite file since there will be multiple replica
@@ -1426,7 +1426,7 @@ mod test {
 
     #[test]
     fn write_protected_dirs_not_writable_by_non_group_members() {
-        use server::keymgmt;
+        use crate::server::keymgmt;
 
         let dir = TempDir::new("storage").unwrap();
         // We need a real SQLite file since there will be multiple replica

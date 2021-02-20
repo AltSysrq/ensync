@@ -21,7 +21,7 @@ use std::path::Path;
 
 use sqlite::*;
 
-use sql::*;
+use crate::sql::*;
 
 /// Mid-layer interface atop SQLite for the ancestor store.
 ///

@@ -59,7 +59,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use libc::{utimes, futimes, timeval, c_long};
 
-use defs::FileTime;
+use crate::defs::FileTime;
 
 mod dao;
 mod dir;

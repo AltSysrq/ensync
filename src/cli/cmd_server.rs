@@ -22,8 +22,8 @@ use std::io::{Write, stdin, stdout};
 use std::path::Path;
 use libc::isatty;
 
-use errors::*;
-use server::{LocalStorage, rpc};
+use crate::errors::*;
+use crate::server::{LocalStorage, rpc};
 
 pub const SHELL_IDENTITY: &'static str = "I am ensync shell";
 
