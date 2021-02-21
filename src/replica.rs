@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -17,7 +17,8 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::ffi::{OsStr, OsString};
-use std::sync::{Condvar, Mutex, Weak};
+use std::os::unix::net::UnixDatagram;
+use std::sync::{Mutex, Weak};
 
 use crate::defs::*;
 use crate::errors::Result;
@@ -294,20 +295,22 @@ impl Default for WatchStatus {
 ///
 /// Initially, the `Watch` is marked both `dirty` and `context_lost`.
 pub struct WatchHandle {
-    cond: Condvar,
+    notify: UnixDatagram,
+    wait: UnixDatagram,
     status: Mutex<WatchStatus>,
 }
 
-impl Default for WatchHandle {
-    fn default() -> Self {
-        WatchHandle {
-            cond: Condvar::new(),
-            status: Mutex::new(WatchStatus::default()),
-        }
-    }
-}
-
 impl WatchHandle {
+    pub fn new() -> Result<Self> {
+        let (notify, wait) = UnixDatagram::pair()?;
+
+        Ok(WatchHandle {
+            notify,
+            wait,
+            status: Mutex::new(WatchStatus::default()),
+        })
+    }
+
     /// Checks whether this `WatchHandle` has the `dirty` flag set, indicating
     /// that changes have been detected. The `dirty` flag is then cleared.
     pub fn check_dirty(&self) -> bool {
@@ -328,15 +331,17 @@ impl WatchHandle {
     }
 
     /// Notify all waiters without changing state.
+    ///
+    /// This is safe to invoke from an asynchronous signal handler.
     pub fn notify(&self) {
-        self.cond.notify_all();
+        self.notify.send(&[0]).unwrap();
     }
 
     /// Sets the `dirty` flag on the `WatchHandle` and notifies all waiters.
     pub fn set_dirty(&self) {
         let mut lock = self.status.lock().unwrap();
         lock.dirty = true;
-        self.cond.notify_all();
+        self.notify();
     }
 
     /// Sets the `dirty` and `context_lost` flags on the `WatchHandle` and
@@ -345,15 +350,15 @@ impl WatchHandle {
         let mut lock = self.status.lock().unwrap();
         lock.dirty = true;
         lock.context_lost = true;
-        self.cond.notify_all();
+        self.notify();
     }
 
     /// Delays the caller until the `dirty` flag is set or the process has been
     /// interrupted.
     pub fn wait(&self) {
-        let mut lock = self.status.lock().unwrap();
-        while !lock.dirty && !interrupt::is_interrupted() {
-            lock = self.cond.wait(lock).unwrap();
+        while !self.status.lock().unwrap().dirty && !interrupt::is_interrupted()
+        {
+            self.wait.recv(&mut []).unwrap();
         }
     }
 }

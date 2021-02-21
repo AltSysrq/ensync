@@ -910,7 +910,7 @@ pub fn run(
             spin,
         )
     } else {
-        let watch_handle = Arc::new(WatchHandle::default());
+        let watch_handle = Arc::new(WatchHandle::new()?);
         if watch {
             client_replica
                 .watch(Arc::downgrade(&watch_handle))

@@ -17,15 +17,15 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use libc;
+use std::ptr;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicPtr};
 use std::sync::Arc;
 
 use crate::replica::WatchHandle;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
-// XXX Should be `AtomicPtr<WatchHandle>` but there was no `ATOMIC_PTR_INIT`.
-static NOTIFY_WATCH: AtomicUsize = AtomicUsize::new(0);
+static NOTIFY_WATCH: AtomicPtr<WatchHandle> = AtomicPtr::new(ptr::null_mut());
 
 pub fn is_interrupted() -> bool {
     INTERRUPTED.load(Relaxed)
@@ -43,10 +43,8 @@ unsafe extern "C" fn handle_sigint(_: libc::c_int) {
     libc::signal(libc::SIGTERM, libc::SIG_DFL);
     libc::signal(libc::SIGINT, libc::SIG_DFL);
 
-    let watch: *const WatchHandle =
-        NOTIFY_WATCH.load(SeqCst) as *const WatchHandle;
+    let watch: *const WatchHandle = NOTIFY_WATCH.load(SeqCst);
     if !watch.is_null() {
-        // XXX Is this call actually interrupt-safe?
         (*watch).notify();
     }
 }
@@ -70,19 +68,25 @@ pub fn notify_on_signal(watch: Arc<WatchHandle>) {
     let ptr = Arc::into_raw(watch);
 
     assert!(
-        Ok(0) == NOTIFY_WATCH.compare_exchange(0, ptr as usize, SeqCst, SeqCst)
+        Ok(ptr::null_mut())
+            == NOTIFY_WATCH.compare_exchange(
+                ptr::null_mut(),
+                ptr as *mut WatchHandle,
+                SeqCst,
+                SeqCst
+            )
     );
 }
 
 pub fn clear_notify() {
     // Unset the global pointer, *then* check whether an interrupt has
     // happened.
-    let ptr = NOTIFY_WATCH.swap(0, SeqCst) as *const WatchHandle;
+    let ptr = NOTIFY_WATCH.swap(ptr::null_mut(), SeqCst);
     let interrupted = INTERRUPTED.load(SeqCst);
     // If an interrupt has occurred, leak the `WatchHandle` since the interrupt
     // handler could be trying to use it from another thread. The leak is fine
     // since the program will exit soon anyway.
     if !interrupted && !ptr.is_null() {
-        drop(unsafe { Arc::from_raw(ptr) })
+        drop(unsafe { Arc::from_raw(ptr as *const WatchHandle) })
     }
 }
