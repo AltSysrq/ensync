@@ -1,4 +1,4 @@
-# Unreleased
+# 1.0.0
 
 - Fix `ensync setup` falsely identifying UNIX file systems as not supporting
   UNIX permissions.
