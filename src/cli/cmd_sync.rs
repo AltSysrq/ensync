@@ -754,15 +754,11 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
     let rules = match override_mode {
         None => config.sync_rules.clone(),
         Some(overide) => Arc::new(
-            rules::engine::SyncRules::single_mode(overide)),
+            rules::engine::SyncRules::single_mode(overide, true)),
     };
 
     if dry_run {
-        let context = Arc::new(reconcile::Context::<
-                DryRunReplica<PosixReplica>,
-                DryRunReplica<AncestorReplica>,
-                DryRunReplica<ServerReplica<dyn Storage>>,
-                LoggerImpl, rules::engine::DirEngine> {
+        let context = Arc::new(reconcile::Context {
             cli: DryRunReplica(client_replica),
             anc: DryRunReplica(ancestor_replica),
             srv: DryRunReplica(server_replica),
@@ -783,10 +779,7 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
             interrupt::notify_on_signal(watch_handle.clone());
         }
 
-        // For some reason the type parms on `Context` are required
-        let context = Arc::new(reconcile::Context::<
-                PosixReplica, AncestorReplica, ServerReplica<dyn Storage>,
-                LoggerImpl, rules::engine::DirEngine> {
+        let context = Arc::new(reconcile::Context {
             cli: client_replica,
             anc: ancestor_replica,
             srv: server_replica,
@@ -832,8 +825,7 @@ fn run_sync<CLI : Replica + 'static,
             ANC : Replica + NullTransfer + Condemn + 'static,
             SRV : Replica<TransferIn = CLI::TransferOut,
                           TransferOut = CLI::TransferIn> + 'static>
-    (context: Arc<reconcile::Context<CLI, ANC, SRV, LoggerImpl,
-                                     rules::engine::DirEngine>>,
+    (context: Arc<reconcile::Context<CLI, ANC, SRV, LoggerImpl>>,
      level: LogLevel, num_threads: u32, prepare_type: PrepareType,
      config: &Config, show_messages: bool)
     -> Result<()>

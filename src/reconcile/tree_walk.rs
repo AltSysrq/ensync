@@ -27,7 +27,7 @@ use crate::errors::*;
 use crate::interrupt::is_interrupted;
 use crate::log::{self,Log,Logger};
 use crate::replica::{Replica,ReplicaDirectory};
-use crate::rules::*;
+use crate::rules::engine::{DirEngineBuilder, FileEngine};
 use super::context::*;
 use super::compute::*;
 use super::mutate::ApplyResult;
@@ -143,9 +143,9 @@ fn process_file(
 ///
 /// If an error occurs, it is logged and returned (so that the caller can use
 /// `?`).
-fn read_dir_contents<R : Replica, RB : DirRulesBuilder, LOG : Logger>(
+fn read_dir_contents<R : Replica, LOG : Logger>(
     r: &R, dir: &mut R::Directory, dir_path: &OsStr,
-    mut rb: Option<&mut RB>, log: &LOG, side : log::ReplicaSide)
+    mut rb: Option<&mut DirEngineBuilder>, log: &LOG, side : log::ReplicaSide)
     -> Result<BTreeMap<OsString,FileData>>
 {
     let mut ret = BTreeMap::new();
@@ -181,7 +181,7 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
     mut cli_dir: cli_dir!(),
     mut anc_dir: anc_dir!(),
     mut srv_dir: srv_dir!(),
-    mut rules_builder: <RULES as DirRules>::Builder,
+    mut rules_builder: DirEngineBuilder,
     on_complete_supplier: F) -> Result<()>
 {
     self.check_stop()?;
@@ -193,7 +193,7 @@ fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
         &self.log, log::ReplicaSide::Client)?;
     let anc_files = read_dir_contents(
         &self.anc, &mut anc_dir, &dir_path,
-        None::<&mut <RULES as DirRules>::Builder>, &self.log,
+        None::<&mut DirEngineBuilder>, &self.log,
         log::ReplicaSide::Ancestor)?;
     let srv_files = read_dir_contents(
         &self.srv, &mut srv_dir, &dir_path, Some(&mut rules_builder),
@@ -262,7 +262,7 @@ fn process_dir<F : FnOnce (dir_ctx!(), DirStateRef) -> Task<Self>>(
     cli_dir: cli_dir!(),
     anc_dir: anc_dir!(),
     srv_dir: srv_dir!(),
-    rules_builder: <RULES as DirRules>::Builder,
+    rules_builder: DirEngineBuilder,
     on_complete_suppvier: F) -> bool
 {
     self.process_dir_impl(cli_dir, anc_dir, srv_dir, rules_builder,
@@ -301,7 +301,7 @@ fn recurse_into_dir(
     &self,
     dir: &mut dir_ctx!(),
     parent_name: &OsStr, name: &OsStr,
-    file_rules: <RULES as DirRules>::FileRules,
+    file_rules: FileEngine,
     state: DirStateRef)
 {
     match (try_chdir(&self.cli, &dir.cli.dir, parent_name, name,
@@ -337,7 +337,7 @@ fn recurse_into_dir(
 fn recurse_and_then<F : FnOnce (&Self, dir_ctx!(), &DirStateRef)
                                 -> bool + Send + 'static>(
     &self, cli_dir: cli_dir!(), anc_dir: anc_dir!(), srv_dir: srv_dir!(),
-    file_rules: <RULES as DirRules>::FileRules,
+    file_rules: FileEngine,
     state: DirStateRef,
     on_success: F)
 {
@@ -414,7 +414,7 @@ fn finish_task_in_dir(&self, state: &DirStateRef,
 fn recursive_delete(
     &self, dir: &mut dir_ctx!(),
     parent_name: &OsStr, name: &OsStr,
-    file_rules: <RULES as DirRules>::FileRules,
+    file_rules: FileEngine,
     state: DirStateRef,
     side: ReconciliationSide, mode: FileMode)
 {
@@ -529,6 +529,7 @@ mod test {
     use crate::replica::*;
     use crate::memory_replica::*;
     use crate::rules::{SyncModeSetting,HalfSyncMode,SyncMode};
+    use crate::rules::engine::DirEngine;
     use super::super::mutate::test::*;
     use super::*;
 
@@ -746,16 +747,16 @@ mod test {
     }
 
     trait IntoRules {
-        fn into_rules(self) -> ConstantRules;
+        fn into_rules(self) -> DirEngine;
     }
     impl<'a> IntoRules for &'a str {
-        fn into_rules(self) -> ConstantRules {
-            ConstantRules(self.parse().unwrap(), true)
+        fn into_rules(self) -> DirEngine {
+            constant_rules(self.parse().unwrap(), true)
         }
     }
     impl<'a> IntoRules for (&'a str, bool) {
-        fn into_rules(self) -> ConstantRules {
-            ConstantRules(self.0.parse().unwrap(), self.1)
+        fn into_rules(self) -> DirEngine {
+            constant_rules(self.0.parse().unwrap(), self.1)
         }
     }
 
@@ -1052,7 +1053,7 @@ mod test {
             ref fs in arb_fs(), mode in arb_sync_mode()
         ) {
             let mut fx = init(&fs);
-            fx.rules = ConstantRules(mode, true);
+            fx.rules = constant_rules(mode, true);
 
             run_full(&mut fx);
 
@@ -1137,7 +1138,7 @@ mod test {
             }
 
             let mut fx = init(&fs);
-            fx.rules = ConstantRules("cud/cud".parse().unwrap(), true);
+            fx.rules = constant_rules("cud/cud".parse().unwrap(), true);
 
             let (orig_files_max, orig_files_min) = files_in_fs(&fs);
             run_full(&mut fx);
@@ -1172,7 +1173,7 @@ mod test {
             let orig_cli_sig = signature(&init(&fs).client);
 
             let mut fx = init(&fs);
-            fx.rules = ConstantRules("---/CUD".parse().unwrap(), true);
+            fx.rules = constant_rules("---/CUD".parse().unwrap(), true);
 
             run_full(&mut fx);
 

@@ -500,6 +500,7 @@ pub mod test {
     use std::collections::{BTreeMap,BinaryHeap};
     use std::ffi::{OsString,OsStr};
     use std::mem;
+    use std::sync::Arc;
 
     use crate::defs::*;
     use crate::defs::test_helpers::*;
@@ -507,7 +508,7 @@ pub mod test {
     use crate::log::{PrintlnLogger,ReplicaSide};
     use crate::replica::{Replica,NullTransfer};
     use crate::memory_replica::{self,MemoryReplica,DirHandle,simple_error};
-    use crate::rules::*;
+    use crate::rules::{*, engine::{DirEngine, FileEngine, SyncRules}};
 
     use super::super::compute::{Reconciliation,ReconciliationSide};
     use super::super::compute::{SplitAncestorState};
@@ -515,46 +516,27 @@ pub mod test {
     use super::{replace_ancestor,replace_replica,try_rename_replica};
     #[allow(unused_imports)] use super::super::context::*;
 
-    #[derive(Clone,Debug,Default)]
-    pub struct ConstantRules(pub SyncMode, pub bool);
-
-    impl DirRules for ConstantRules {
-        type Builder = Self;
-        type FileRules = Self;
-
-        fn file(&self, _: File) -> Self { self.clone() }
-    }
-
-    impl FileRules for ConstantRules {
-        type DirRules = Self;
-
-        fn sync_mode(&self) -> SyncMode { self.0 }
-        fn trust_client_unix_mode(&self) -> bool { self.1 }
-        fn subdir(self) -> Self { self }
-    }
-
-    impl DirRulesBuilder for ConstantRules {
-        type DirRules = Self;
-
-        fn contains(&mut self, _: File) { }
-        fn build(self) -> Self { self }
+    pub fn constant_rules(mode: SyncMode, trust_client_unix_mode: bool)
+                          -> DirEngine {
+        FileEngine::new(
+            Arc::new(SyncRules::single_mode(mode, trust_client_unix_mode))
+        ).subdir().build()
     }
 
     pub type TContext =
         Context<MemoryReplica, MemoryReplica, MemoryReplica,
-                PrintlnLogger, ConstantRules>;
+                PrintlnLogger>;
     pub type TDirContext =
         DirContext<<MemoryReplica as Replica>::Directory,
                    <MemoryReplica as Replica>::Directory,
-                   <MemoryReplica as Replica>::Directory,
-                   ConstantRules>;
+                   <MemoryReplica as Replica>::Directory>;
 
     pub struct Fixture {
         pub client: MemoryReplica,
         pub ancestor: MemoryReplica,
         pub server: MemoryReplica,
         pub logger: PrintlnLogger,
-        pub rules: ConstantRules,
+        pub rules: DirEngine,
     }
 
     impl Fixture {
@@ -564,7 +546,8 @@ pub mod test {
                 ancestor: MemoryReplica::empty(),
                 server: MemoryReplica::empty(),
                 logger: PrintlnLogger,
-                rules: Default::default(),
+                rules: FileEngine::new(Arc::new(SyncRules::single_mode(
+                    SyncMode::default(), true))).subdir().build(),
             }
         }
 
@@ -574,7 +557,7 @@ pub mod test {
                 anc: self.ancestor,
                 srv: self.server,
                 log: self.logger,
-                root_rules: self.rules.clone(),
+                root_rules: self.rules.file(File(OsStr::new(""), &FileData::Special)),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
             }
@@ -588,7 +571,7 @@ pub mod test {
                 anc: mem::replace(&mut self.ancestor, MemoryReplica::empty()),
                 srv: mem::replace(&mut self.server, MemoryReplica::empty()),
                 log: self.logger.clone(),
-                root_rules: self.rules.clone(),
+                root_rules: self.rules.file(File(OsStr::new(""), &FileData::Special)),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
             };

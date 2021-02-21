@@ -26,7 +26,7 @@ use crate::defs::*;
 use crate::work_stack::WorkStack;
 use crate::replica::*;
 use crate::log::Logger;
-use crate::rules::DirRules;
+use crate::rules::engine::{FileEngine, DirEngine};
 
 // This whole thing is basically stable-man's-FnBox. We wrap an FnOnce in an
 // option and a box so we can make something approximating an FnMut (and which
@@ -81,21 +81,21 @@ pub struct Context<CLI : Replica,
                    ANC : Replica + NullTransfer + Condemn,
                    SRV : Replica<TransferIn = CLI::TransferOut,
                                  TransferOut = CLI::TransferIn>,
-                   LOG : Logger,
-                   RULES : DirRules + 'static> {
+                   LOG : Logger> {
     pub cli: CLI,
     pub anc: ANC,
     pub srv: SRV,
     pub log: LOG,
-    pub root_rules: <RULES as DirRules>::FileRules,
-    pub work: WorkStack<Task<Context<CLI,ANC,SRV,LOG,RULES>>>,
-    pub tasks: UnqueuedTasks<Task<Context<CLI,ANC,SRV,LOG,RULES>>>,
+    pub root_rules: FileEngine,
+    pub work: WorkStack<Task<Self>>,
+    pub tasks: UnqueuedTasks<Task<Self>>,
 }
 
 /// Define an `impl` block on `Context`.
 ///
 /// Stylistically, we usually don't indent the body of this macro, since the
 /// methods inside aren't _really_ supposed to be members of `Context`.
+// TODO This is pretty awful and prevents rustfmt from doing its job
 macro_rules! def_context_impl {
     ($($t:tt)*) => {
         impl<CLI : $crate::replica::Replica,
@@ -105,9 +105,8 @@ macro_rules! def_context_impl {
              SRV : $crate::replica::Replica<
                        TransferIn = CLI::TransferOut,
                        TransferOut = CLI::TransferIn>,
-             LOG : $crate::log::Logger,
-             RULES : $crate::rules::DirRules + 'static>
-        $crate::reconcile::Context<CLI, ANC, SRV, LOG, RULES> {
+             LOG : $crate::log::Logger>
+        $crate::reconcile::Context<CLI, ANC, SRV, LOG> {
             $($t)*
         }
     }
@@ -132,7 +131,7 @@ macro_rules! srv_dir { () => { <SRV as $crate::replica::Replica>::Directory } }
 /// type.
 macro_rules! dir_ctx { () => {
     $crate::reconcile::context::DirContext<cli_dir!(), anc_dir!(),
-                                           srv_dir!(), RULES>
+                                           srv_dir!()>
 } }
 
 /// Directory-specific context information for a single replica.
@@ -144,7 +143,7 @@ pub struct SingleDirContext<T> {
 }
 
 /// Directory-specific context information.
-pub struct DirContext<CD,AD,SD,RU> {
+pub struct DirContext<CD,AD,SD> {
     pub cli: SingleDirContext<CD>,
     pub anc: SingleDirContext<AD>,
     pub srv: SingleDirContext<SD>,
@@ -152,10 +151,10 @@ pub struct DirContext<CD,AD,SD,RU> {
     /// asciibetical order so that informational messages can give a rough idea
     /// of progress.
     pub todo: BinaryHeap<Reversed<OsString>>,
-    pub rules: RU,
+    pub rules: DirEngine,
 }
 
-impl<CD,AD,SD,RU> DirContext<CD,AD,SD,RU> {
+impl<CD,AD,SD> DirContext<CD,AD,SD> {
     pub fn name_in_use(&self, name: &OsStr) -> bool {
         self.cli.files.contains_key(name) ||
             self.anc.files.contains_key(name) ||

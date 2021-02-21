@@ -269,7 +269,7 @@ quick_error! {
 pub type Result<T> = result::Result<T, Error>;
 
 impl SyncRules {
-    pub fn single_mode(mode: SyncMode) -> SyncRules {
+    pub fn single_mode(mode: SyncMode, trust_client_unix_mode: bool) -> SyncRules {
         SyncRules {
             root_ix: 0,
             states: vec![
@@ -283,6 +283,7 @@ impl SyncRules {
                     conditions: vec![],
                     actions: vec![
                         Action::Mode(mode),
+                        Action::TrustClientUnixMode(trust_client_unix_mode),
                     ],
                 }
             ],
@@ -574,7 +575,6 @@ pub struct DirEngineBuilder {
     rules_matched: Vec<bool>,
 }
 
-
 impl SyncRules {
     fn apply_rules<F : Fn (&RuleState) -> &[usize],
                    M : Fn (usize) -> bool>(
@@ -636,11 +636,8 @@ impl SyncRules {
     }
 }
 
-impl DirRules for DirEngine {
-    type Builder = DirEngineBuilder;
-    type FileRules = FileEngine;
-
-    fn file(&self, file: File) -> FileEngine {
+impl DirEngine {
+    pub fn file(&self, file: File) -> FileEngine {
         let name = file.0.to_string_lossy();
 
         let mut new_state = self.state.clone();
@@ -669,20 +666,16 @@ impl FileEngine {
             state: EngineState::new(init_state),
         }
     }
-}
 
-impl FileRules for FileEngine {
-    type DirRules = DirEngine;
-
-    fn sync_mode(&self) -> SyncMode {
+    pub fn sync_mode(&self) -> SyncMode {
         self.state.mode
     }
 
-    fn trust_client_unix_mode(&self) -> bool {
+    pub fn trust_client_unix_mode(&self) -> bool {
         self.state.trust_client_unix_mode
     }
 
-    fn subdir(self) -> DirEngineBuilder {
+    pub fn subdir(self) -> DirEngineBuilder {
         let mut matched = Vec::new();
         matched.resize(self.rules.rules.len(), false);
 
@@ -694,10 +687,8 @@ impl FileRules for FileEngine {
     }
 }
 
-impl DirRulesBuilder for DirEngineBuilder {
-    type DirRules = DirEngine;
-
-    fn contains(&mut self, file: File) {
+impl DirEngineBuilder {
+    pub fn contains(&mut self, file: File) {
         let name = file.0.to_string_lossy();
         let path = format!("{}/{}", self.state.path, name);
 
@@ -706,7 +697,7 @@ impl DirRulesBuilder for DirEngineBuilder {
         }
     }
 
-    fn build(self) -> DirEngine {
+    pub fn build(self) -> DirEngine {
         let mut state = self.state;
         let rules = self.rules;
         let rules_matched = self.rules_matched;
@@ -727,7 +718,6 @@ mod test {
 
     use crate::defs::*;
     use crate::defs::test_helpers::*;
-    use crate::rules::defs::*;
     use super::*;
     use super::{Condition,Action,StopType};
 
