@@ -80,12 +80,11 @@ impl<T> UnqueuedTasks<T> {
 pub struct Context<CLI : Replica,
                    ANC : Replica + NullTransfer + Condemn,
                    SRV : Replica<TransferIn = CLI::TransferOut,
-                                 TransferOut = CLI::TransferIn>,
-                   LOG : Logger> {
+                                 TransferOut = CLI::TransferIn>> {
     pub cli: CLI,
     pub anc: ANC,
     pub srv: SRV,
-    pub log: LOG,
+    pub log: Box<dyn Logger + Send + Sync>,
     pub root_rules: FileEngine,
     pub work: WorkStack<Task<Self>>,
     pub tasks: UnqueuedTasks<Task<Self>>,
@@ -104,9 +103,8 @@ macro_rules! def_context_impl {
                    $crate::replica::Condemn,
              SRV : $crate::replica::Replica<
                        TransferIn = CLI::TransferOut,
-                       TransferOut = CLI::TransferIn>,
-             LOG : $crate::log::Logger>
-        $crate::reconcile::Context<CLI, ANC, SRV, LOG> {
+                       TransferOut = CLI::TransferIn>>
+        $crate::reconcile::Context<CLI, ANC, SRV> {
             $($t)*
         }
     }

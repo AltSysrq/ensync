@@ -77,6 +77,12 @@ pub trait Logger {
     fn log(&self, level: LogLevel, what: &Log);
 }
 
+impl<T: Logger + ?Sized> Logger for Box<T> {
+    fn log(&self, level: LogLevel, what: &Log) {
+        (**self).log(level, what);
+    }
+}
+
 #[cfg(test)]
 mod println_logger {
     use super::*;

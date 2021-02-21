@@ -762,13 +762,13 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
             cli: DryRunReplica(client_replica),
             anc: DryRunReplica(ancestor_replica),
             srv: DryRunReplica(server_replica),
-            log: log,
+            log: Box::new(log),
             root_rules: rules::engine::FileEngine::new(rules),
             work: work_stack::WorkStack::new(),
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads, prepare_type, config, true)
+        run_sync(context, level, num_threads, prepare_type, config, true, spin)
     } else {
         let watch_handle = Arc::new(WatchHandle::default());
         if watch {
@@ -783,14 +783,14 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
             cli: client_replica,
             anc: ancestor_replica,
             srv: server_replica,
-            log: log,
+            log: Box::new(log),
             root_rules: rules::engine::FileEngine::new(rules),
             work: work_stack::WorkStack::new(),
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
         run_sync(context.clone(), level, num_threads, prepare_type,
-                 config, true)?;
+                 config, true, spin)?;
 
         if watch && !interrupt::is_interrupted() && level >= EDIT {
             perrln!("Ensync will now continue to monitor for changes.\n\
@@ -814,7 +814,7 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
                          PrepareType::Fast
                      } else {
                          PrepareType::Watched
-                     }, config, false)?;
+                     }, config, false, spin)?;
         } }
 
         Ok(())
@@ -825,9 +825,9 @@ fn run_sync<CLI : Replica + 'static,
             ANC : Replica + NullTransfer + Condemn + 'static,
             SRV : Replica<TransferIn = CLI::TransferOut,
                           TransferOut = CLI::TransferIn> + 'static>
-    (context: Arc<reconcile::Context<CLI, ANC, SRV, LoggerImpl>>,
+    (context: Arc<reconcile::Context<CLI, ANC, SRV>>,
      level: LogLevel, num_threads: u32, prepare_type: PrepareType,
-     config: &Config, show_messages: bool)
+     config: &Config, show_messages: bool, spin: bool)
     -> Result<()>
 {
     macro_rules! spawn {
@@ -895,7 +895,7 @@ fn run_sync<CLI : Replica + 'static,
     for thread in threads {
         let _ = thread.join().expect("Child thread panicked");
     }
-    if context.log.spin.is_some() {
+    if spin {
         if show_messages {
             perrln!("");
         } else {

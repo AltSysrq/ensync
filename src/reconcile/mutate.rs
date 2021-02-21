@@ -524,8 +524,7 @@ pub mod test {
     }
 
     pub type TContext =
-        Context<MemoryReplica, MemoryReplica, MemoryReplica,
-                PrintlnLogger>;
+        Context<MemoryReplica, MemoryReplica, MemoryReplica>;
     pub type TDirContext =
         DirContext<<MemoryReplica as Replica>::Directory,
                    <MemoryReplica as Replica>::Directory,
@@ -556,7 +555,7 @@ pub mod test {
                 cli: self.client,
                 anc: self.ancestor,
                 srv: self.server,
-                log: self.logger,
+                log: Box::new(self.logger),
                 root_rules: self.rules.file(File(OsStr::new(""), &FileData::Special)),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
@@ -570,7 +569,7 @@ pub mod test {
                 cli: mem::replace(&mut self.client, MemoryReplica::empty()),
                 anc: mem::replace(&mut self.ancestor, MemoryReplica::empty()),
                 srv: mem::replace(&mut self.server, MemoryReplica::empty()),
-                log: self.logger.clone(),
+                log: Box::new(self.logger.clone()),
                 root_rules: self.rules.file(File(OsStr::new(""), &FileData::Special)),
                 work: WorkStack::new(),
                 tasks: UnqueuedTasks::new(),
