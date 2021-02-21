@@ -19,6 +19,7 @@
 use std::ffi::{OsStr, OsString};
 use std::os::unix::net::UnixDatagram;
 use std::sync::{Mutex, Weak};
+use std::time::Duration;
 
 use crate::defs::*;
 use crate::errors::Result;
@@ -370,7 +371,14 @@ pub trait Watch: Replica {
     /// as clean. When such directories are changed, they are marked as dirty
     /// and the watch is notified.
     ///
+    /// If the backend has intrinsic debouncing, `debounce` gives the duration
+    /// of that debouncing.
+    ///
     /// These notifications continue until the `WatchHandle` or the `Replica`
     /// is dropped.
-    fn watch(&mut self, watch: Weak<WatchHandle>) -> Result<()>;
+    fn watch(
+        &mut self,
+        watch: Weak<WatchHandle>,
+        debounce: Duration,
+    ) -> Result<()>;
 }

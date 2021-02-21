@@ -263,6 +263,11 @@ struct SyncSubcommand {
     #[structopt(short, long, conflicts_with = "dry_run")]
     watch: bool,
 
+    /// Before responding to a filesystem notification (as part of `--watch`),
+    /// delay this many seconds to wait for the filesystem to be quiescent.
+    #[structopt(long, default_value = "30")]
+    quiescence: u64,
+
     /// In conjunction with `--watch`, if an error occurs, back off for the
     /// given number of seconds, then attempt to restart the server process and
     /// resume operations. If this flag is given, `ensync sync` should not
@@ -1112,7 +1117,7 @@ fn main_impl() -> Result<()> {
                     &sc.spin,
                     sc.include_ancestors,
                     sc.dry_run,
-                    sc.watch,
+                    sc.watch.then(|| sc.quiescence),
                     num_threads,
                     &sc.strategy,
                     sc.override_mode,

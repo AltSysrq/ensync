@@ -6,6 +6,9 @@
 - All commands which operate on the server now take a `-k`/`--key` argument
   that can override the configuration's passphrase.
 
+- `ensync sync` now supports a `--quiescence` argument which can adjust the
+  debouncing period for local FS events in conjunction with `--watch`.
+
 # 0.2.5
 
 - Add `reset-server` and `reset-client` sync mode aliases.

@@ -21,6 +21,7 @@ use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 use std::u32;
 
 use flate2;
@@ -374,7 +375,7 @@ impl<S: Storage + ?Sized + 'static> Replica for ServerReplica<S> {
 }
 
 impl<S: Storage + ?Sized> Watch for ServerReplica<S> {
-    fn watch(&mut self, watch: Weak<WatchHandle>) -> Result<()> {
+    fn watch(&mut self, watch: Weak<WatchHandle>, _: Duration) -> Result<()> {
         if self.watcher.is_some() {
             return Err(ErrorKind::AlreadyWatching.into());
         }
@@ -1604,13 +1605,15 @@ mod test {
         .unwrap();
         replica1.create_root().unwrap();
 
-        let watch = Arc::new(WatchHandle::default());
+        let watch = Arc::new(WatchHandle::new().unwrap());
         watch.check_dirty();
         assert!(!watch.check_dirty());
         watch.check_context_lost();
         assert!(!watch.check_context_lost());
 
-        replica1.watch(Arc::downgrade(&watch)).unwrap();
+        replica1
+            .watch(Arc::downgrade(&watch), Duration::new(0, 0))
+            .unwrap();
 
         {
             replica1.prepare(PrepareType::Fast).unwrap();

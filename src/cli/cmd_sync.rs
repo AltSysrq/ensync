@@ -766,7 +766,7 @@ pub fn run(
     spin: &str,
     include_ancestors: bool,
     dry_run: bool,
-    watch: bool,
+    watch: Option<u64>,
     num_threads: u32,
     prepare_type: &str,
     override_mode: Option<rules::SyncMode>,
@@ -911,12 +911,14 @@ pub fn run(
         )
     } else {
         let watch_handle = Arc::new(WatchHandle::new()?);
-        if watch {
+        if let Some(seconds) = watch {
+            let debounce = Duration::new(seconds, 0);
+
             client_replica
-                .watch(Arc::downgrade(&watch_handle))
+                .watch(Arc::downgrade(&watch_handle), debounce)
                 .chain_err(|| "Error setting watch on client replica")?;
             server_replica
-                .watch(Arc::downgrade(&watch_handle))
+                .watch(Arc::downgrade(&watch_handle), debounce)
                 .chain_err(|| "Error setting watch on server replica")?;
             interrupt::notify_on_signal(watch_handle.clone());
         }
@@ -941,7 +943,7 @@ pub fn run(
             spin,
         )?;
 
-        if watch && !interrupt::is_interrupted() && level >= EDIT {
+        if watch.is_some() && !interrupt::is_interrupted() && level >= EDIT {
             perrln!(
                 "Ensync will now continue to monitor for changes.\n\
                      Note that it may take a minute or so for changes \
@@ -950,12 +952,12 @@ pub fn run(
             );
         }
 
-        if watch {
+        if watch.is_some() {
             while !interrupt::is_interrupted() {
                 watch_handle.wait();
-                // Sleep for a few seconds in case there are multiple notifications
+                // Sleep for a seconds in case there are multiple notifications
                 // coming in, but bail immediately if we're responding to ^C.
-                for _ in 0..50 {
+                for _ in 0..10 {
                     if interrupt::is_interrupted() {
                         break;
                     }

@@ -1308,18 +1308,17 @@ impl WatcherStatus {
 }
 
 impl Watch for PosixReplica {
-    fn watch(&mut self, watch: Weak<WatchHandle>) -> Result<()> {
-        #[cfg(test)]
-        const DEBOUNCE_SECS: u64 = 3;
-        #[cfg(not(test))]
-        const DEBOUNCE_SECS: u64 = 30;
-
+    fn watch(
+        &mut self,
+        watch: Weak<WatchHandle>,
+        debounce: Duration,
+    ) -> Result<()> {
         if self.watcher.is_some() {
             return Err(ErrorKind::AlreadyWatching.into());
         }
 
         let (tx, rx) = mpsc::channel();
-        let mut notifier = notify::watcher(tx, Duration::new(DEBOUNCE_SECS, 0))
+        let mut notifier = notify::watcher(tx, debounce)
             .chain_err(|| "Error allocating filesystem notifier")?;
         notifier
             .watch(&self.config.root, notify::RecursiveMode::Recursive)
@@ -2655,13 +2654,15 @@ mod test {
     fn watch_notices_when_dir_changed() {
         let (rootdir, _private, mut replica) = new_simple();
 
-        let watch = Arc::new(WatchHandle::default());
+        let watch = Arc::new(WatchHandle::new().unwrap());
         watch.check_dirty();
         watch.check_context_lost();
         assert!(!watch.check_dirty());
         assert!(!watch.check_context_lost());
 
-        replica.watch(Arc::downgrade(&watch)).unwrap();
+        replica
+            .watch(Arc::downgrade(&watch), Duration::new(3, 0))
+            .unwrap();
 
         {
             replica.prepare(PrepareType::Fast).unwrap();
