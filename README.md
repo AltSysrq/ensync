@@ -63,10 +63,8 @@ Supported platforms:
 
 ### Status
 
-Beta. The application itself has proven fairly stable in testing. The protocol
-between the client and server (when using a separate-process server) may still
-be subject to incompatible change. The on-disk format will definitely not be
-changed in a backwards-incompatible way.
+Stable. The application has seen active use for years without substantial
+issue.
 
 ### Contents
 
