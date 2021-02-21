@@ -3,6 +3,9 @@
 - Fix `ensync setup` falsely identifying UNIX file systems as not supporting
   UNIX permissions.
 
+- All commands which operate on the server now take a `-k`/`--key` argument
+  that can override the configuration's passphrase.
+
 # 0.2.5
 
 - Add `reset-server` and `reset-client` sync mode aliases.

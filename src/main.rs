@@ -160,8 +160,10 @@ exist. The path in <remote-path> will be created if it does not already \
 exist."
 ))]
 struct SetupSubcommand {
-    #[structopt(flatten)]
-    config: ConfigArg,
+    /// Path in the local filesystem where ensync's configuration and state
+    /// will be stored. The path must not already exist.
+    #[structopt(parse(from_os_str))]
+    config: PathBuf,
 
     /// How to get the passphrase. Defaults to `prompt` to read it
     /// interactively. Use `string:xxx` to use a fixed value, `file:/some/path`
@@ -464,8 +466,6 @@ struct KeyGroupCreateSubcommand {
     config: ConfigArg,
 
     #[structopt(flatten)]
-    alt: AltKeyArg,
-    #[structopt(flatten)]
     root: RootKeyArg,
 
     /// The name(s) of the group(s) to create.
@@ -546,7 +546,7 @@ struct KeyGroupDisassocSubcommand {
     root: RootKeyArg,
 
     /// The key from which to remove the listed group(s).
-    key: String,
+    key_name: String,
 
     /// The name(s) of the group(s) to remove.
     #[structopt(required = true)]
@@ -839,6 +839,13 @@ struct ConfigArg {
     /// Path to ensync configuration and local data.
     #[structopt(parse(from_os_str))]
     config: PathBuf,
+
+    /// If set, any time a passphrase would be obtained according to the
+    /// configuration, use this value instead.
+    /// This argument is in the same format as the config. e.g., `prompt` or
+    /// `file:/some/path`.
+    #[structopt(short, long)]
+    key: Option<PassphraseConfig>,
 }
 
 #[derive(StructOpt)]
@@ -881,15 +888,6 @@ struct NewKeyArg {
     /// `prompt` or `file:/some/path`.
     #[structopt(short, long, default_value = "prompt")]
     new: PassphraseConfig,
-}
-
-#[derive(StructOpt)]
-struct AltKeyArg {
-    /// Use this value instead of `passphrase` from the config to get the
-    /// primary passphrase. This argument is in the same format as the config.
-    /// e.g., `prompt` or `file:/some/path`.
-    #[structopt(short, long)]
-    key: Option<PassphraseConfig>,
 }
 
 #[derive(StructOpt)]
@@ -957,8 +955,11 @@ fn main_impl() -> Result<()> {
 
     macro_rules! set_up {
         ($sc:ident, $config:ident) => {
-            let $config = cli::config::Config::read(&$sc.config.config)
+            let mut $config = cli::config::Config::read(&$sc.config.config)
                 .chain_err(|| "Could not read configuration")?;
+            if let Some(ref key) = $sc.config.key {
+                $config.passphrase = key.to_owned();
+            }
         };
 
         ($sc:ident, $config:ident, $storage:ident) => {
@@ -1033,10 +1034,9 @@ fn main_impl() -> Result<()> {
 
         Command::Key(KeySubcommand::Group(KeyGroupSubcommand::Create(sc))) => {
             set_up!(sc, config, storage);
-            let key = passphrase_or_config!(sc.alt.key, config);
             cli::cmd_keymgmt::create_group(
                 &*storage,
-                &key,
+                &config.passphrase,
                 &sc.root.root,
                 sc.group.into_iter(),
             )
@@ -1060,7 +1060,7 @@ fn main_impl() -> Result<()> {
             set_up!(sc, config, storage);
             cli::cmd_keymgmt::disassoc_group(
                 &*storage,
-                &sc.key,
+                &sc.key_name,
                 &sc.root.root,
                 sc.group.into_iter(),
             )
@@ -1078,7 +1078,7 @@ fn main_impl() -> Result<()> {
 
         Command::Setup(sc) => cli::cmd_setup::run(
             &sc.key,
-            sc.config.config,
+            sc.config,
             sc.local_path,
             sc.remote_path,
         ),
