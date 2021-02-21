@@ -745,7 +745,7 @@ fn unix_permissions_survive<P: AsRef<Path>>(path: P) -> Result<bool> {
     // to be doing here.
     fs::set_permissions(f.path(), fs::Permissions::from_mode(0o111))?;
     let md = fs::symlink_metadata(f.path())?;
-    Ok(0o111 == md.permissions().mode())
+    Ok(0o111 == md.permissions().mode() & 0o777)
 }
 
 #[cfg(test)]
