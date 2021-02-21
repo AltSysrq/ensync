@@ -24,7 +24,6 @@ use std::sync::Mutex;
 
 use crate::defs::*;
 use crate::work_stack::WorkStack;
-use crate::replica::*;
 use crate::log::Logger;
 use crate::rules::engine::{FileEngine, DirEngine};
 
@@ -77,10 +76,7 @@ impl<T> UnqueuedTasks<T> {
     }
 }
 
-pub struct Context<CLI : Replica,
-                   ANC : Replica + NullTransfer + Condemn,
-                   SRV : Replica<TransferIn = CLI::TransferOut,
-                                 TransferOut = CLI::TransferIn>> {
+pub struct Context<CLI, ANC, SRV> {
     pub cli: CLI,
     pub anc: ANC,
     pub srv: SRV,
@@ -90,46 +86,17 @@ pub struct Context<CLI : Replica,
     pub tasks: UnqueuedTasks<Task<Self>>,
 }
 
-/// Define an `impl` block on `Context`.
-///
-/// Stylistically, we usually don't indent the body of this macro, since the
-/// methods inside aren't _really_ supposed to be members of `Context`.
-// TODO This is pretty awful and prevents rustfmt from doing its job
-macro_rules! def_context_impl {
-    ($($t:tt)*) => {
-        impl<CLI : $crate::replica::Replica,
-             ANC : $crate::replica::Replica +
-                   $crate::replica::NullTransfer +
-                   $crate::replica::Condemn,
-             SRV : $crate::replica::Replica<
-                       TransferIn = CLI::TransferOut,
-                       TransferOut = CLI::TransferIn>>
-        $crate::reconcile::Context<CLI, ANC, SRV> {
-            $($t)*
-        }
-    }
-}
-
-def_context_impl! {
+impl<CLI, ANC, SRV> Context<CLI, ANC, SRV> {
     pub fn run_work(&self) {
         self.work.run(|task| task.invoke(self));
     }
 }
 
-/// Within `def_context_impl!`, expand to the type of the client-side
-/// directory.
-macro_rules! cli_dir { () => { <CLI as $crate::replica::Replica>::Directory } }
-/// Within `def_context_impl!`, expand to the type of the ancestor-side
-/// directory.
-macro_rules! anc_dir { () => { <ANC as $crate::replica::Replica>::Directory } }
-/// Within `def_context_impl!`, expand to the type of the server-side
-/// directory.
-macro_rules! srv_dir { () => { <SRV as $crate::replica::Replica>::Directory } }
 /// Within `def_context_impl!`, expand to the corresponding `DirContext`
 /// type.
 macro_rules! dir_ctx { () => {
-    $crate::reconcile::context::DirContext<cli_dir!(), anc_dir!(),
-                                           srv_dir!()>
+    $crate::reconcile::context::DirContext<CLI::Directory, ANC::Directory,
+                                           SRV::Directory>
 } }
 
 /// Directory-specific context information for a single replica.

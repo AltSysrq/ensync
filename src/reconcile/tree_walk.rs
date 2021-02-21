@@ -26,7 +26,7 @@ use crate::defs::*;
 use crate::errors::*;
 use crate::interrupt::is_interrupted;
 use crate::log::{self,Log,Logger};
-use crate::replica::{Replica,ReplicaDirectory};
+use crate::replica::{Replica,ReplicaDirectory, Condemn, NullTransfer};
 use crate::rules::engine::{DirEngineBuilder, FileEngine};
 use super::context::*;
 use super::compute::*;
@@ -77,7 +77,9 @@ impl Drop for DirState {
 
 pub type DirStateRef = Arc<DirState>;
 
-def_context_impl! {
+impl<CLI: Replica, ANC: Replica + NullTransfer + Condemn,
+     SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>>
+Context<CLI, ANC, SRV> {
 /// Processes a single file.
 ///
 /// That is, this reads the current file, decides what to do with it, then
@@ -164,7 +166,9 @@ fn read_dir_contents<R : Replica, LOG : Logger>(
     Ok(ret)
 }
 
-def_context_impl! {
+impl<CLI: Replica, ANC: Replica + NullTransfer + Condemn,
+     SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>>
+Context<CLI, ANC, SRV> {
 /// Processes a directory.
 ///
 /// Reads the contents of all three replicas, constructs the directory context,
@@ -178,9 +182,9 @@ def_context_impl! {
 /// to simplify control flow.
 fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
     &self,
-    mut cli_dir: cli_dir!(),
-    mut anc_dir: anc_dir!(),
-    mut srv_dir: srv_dir!(),
+    mut cli_dir: CLI::Directory,
+    mut anc_dir: ANC::Directory,
+    mut srv_dir: SRV::Directory,
     mut rules_builder: DirEngineBuilder,
     on_complete_supplier: F) -> Result<()>
 {
@@ -259,9 +263,9 @@ pub fn check_stop(&self) -> Result<()> {
 /// not.
 fn process_dir<F : FnOnce (dir_ctx!(), DirStateRef) -> Task<Self>>(
     &self,
-    cli_dir: cli_dir!(),
-    anc_dir: anc_dir!(),
-    srv_dir: srv_dir!(),
+    cli_dir: CLI::Directory,
+    anc_dir: ANC::Directory,
+    srv_dir: SRV::Directory,
     rules_builder: DirEngineBuilder,
     on_complete_suppvier: F) -> bool
 {
@@ -288,7 +292,9 @@ fn try_chdir<R : Replica, LOG : Logger>(r: &R, parent: &R::Directory,
     }
 }
 
-def_context_impl! {
+impl<CLI: Replica, ANC: Replica + NullTransfer + Condemn,
+     SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>>
+Context<CLI, ANC, SRV> {
 /// Queues a task to recurse into the given directory.
 ///
 /// When the subdirectory completes, it is marked clean if its `success` flag
@@ -336,7 +342,7 @@ fn recurse_into_dir(
 /// if this was the last task.
 fn recurse_and_then<F : FnOnce (&Self, dir_ctx!(), &DirStateRef)
                                 -> bool + Send + 'static>(
-    &self, cli_dir: cli_dir!(), anc_dir: anc_dir!(), srv_dir: srv_dir!(),
+    &self, cli_dir: CLI::Directory, anc_dir: ANC::Directory, srv_dir: SRV::Directory,
     file_rules: FileEngine,
     state: DirStateRef,
     on_success: F)
@@ -390,7 +396,9 @@ fn mark_clean<R : Replica, L : Logger>(
     }
 }
 
-def_context_impl! {
+impl<CLI: Replica, ANC: Replica + NullTransfer + Condemn,
+     SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>>
+Context<CLI, ANC, SRV> {
 /// Finishes a subtask of a directory.
 ///
 /// The flags of `state` are ANDed with those from `substate`. `state.pending`
@@ -471,7 +479,9 @@ fn try_rmdir<R : Replica, LOG : Logger>(r: &R, dir: &mut R::Directory,
     }
 }
 
-def_context_impl! {
+impl<CLI: Replica, ANC: Replica + NullTransfer + Condemn,
+     SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>>
+Context<CLI, ANC, SRV> {
 fn delete_or_mark_clean(&self, dir: &mut dir_ctx!(),
                         state: &DirStateRef) -> bool {
     let dir_path = dir.cli.dir.full_path().to_owned();

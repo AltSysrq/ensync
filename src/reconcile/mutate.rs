@@ -24,7 +24,7 @@ use crate::defs::*;
 use crate::errors::*;
 use crate::log;
 use crate::log::{Logger,ReplicaSide,ErrorOperation,Log};
-use crate::replica::{Replica, NullTransfer};
+use crate::replica::{Replica, NullTransfer, Condemn};
 use super::compute::{Reconciliation,ReconciliationSide,gen_alternate_name};
 use super::compute::SplitAncestorState;
 use super::context::*;
@@ -322,7 +322,9 @@ fn apply_use<DST : Replica,
     }
 }
 
-def_context_impl! {
+impl<CLI: Replica, ANC: Replica + NullTransfer + Condemn,
+     SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>>
+Context<CLI, ANC, SRV> {
 /// Applies the determined reconciliation for one file.
 ///
 /// Returns whether recursion is necessary to process this file, and if so,
