@@ -9,6 +9,9 @@
 - `ensync sync` now supports a `--quiescence` argument which can adjust the
   debouncing period for local FS events in conjunction with `--watch`.
 
+- `ensync sync` now detects if the internal state was improperly copied from
+  another machine.
+
 # 0.2.5
 
 - Add `reset-server` and `reset-client` sync mode aliases.

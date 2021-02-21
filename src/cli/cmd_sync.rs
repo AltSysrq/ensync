@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use libc::isatty;
 use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::collections::HashSet;
@@ -24,11 +23,14 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io::{self, stderr, stdout, Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
+
+use libc::isatty;
 
 use crate::ancestor::*;
 use crate::cli::config::Config;
@@ -775,6 +777,8 @@ pub fn run(
     // prompt for the passphrase again.
     key_chain: &mut Option<Arc<KeyChain>>,
 ) -> Result<()> {
+    check_for_copied_private_dir(&config.private_root)?;
+
     let colour = match colour {
         "never" => false,
         "always" => true,
@@ -1109,6 +1113,46 @@ fn run_sync<
         if level >= ERROR {
             perrln!("Server cleanup failed: {}", err);
         }
+    }
+
+    Ok(())
+}
+
+fn check_for_copied_private_dir(private_dir: &Path) -> Result<()> {
+    let ancestor_path = private_dir.join("ancestor.sqlite");
+    let expected_content = match ancestor_path.metadata() {
+        Err(_) => return Ok(()),
+        Ok(md) => format!("{}:{}", md.dev(), md.ino()),
+    };
+
+    let marker_path = private_dir.join("fsid");
+    if let Ok(marker_content) = fs::read(&marker_path) {
+        if &marker_content[..] != expected_content.as_bytes() {
+            perrln!(
+                "\
+It looks like the ensync internal state was copied from somewhere else.
+Aborting syncing since this could lead to catastrophic results.
+
+You should probably delete {}
+and then run `ensync sync` again. At worst, this will simply result in a much
+slower and more conservative sync.
+
+If you copied {}
+from another machine in its entirety, please only copy the `config.toml` file
+in the future.
+
+If you are sure that the internal state corresponds to the state of your local
+file system, you can instead disable this safety check by deleting
+{}",
+                private_dir.display(),
+                private_dir.parent().unwrap().display(),
+                marker_path.display()
+            );
+
+            return Err(ErrorKind::SanityCheckFailed.into());
+        }
+    } else {
+        let _ = fs::write(&marker_path, expected_content.as_bytes());
     }
 
     Ok(())

@@ -299,6 +299,9 @@ error_chain! {
             description("Group not found in key store")
             display("Group '{}' not found in key store", name)
         }
+        SanityCheckFailed {
+            description("Sanity check failed")
+        }
     }
 }
 
