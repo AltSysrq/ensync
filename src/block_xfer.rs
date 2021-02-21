@@ -276,9 +276,6 @@ mod test {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::defs::*;
-    #[allow(unused_imports)]
-    use crate::errors::*;
 
     fn to_blocklist(
         text: &[u8],

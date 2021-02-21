@@ -706,10 +706,6 @@ impl Condemn for MemoryReplica {
 mod test {
     use super::*;
     use crate::defs::test_helpers::*;
-    use crate::defs::*;
-    #[allow(unused_imports)]
-    use crate::errors::*;
-    use crate::replica::*;
 
     fn init() -> (MemoryReplica, DirHandle) {
         let replica = MemoryReplica::empty();

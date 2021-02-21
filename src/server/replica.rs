@@ -413,10 +413,6 @@ mod test {
     use super::*;
     use crate::block_xfer;
     use crate::defs::test_helpers::*;
-    use crate::defs::*;
-    #[allow(unused_imports)]
-    use crate::errors::*;
-    use crate::replica::*;
     use crate::server::crypt::KeyChain;
     use crate::server::local_storage::LocalStorage;
 

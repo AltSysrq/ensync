@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "ensync"
-version = "0.2.5"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "clap",

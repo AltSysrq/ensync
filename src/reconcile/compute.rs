@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -457,10 +457,6 @@ mod test {
 
     use super::*;
     use crate::defs::test_helpers::*;
-    #[allow(unused_imports)]
-    use crate::defs::*;
-    #[allow(unused_imports)]
-    use crate::rules::*;
 
     #[test]
     fn simple_gen_alternate_name() {

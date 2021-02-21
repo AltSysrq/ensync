@@ -750,9 +750,7 @@ mod test {
 
     use super::super::mutate::test::*;
     use super::*;
-    use crate::defs::*;
     use crate::memory_replica::*;
-    use crate::replica::*;
     use crate::rules::engine::DirEngine;
     use crate::rules::{HalfSyncMode, SyncMode, SyncModeSetting};
 

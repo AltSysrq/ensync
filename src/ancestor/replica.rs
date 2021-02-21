@@ -444,10 +444,6 @@ impl Condemn for AncestorReplica {
 mod test {
     use super::*;
     use crate::defs::test_helpers::*;
-    use crate::defs::*;
-    #[allow(unused_imports)]
-    use crate::errors::*;
-    use crate::replica::*;
 
     fn new() -> (AncestorReplica, DirHandle) {
         let replica = AncestorReplica::open(":memory:").unwrap();

@@ -35,8 +35,8 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::thread;
 use std::time::Duration;
 
-#[allow(unused_imports)] use crate::defs::*;
-#[allow(unused_imports)] use crate::server::storage::*;
+use crate::defs::*;
+use crate::server::storage::Storage;
 
 macro_rules! init {
     ($dir:ident, $storage:ident) => {

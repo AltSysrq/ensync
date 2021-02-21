@@ -1418,11 +1418,7 @@ mod test {
     use super::*;
     use crate::block_xfer;
     use crate::defs::test_helpers::*;
-    use crate::defs::*;
-    #[allow(unused_imports)]
-    use crate::errors::*;
     use crate::posix::set_mtime_path;
-    use crate::replica::*;
 
     static SECRET: &'static str = "secret";
     const BLOCK_SZ: usize = 4;

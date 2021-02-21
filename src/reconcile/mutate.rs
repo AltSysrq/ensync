@@ -676,8 +676,6 @@ pub mod test {
 
     use super::super::compute::SplitAncestorState;
     use super::super::compute::{Reconciliation, ReconciliationSide};
-    #[allow(unused_imports)]
-    use super::super::context::*;
     use super::*;
     use super::{replace_ancestor, replace_replica, try_rename_replica};
 

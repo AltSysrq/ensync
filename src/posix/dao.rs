@@ -466,7 +466,6 @@ mod test {
 
     use super::*;
     use crate::defs::test_helpers::*;
-    use crate::defs::*;
 
     fn new() -> Dao {
         Dao::open(":memory:").unwrap()

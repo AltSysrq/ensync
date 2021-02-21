@@ -603,8 +603,6 @@ pub fn list_keys<S: Storage + ?Sized>(storage: &S) -> Result<Vec<KeyInfo>> {
 #[cfg(test)]
 mod test {
     use super::*;
-    #[allow(unused_imports)]
-    use crate::errors::*;
     use crate::server::local_storage::LocalStorage;
 
     fn no_prompt() -> Result<Vec<u8>> {

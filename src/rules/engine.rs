@@ -781,7 +781,6 @@ mod test {
     use super::*;
     use super::{Action, Condition, StopType};
     use crate::defs::test_helpers::*;
-    use crate::defs::*;
 
     fn parse_rules(s: &str) -> Result<SyncRules> {
         let table: toml::value::Table = toml::from_str(s).unwrap();
