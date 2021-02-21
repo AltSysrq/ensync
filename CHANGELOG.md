@@ -1,3 +1,8 @@
+# Unreleased
+
+- Fix `ensync setup` falsely identifying UNIX file systems as not supporting
+  UNIX permissions.
+
 # 0.2.5
 
 - Add `reset-server` and `reset-client` sync mode aliases.
