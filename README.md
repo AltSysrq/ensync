@@ -340,10 +340,25 @@ compression = "default"
 # blocks are only stored once on the server. A smaller block size may make this
 # deduplication more effective, but will slow some things down. This can be
 # omitted and will default to one megabyte. If you change it, take care that
-# the block size actually corresponds to what you intend to deduplicate;
-# generally, this should be a power of two since many things that have large
-# random-write files align their writes to sector or page boundaries.
-block_size = 1048576
+# the block size actually corresponds to what you intend to deduplicate.
+#
+# All ensync configurations for the same store MUST use the same block size, as
+# the block size influences the way ensync computes file identity. Two
+# configurations operating on the same files with different block sizes will
+# perceive edit conflicts where there are none. Differing configurations
+# operating on separate files simply fail to deduplicate files between each
+# other effectively.
+#
+# To change this value on an already-existing store, ensure your local files
+# are up to date with the server, then run `ensync sync` with
+# `--override-mode=reset-server --strategy=scrub`. This will re-upload all
+# files affected by the block size change.
+#
+# The default value is 512 bytes less than 1MB, which gives a reasonable
+# balance for most use cases and gives some headroom so that maximum-size
+# blocks do not ever so slightly spill into additional file system allocation
+# units.
+block_size = 1048064
 
 # Specifies the sync rules. This is described in detail in the "Advanced Sync
 # Rules" section. The example here is sufficient to apply one sync mode to
