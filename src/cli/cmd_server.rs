@@ -16,28 +16,27 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+use libc::isatty;
 use std::env;
 use std::fs;
-use std::io::{Write, stdin, stdout};
+use std::io::{stdin, stdout, Write};
 use std::path::Path;
-use libc::isatty;
 
 use crate::errors::*;
-use crate::server::{LocalStorage, rpc};
+use crate::server::{rpc, LocalStorage};
 
 pub const SHELL_IDENTITY: &'static str = "I am ensync shell";
 
-pub fn run<P : AsRef<Path>>(path: P) -> Result<()> {
+pub fn run<P: AsRef<Path>>(path: P) -> Result<()> {
     if 1 == unsafe { isatty(0) } || 1 == unsafe { isatty(1) } {
-        return Err("The `server` subcommand is not for interactive use"
-                   .into());
+        return Err("The `server` subcommand is not for interactive use".into());
     }
 
     let path = path.as_ref();
 
-    let storage = LocalStorage::open(path)
-        .chain_err(|| format!("Failed to set up storage at '{}'",
-                              path.display()))?;
+    let storage = LocalStorage::open(path).chain_err(|| {
+        format!("Failed to set up storage at '{}'", path.display())
+    })?;
     rpc::run_server_rpc(storage, stdin(), stdout())
         .chain_err(|| "Server-side RPC handler failed")
 }
@@ -54,8 +53,9 @@ pub fn shell() -> Result<()> {
         stdout().flush()?;
     }
 
-    let path = fs::read_link("ensync-server-dir").chain_err(
-        || "Failed to read symlink '~/ensync-server-dir' (needs to be a \
-            symlink to where `ensync server` should place files)")?;
+    let path = fs::read_link("ensync-server-dir").chain_err(|| {
+        "Failed to read symlink '~/ensync-server-dir' (needs to be a \
+            symlink to where `ensync server` should place files)"
+    })?;
     run(path)
 }

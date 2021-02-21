@@ -16,12 +16,12 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::ffi::{OsStr,OsString};
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use crate::defs::*;
-use crate::rules::*;
 use crate::log::ReplicaSide;
+use crate::rules::*;
 
 /// Generates a new string based on `orig` for which `in_use` returns `false`.
 ///
@@ -32,19 +32,19 @@ use crate::log::ReplicaSide;
 /// The extension is always preserved; eg, "foo.txt" may become "foo~1.txt".
 ///
 /// If `orig` is not valid UTF-8, invalid sequences may be clobbered.
-pub fn gen_alternate_name<F : Fn (&OsStr) -> bool>(
-    orig: &OsStr, in_use: F) -> OsString
-{
+pub fn gen_alternate_name<F: Fn(&OsStr) -> bool>(
+    orig: &OsStr,
+    in_use: F,
+) -> OsString {
     let orig_osstr: String = orig.to_string_lossy().into_owned();
     let mut path = PathBuf::new();
     path.set_file_name(orig_osstr);
 
-    let extension = path.extension().map_or_else(
-        || "".to_owned(),
-        |x| format!(".{}", x.to_string_lossy()));
+    let extension = path
+        .extension()
+        .map_or_else(|| "".to_owned(), |x| format!(".{}", x.to_string_lossy()));
 
-    let mut base = path.file_stem().unwrap()
-        .to_string_lossy().into_owned();
+    let mut base = path.file_stem().unwrap().to_string_lossy().into_owned();
     if let Some(tilde) = base.rfind('~') {
         base.truncate(tilde + 1);
     } else {
@@ -61,14 +61,18 @@ pub fn gen_alternate_name<F : Fn (&OsStr) -> bool>(
     // Not really reachable in practise; no physical system can have 2**64
     // files in a directory. (It would also take quite a while to count up to
     // this point.)
-    panic!("Unable to generate a new name for {}, every possible suffix \
-            in that directory is already in use", orig.to_string_lossy());
+    panic!(
+        "Unable to generate a new name for {}, every possible suffix \
+            in that directory is already in use",
+        orig.to_string_lossy()
+    );
 }
 /// When a reconciliation sources from or affects one side, indicates which
 /// replica is to be used.
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReconciliationSide {
-    Client, Server
+    Client,
+    Server,
 }
 
 impl From<ReconciliationSide> for ReplicaSide {
@@ -91,17 +95,17 @@ impl ReconciliationSide {
 
 /// Indicates how the ancestor replica is to be treated for
 /// `Reconciliation::Split`.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitAncestorState {
     /// Rename the ancestor to match the renamed replica (the new file will now
     /// look like a delete).
     Move,
     /// Remove the ancestor entirely (both files will look like creations).
-    Delete
+    Delete,
 }
 
 /// Describes the end-state of the reconciliation of a single file.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reconciliation {
     /// The client and server are in-sync. The ancestor should be updated to
     /// match, if needed. If the file is a directory, recurse if it is dirty on
@@ -132,7 +136,7 @@ pub enum Reconciliation {
 
 /// Indicates what kind of conflict, if any, was encountered during
 /// reconciliation.
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Conflict {
     /// No conflict.
     NoConflict,
@@ -144,7 +148,7 @@ pub enum Conflict {
     EditEdit(ConflictingEdit, ConflictingEdit),
 }
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConflictingEdit {
     /// Only the mode of the file was changed relative to the ancestor, or the
     /// server and client agree on content but not mode.
@@ -163,16 +167,22 @@ pub enum ConflictingEdit {
 /// This function will never suggest to simply replace a directory with
 /// something that is not a directory; it will instead indicate to rename the
 /// existing directory first via `Reconciliation::Split`.
-pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
-                             srv: Option<&FileData>, mode: SyncMode)
-                             -> (Reconciliation, Conflict) {
+pub fn choose_reconciliation(
+    cli: Option<&FileData>,
+    anc: Option<&FileData>,
+    srv: Option<&FileData>,
+    mode: SyncMode,
+) -> (Reconciliation, Conflict) {
+    use self::Conflict::*;
     use self::Reconciliation::*;
     use self::ReconciliationSide::*;
-    use self::Conflict::*;
 
-    fn replace(dst_file: Option<&FileData>, dst_side: ReconciliationSide,
-               src_file: Option<&FileData>, src_side: ReconciliationSide)
-               -> Reconciliation {
+    fn replace(
+        dst_file: Option<&FileData>,
+        dst_side: ReconciliationSide,
+        src_file: Option<&FileData>,
+        src_side: ReconciliationSide,
+    ) -> Reconciliation {
         match (dst_file, src_file) {
             // If either side is nonexistent, we don't need anything special
             (None, _) | (_, None) |
@@ -194,9 +204,12 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
     let use_server = replace(cli, Client, srv, Server);
     let use_client = replace(srv, Server, cli, Client);
 
-    fn create(away: HalfSyncMode, toward: HalfSyncMode,
-              propagate: Reconciliation, revert: Reconciliation)
-              -> (Reconciliation, Conflict) {
+    fn create(
+        away: HalfSyncMode,
+        toward: HalfSyncMode,
+        propagate: Reconciliation,
+        revert: Reconciliation,
+    ) -> (Reconciliation, Conflict) {
         // Creation. If create is enabled away from the file, create the file
         // on the other side. Else, if force delete is enabled toward the file,
         // delete it; otherwise, desync.
@@ -209,11 +222,15 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
         }
     }
 
-    fn delete(anc: &FileData, file: &FileData,
-              deleted_side: ReconciliationSide,
-              away: HalfSyncMode, toward: HalfSyncMode,
-              propagate: Reconciliation, revert: Reconciliation)
-              -> (Reconciliation, Conflict) {
+    fn delete(
+        anc: &FileData,
+        file: &FileData,
+        deleted_side: ReconciliationSide,
+        away: HalfSyncMode,
+        toward: HalfSyncMode,
+        propagate: Reconciliation,
+        revert: Reconciliation,
+    ) -> (Reconciliation, Conflict) {
         // Deletion. If delete is enabled towards the existing file, delete it.
         // Else, if force create is enabled away from it, create it on the
         // other side; otherwise, desync. There are two cases for resurrection
@@ -222,30 +239,40 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
         // Note that we don't count edit/delete conflicts as such when only the
         // mode has changed.
         if anc.matches_content(file) {
-            (if away.delete.on() {
-                propagate
-            } else if toward.create.force() {
-                revert
-            } else {
-                Unsync
-            }, NoConflict)
+            (
+                if away.delete.on() {
+                    propagate
+                } else if toward.create.force() {
+                    revert
+                } else {
+                    Unsync
+                },
+                NoConflict,
+            )
         } else {
-            (if toward.create.on() {
-                revert
-            } else if away.delete.force() {
-                propagate
-            } else if away.delete.on() || toward.update.on() {
-                Irreconcilable
-            } else {
-                Unsync
-            }, EditDelete(deleted_side))
+            (
+                if toward.create.on() {
+                    revert
+                } else if away.delete.force() {
+                    propagate
+                } else if away.delete.on() || toward.update.on() {
+                    Irreconcilable
+                } else {
+                    Unsync
+                },
+                EditDelete(deleted_side),
+            )
         }
     }
 
-    fn update(c: &FileData, a: Option<&FileData>, s: &FileData,
-              mode: SyncMode,
-              use_client: Reconciliation, use_server: Reconciliation)
-              -> (Reconciliation, Conflict) {
+    fn update(
+        c: &FileData,
+        a: Option<&FileData>,
+        s: &FileData,
+        mode: SyncMode,
+        use_client: Reconciliation,
+        use_server: Reconciliation,
+    ) -> (Reconciliation, Conflict) {
         use crate::rules::SyncModeSetting::*;
 
         // What to do on an edit/edit conflict that can't be reconciled
@@ -278,81 +305,109 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
                 s.newer_than(c)
             };
 
-            (if server_wins {
-                if mode.inbound.update.on() {
-                    use_server
-                } else if mode.outbound.update.force() {
-                    use_client
+            (
+                if server_wins {
+                    if mode.inbound.update.on() {
+                        use_server
+                    } else if mode.outbound.update.force() {
+                        use_client
+                    } else {
+                        // If we can't reconcile, simply leave as-is since it's
+                        // just metadata. We also don't report the conflict.
+                        InSync
+                    }
                 } else {
-                    // If we can't reconcile, simply leave as-is since it's
-                    // just metadata. We also don't report the conflict.
-                    InSync
-                }
-            } else {
-                if mode.outbound.update.on() {
-                    use_client
-                } else if mode.inbound.update.force() {
-                    use_server
-                } else {
-                    InSync
-                }
-            }, NoConflict)
+                    if mode.outbound.update.on() {
+                        use_client
+                    } else if mode.inbound.update.force() {
+                        use_server
+                    } else {
+                        InSync
+                    }
+                },
+                NoConflict,
+            )
 
         // No conflict if one side agrees with the ancestor. As with creates
         // and deletes, force settings revert the updated side instead. We
         // don't care about metadata (modified time) here.
         } else if a.map_or(false, |a| a.matches(c)) {
-            (if mode.inbound.update.on() {
-                use_server
-            } else if mode.outbound.update.force() {
-                use_client
-            } else {
-                Unsync
-            }, NoConflict)
+            (
+                if mode.inbound.update.on() {
+                    use_server
+                } else if mode.outbound.update.force() {
+                    use_client
+                } else {
+                    Unsync
+                },
+                NoConflict,
+            )
         } else if a.map_or(false, |a| a.matches(s)) {
-            (if mode.outbound.update.on() {
-                use_client
-            } else if mode.inbound.update.force() {
-                use_server
-            } else {
-                Unsync
-            }, NoConflict)
-        } else if a.map_or(false, |a| a.matches_content(c) &&
-                           a.matches_content(s)) {
+            (
+                if mode.outbound.update.on() {
+                    use_client
+                } else if mode.inbound.update.force() {
+                    use_server
+                } else {
+                    Unsync
+                },
+                NoConflict,
+            )
+        } else if a
+            .map_or(false, |a| a.matches_content(c) && a.matches_content(s))
+        {
             // If both sides disagree about mode but not content, propogate the
             // mode whichever direction we can, prefering the client
-            (match (mode.inbound.update, mode.outbound.update) {
-                (_, Force) => use_client,
-                (Force, _) => use_server,
-                (_,    On) => use_client,
-                (On,    _) => use_server,
-                _ => Unsync
-            }, EditEdit(ConflictingEdit::Mode, ConflictingEdit::Mode))
+            (
+                match (mode.inbound.update, mode.outbound.update) {
+                    (_, Force) => use_client,
+                    (Force, _) => use_server,
+                    (_, On) => use_client,
+                    (On, _) => use_server,
+                    _ => Unsync,
+                },
+                EditEdit(ConflictingEdit::Mode, ConflictingEdit::Mode),
+            )
         } else if a.map_or(false, |a| a.matches_content(c)) {
             // If one side changes the mode and the other side changes the
             // content, prefer the content side unless force overrides.
-            (match (mode.inbound.update, mode.outbound.update) {
-                (Force, _) | (On, _) => use_server,
-                (_, Force) => use_client,
-                _ => need_split
-            }, EditEdit(ConflictingEdit::Mode, ConflictingEdit::Content))
+            (
+                match (mode.inbound.update, mode.outbound.update) {
+                    (Force, _) | (On, _) => use_server,
+                    (_, Force) => use_client,
+                    _ => need_split,
+                },
+                EditEdit(ConflictingEdit::Mode, ConflictingEdit::Content),
+            )
         } else if a.map_or(false, |a| a.matches_content(s)) {
-            (match (mode.inbound.update, mode.outbound.update) {
-                (_, Force) | (_, On) => use_client,
-                (Force, _) => use_server,
-                _ => need_split
-            }, EditEdit(ConflictingEdit::Content, ConflictingEdit::Mode))
+            (
+                match (mode.inbound.update, mode.outbound.update) {
+                    (_, Force) | (_, On) => use_client,
+                    (Force, _) => use_server,
+                    _ => need_split,
+                },
+                EditEdit(ConflictingEdit::Content, ConflictingEdit::Mode),
+            )
         } else {
             // Both files have changed content.
 
-            (match (mode.inbound.update, mode.outbound.update) {
-                (Force, Force) =>
+            (
+                match (mode.inbound.update, mode.outbound.update) {
+                    (Force, Force) =>
                     // Force+Force = use newer, break ties with client
-                    if s.newer_than(c) { use_server } else { use_client },
-                (Force, _) => use_server,
-                (_, Force) => use_client,
-                _ => need_split
-            }, EditEdit(ConflictingEdit::Content, ConflictingEdit::Content))
+                    {
+                        if s.newer_than(c) {
+                            use_server
+                        } else {
+                            use_client
+                        }
+                    }
+                    (Force, _) => use_server,
+                    (_, Force) => use_client,
+                    _ => need_split,
+                },
+                EditEdit(ConflictingEdit::Content, ConflictingEdit::Content),
+            )
         }
     }
 
@@ -362,20 +417,35 @@ pub fn choose_reconciliation(cli: Option<&FileData>, anc: Option<&FileData>,
         (Some(c), _, Some(s)) if c.matches(s) => (InSync, NoConflict),
 
         // We never do anything with special files
-        (Some(&FileData::Special), _, _) |
-        (_, _, Some(&FileData::Special)) => (Unsync, NoConflict),
+        (Some(&FileData::Special), _, _) | (_, _, Some(&FileData::Special)) => {
+            (Unsync, NoConflict)
+        }
 
-        (Some(_), None, None) => create(mode.outbound, mode.inbound,
-                                        use_client, use_server),
-        (None, None, Some(_)) => create(mode.inbound, mode.outbound,
-                                        use_server, use_client),
+        (Some(_), None, None) => {
+            create(mode.outbound, mode.inbound, use_client, use_server)
+        }
+        (None, None, Some(_)) => {
+            create(mode.inbound, mode.outbound, use_server, use_client)
+        }
 
-        (Some(c), Some(a), None) => delete(a, c, Server,
-                                           mode.inbound, mode.outbound,
-                                           use_server, use_client),
-        (None, Some(a), Some(s)) => delete(a, s, Client,
-                                           mode.outbound, mode.inbound,
-                                           use_client, use_server),
+        (Some(c), Some(a), None) => delete(
+            a,
+            c,
+            Server,
+            mode.inbound,
+            mode.outbound,
+            use_server,
+            use_client,
+        ),
+        (None, Some(a), Some(s)) => delete(
+            a,
+            s,
+            Client,
+            mode.outbound,
+            mode.inbound,
+            use_client,
+            use_server,
+        ),
 
         (Some(c), a, Some(s)) => update(c, a, s, mode, use_client, use_server),
     }
@@ -386,17 +456,18 @@ mod test {
     use std::collections::HashSet;
 
     use super::*;
-    #[allow(unused_imports)] use crate::defs::*;
     use crate::defs::test_helpers::*;
-    #[allow(unused_imports)] use crate::rules::*;
+    #[allow(unused_imports)]
+    use crate::defs::*;
+    #[allow(unused_imports)]
+    use crate::rules::*;
 
     #[test]
     fn simple_gen_alternate_name() {
         let mut names = HashSet::new();
         names.insert(oss("foo"));
 
-        let result = gen_alternate_name(
-            &oss("foo"), |n| names.contains(n));
+        let result = gen_alternate_name(&oss("foo"), |n| names.contains(n));
         assert_eq!(oss("foo~1"), result);
     }
 
@@ -405,8 +476,7 @@ mod test {
         let mut names = HashSet::new();
         names.insert(oss("foo.txt"));
 
-        let result = gen_alternate_name(
-            &oss("foo.txt"), |n| names.contains(n));
+        let result = gen_alternate_name(&oss("foo.txt"), |n| names.contains(n));
         assert_eq!(oss("foo~1.txt"), result);
     }
 
@@ -416,8 +486,7 @@ mod test {
         names.insert(oss("foo.txt"));
         names.insert(oss("foo~1.txt"));
 
-        let result = gen_alternate_name(
-            &oss("foo.txt"), |n| names.contains(n));
+        let result = gen_alternate_name(&oss("foo.txt"), |n| names.contains(n));
         assert_eq!(oss("foo~2.txt"), result);
     }
 
@@ -428,29 +497,34 @@ mod test {
         names.insert(oss("foo.txt"));
         names.insert(oss("foo~1.txt"));
 
-        let result = gen_alternate_name(
-            &oss("foo~1.txt"), |n| names.contains(n));
+        let result =
+            gen_alternate_name(&oss("foo~1.txt"), |n| names.contains(n));
         assert_eq!(oss("foo~2.txt"), result);
     }
 
-    fn for_every_sync_triple<F : Fn (Option<&FileData>, Option<&FileData>,
-                                     Option<&FileData>)>(f: F) {
-        let files = vec![ FileData::Directory(0o777),
-                          FileData::Directory(0o770),
-                          FileData::Directory(0o700),
-                          FileData::Regular(0o777, 0, 0, [0;32]),
-                          FileData::Regular(0o770, 0, 0, [0;32]),
-                          FileData::Regular(0o700, 0, 0, [0;32]),
-                          FileData::Regular(0o777, 0, 0, [1;32]),
-                          FileData::Regular(0o770, 0, 0, [1;32]),
-                          FileData::Regular(0o700, 0, 0, [1;32]),
-                          FileData::Regular(0o777, 0, 0, [2;32]),
-                          FileData::Regular(0o770, 0, 0, [2;32]),
-                          FileData::Regular(0o700, 0, 0, [2;32]),
-                          FileData::Symlink(oss("foo")),
-                          FileData::Symlink(oss("bar")),
-                          FileData::Symlink(oss("baz")),
-                          FileData::Special ];
+    fn for_every_sync_triple<
+        F: Fn(Option<&FileData>, Option<&FileData>, Option<&FileData>),
+    >(
+        f: F,
+    ) {
+        let files = vec![
+            FileData::Directory(0o777),
+            FileData::Directory(0o770),
+            FileData::Directory(0o700),
+            FileData::Regular(0o777, 0, 0, [0; 32]),
+            FileData::Regular(0o770, 0, 0, [0; 32]),
+            FileData::Regular(0o700, 0, 0, [0; 32]),
+            FileData::Regular(0o777, 0, 0, [1; 32]),
+            FileData::Regular(0o770, 0, 0, [1; 32]),
+            FileData::Regular(0o700, 0, 0, [1; 32]),
+            FileData::Regular(0o777, 0, 0, [2; 32]),
+            FileData::Regular(0o770, 0, 0, [2; 32]),
+            FileData::Regular(0o700, 0, 0, [2; 32]),
+            FileData::Symlink(oss("foo")),
+            FileData::Symlink(oss("bar")),
+            FileData::Symlink(oss("baz")),
+            FileData::Special,
+        ];
         let mut options = vec![None];
         for f in &files {
             options.push(Some(f))
@@ -465,12 +539,16 @@ mod test {
         }
     }
 
-    fn panic_reconciliation(result: Reconciliation,
-                            cli: Option<&FileData>,
-                            anc: Option<&FileData>,
-                            srv: Option<&FileData>) -> ! {
-        panic!("Reconciled to {:?}:\n{:?}\n{:?}\n{:?}",
-               result, cli, anc, srv)
+    fn panic_reconciliation(
+        result: Reconciliation,
+        cli: Option<&FileData>,
+        anc: Option<&FileData>,
+        srv: Option<&FileData>,
+    ) -> ! {
+        panic!(
+            "Reconciled to {:?}:\n{:?}\n{:?}\n{:?}",
+            result, cli, anc, srv
+        )
     }
 
     #[test]
@@ -528,12 +606,11 @@ mod test {
         let mode: SyncMode = "---/CUD".parse().unwrap();
         for_every_sync_triple(|c, a, s| {
             match choose_reconciliation(c, a, s, mode).0 {
-                r @ Unsync | r @ Irreconcilable =>
-                    match (c, s) {
-                        (Some(&FileData::Special), _) |
-                        (_, Some(&FileData::Special)) => (),
-                        _ => panic_reconciliation(r, c, a, s),
-                    },
+                r @ Unsync | r @ Irreconcilable => match (c, s) {
+                    (Some(&FileData::Special), _)
+                    | (_, Some(&FileData::Special)) => (),
+                    _ => panic_reconciliation(r, c, a, s),
+                },
 
                 InSync => (),
                 Use(side) if Client == side => (),
@@ -555,28 +632,41 @@ mod test {
         cli: Option<&'a FileData>,
         anc: Option<&'a FileData>,
         srv: Option<&'a FileData>,
-        expected_conflict: Conflict)
-        -> AssertReconcilliation<'a>
-    {
-        AssertReconcilliation { cli: cli, anc: anc, srv: srv,
-                                expected_conflict: expected_conflict }
+        expected_conflict: Conflict,
+    ) -> AssertReconcilliation<'a> {
+        AssertReconcilliation {
+            cli: cli,
+            anc: anc,
+            srv: srv,
+            expected_conflict: expected_conflict,
+        }
     }
 
     impl<'a> AssertReconcilliation<'a> {
         fn f(&self, mode: &str, expected_recon: Reconciliation) -> &Self {
             let actual = choose_reconciliation(
-                self.cli, self.anc, self.srv, mode.parse().unwrap());
+                self.cli,
+                self.anc,
+                self.srv,
+                mode.parse().unwrap(),
+            );
 
             if actual != (expected_recon, self.expected_conflict) {
-                panic!("Unexpected reconciliation result.\n\
+                panic!(
+                    "Unexpected reconciliation result.\n\
                         Client  : {:?}\n\
                         Ancestor: {:?}\n\
                         Server  : {:?}\n\
                         Mode    : {}\n\
                         Expected: {:?}\n\
                         Actual  : {:?}",
-                       self.cli, self.anc, self.srv,
-                       mode, (expected_recon, self.expected_conflict), actual);
+                    self.cli,
+                    self.anc,
+                    self.srv,
+                    mode,
+                    (expected_recon, self.expected_conflict),
+                    actual
+                );
             }
 
             self
@@ -585,19 +675,19 @@ mod test {
 
     #[test]
     fn individual_reconciliation_cases() {
+        use super::Conflict::*;
         use super::Reconciliation::*;
         use super::ReconciliationSide::*;
-        use super::Conflict::*;
 
-        let reg777_1_data = FileData::Regular(0o777, 0, 1, [1;32]);
-        let reg770_1_data = FileData::Regular(0o770, 0, 1, [1;32]);
-        let reg700_1_data = FileData::Regular(0o700, 0, 1, [1;32]);
-        let reg777_1b_data = FileData::Regular(0o777, 0, 1, [4;32]);
-        let reg777_2_data = FileData::Regular(0o777, 0, 2, [2;32]);
-        let reg777_3_data = FileData::Regular(0o777, 0, 3, [3;32]);
-        let reg777_4t1_data = FileData::Regular(0o777, 0, 1, [0;32]);
-        let reg777_4t2_data = FileData::Regular(0o777, 0, 2, [0;32]);
-        let reg777_4t3_data = FileData::Regular(0o777, 0, 3, [0;32]);
+        let reg777_1_data = FileData::Regular(0o777, 0, 1, [1; 32]);
+        let reg770_1_data = FileData::Regular(0o770, 0, 1, [1; 32]);
+        let reg700_1_data = FileData::Regular(0o700, 0, 1, [1; 32]);
+        let reg777_1b_data = FileData::Regular(0o777, 0, 1, [4; 32]);
+        let reg777_2_data = FileData::Regular(0o777, 0, 2, [2; 32]);
+        let reg777_3_data = FileData::Regular(0o777, 0, 3, [3; 32]);
+        let reg777_4t1_data = FileData::Regular(0o777, 0, 1, [0; 32]);
+        let reg777_4t2_data = FileData::Regular(0o777, 0, 2, [0; 32]);
+        let reg777_4t3_data = FileData::Regular(0o777, 0, 3, [0; 32]);
         let reg777_1 = Some(&reg777_1_data);
         let reg770_1 = Some(&reg770_1_data);
         let reg700_1 = Some(&reg700_1_data);
@@ -728,64 +818,82 @@ mod test {
             .f("cud/cud", Use(Server))
             .f("CUD/CUD", Use(Server));
 
-        assert_reconciliation(reg700_1, reg777_1, reg770_1,
-                              EditEdit(ConflictingEdit::Mode,
-                                       ConflictingEdit::Mode))
-            .f("---/---", Unsync)
-            .f("-u-/---", Use(Server))
-            .f("---/-u-", Use(Client))
-            .f("-u-/-u-", Use(Client))
-            .f("-U-/-u-", Use(Server))
-            .f("-u-/-U-", Use(Client))
-            .f("-U-/-U-", Use(Client));
+        assert_reconciliation(
+            reg700_1,
+            reg777_1,
+            reg770_1,
+            EditEdit(ConflictingEdit::Mode, ConflictingEdit::Mode),
+        )
+        .f("---/---", Unsync)
+        .f("-u-/---", Use(Server))
+        .f("---/-u-", Use(Client))
+        .f("-u-/-u-", Use(Client))
+        .f("-U-/-u-", Use(Server))
+        .f("-u-/-U-", Use(Client))
+        .f("-U-/-U-", Use(Client));
 
-        assert_reconciliation(reg777_2, reg777_1, reg700_1,
-                              EditEdit(ConflictingEdit::Content,
-                                       ConflictingEdit::Mode))
-            .f("---/---", Unsync)
-            .f("-u-/---", Irreconcilable)
-            .f("---/-u-", Use(Client))
-            .f("-U-/---", Use(Server))
-            .f("---/-U-", Use(Client))
-            .f("-u-/-u-", Use(Client))
-            .f("-U-/-u-", Use(Client))
-            .f("-u-/-U-", Use(Client))
-            .f("-U-/-U-", Use(Client))
-            .f("cud/cud", Use(Client))
-            .f("cud/c--", Split(Server, SplitAncestorState::Delete));
+        assert_reconciliation(
+            reg777_2,
+            reg777_1,
+            reg700_1,
+            EditEdit(ConflictingEdit::Content, ConflictingEdit::Mode),
+        )
+        .f("---/---", Unsync)
+        .f("-u-/---", Irreconcilable)
+        .f("---/-u-", Use(Client))
+        .f("-U-/---", Use(Server))
+        .f("---/-U-", Use(Client))
+        .f("-u-/-u-", Use(Client))
+        .f("-U-/-u-", Use(Client))
+        .f("-u-/-U-", Use(Client))
+        .f("-U-/-U-", Use(Client))
+        .f("cud/cud", Use(Client))
+        .f("cud/c--", Split(Server, SplitAncestorState::Delete));
 
-        assert_reconciliation(reg700_1, reg777_1, reg777_2,
-                              EditEdit(ConflictingEdit::Mode,
-                                       ConflictingEdit::Content))
-            .f("---/---", Unsync)
-            .f("-u-/---", Use(Server))
-            .f("---/-u-", Irreconcilable)
-            .f("-U-/---", Use(Server))
-            .f("---/-U-", Use(Client))
-            .f("-U-/-u-", Use(Server))
-            .f("-u-/-U-", Use(Server))
-            .f("-U-/-U-", Use(Server))
-            .f("cud/cud", Use(Server))
-            .f("c--/cud", Split(Server, SplitAncestorState::Delete));
+        assert_reconciliation(
+            reg700_1,
+            reg777_1,
+            reg777_2,
+            EditEdit(ConflictingEdit::Mode, ConflictingEdit::Content),
+        )
+        .f("---/---", Unsync)
+        .f("-u-/---", Use(Server))
+        .f("---/-u-", Irreconcilable)
+        .f("-U-/---", Use(Server))
+        .f("---/-U-", Use(Client))
+        .f("-U-/-u-", Use(Server))
+        .f("-u-/-U-", Use(Server))
+        .f("-U-/-U-", Use(Server))
+        .f("cud/cud", Use(Server))
+        .f("c--/cud", Split(Server, SplitAncestorState::Delete));
 
-        assert_reconciliation(reg777_3, reg777_1, reg777_2,
-                              EditEdit(ConflictingEdit::Content,
-                                       ConflictingEdit::Content))
-            .f("---/---", Unsync)
-            .f("cud/---", Irreconcilable)
-            .f("---/cud", Irreconcilable)
-            .f("cud/cud", Split(Server, SplitAncestorState::Delete))
-            .f("CUD/cud", Use(Server))
-            .f("cud/CUD", Use(Client))
-            .f("CUD/CUD", Use(Client)); // Client is newer
-        assert_reconciliation(reg777_2, reg777_1, reg777_3,
-                              EditEdit(ConflictingEdit::Content,
-                                       ConflictingEdit::Content))
-            .f("CUD/CUD", Use(Server)); // Server is newer
-        assert_reconciliation(reg777_1b, reg777_2, reg777_1,
-                              EditEdit(ConflictingEdit::Content,
-                                       ConflictingEdit::Content))
-            .f("CUD/CUD", Use(Client)); // Client wins ties
+        assert_reconciliation(
+            reg777_3,
+            reg777_1,
+            reg777_2,
+            EditEdit(ConflictingEdit::Content, ConflictingEdit::Content),
+        )
+        .f("---/---", Unsync)
+        .f("cud/---", Irreconcilable)
+        .f("---/cud", Irreconcilable)
+        .f("cud/cud", Split(Server, SplitAncestorState::Delete))
+        .f("CUD/cud", Use(Server))
+        .f("cud/CUD", Use(Client))
+        .f("CUD/CUD", Use(Client)); // Client is newer
+        assert_reconciliation(
+            reg777_2,
+            reg777_1,
+            reg777_3,
+            EditEdit(ConflictingEdit::Content, ConflictingEdit::Content),
+        )
+        .f("CUD/CUD", Use(Server)); // Server is newer
+        assert_reconciliation(
+            reg777_1b,
+            reg777_2,
+            reg777_1,
+            EditEdit(ConflictingEdit::Content, ConflictingEdit::Content),
+        )
+        .f("CUD/CUD", Use(Client)); // Client wins ties
 
         // mtime changed to earlier date
         assert_reconciliation(reg777_4t2, reg777_4t2, reg777_4t1, NoConflict)
@@ -830,27 +938,33 @@ mod test {
             .f("cud/CUD", Use(Client))
             .f("CUD/CUD", Use(Client));
 
-        assert_reconciliation(dir777, dir770, dir700,
-                              EditEdit(ConflictingEdit::Mode,
-                                       ConflictingEdit::Mode))
-            .f("---/---", Unsync)
-            .f("cud/---", Use(Server))
-            .f("---/cud", Use(Client))
-            .f("cud/cud", Use(Client))
-            .f("cud/CUD", Use(Client))
-            .f("CUD/cud", Use(Server))
-            .f("CUD/CUD", Use(Client));
+        assert_reconciliation(
+            dir777,
+            dir770,
+            dir700,
+            EditEdit(ConflictingEdit::Mode, ConflictingEdit::Mode),
+        )
+        .f("---/---", Unsync)
+        .f("cud/---", Use(Server))
+        .f("---/cud", Use(Client))
+        .f("cud/cud", Use(Client))
+        .f("cud/CUD", Use(Client))
+        .f("CUD/cud", Use(Server))
+        .f("CUD/CUD", Use(Client));
 
-        assert_reconciliation(dir777, None, reg777_1,
-                              EditEdit(ConflictingEdit::Content,
-                                       ConflictingEdit::Content))
-            .f("---/---", Unsync)
-            .f("cud/---", Irreconcilable)
-            .f("---/cud", Irreconcilable)
-            .f("cud/cud", Split(Server, SplitAncestorState::Delete))
-            .f("CUD/---", Split(Client, SplitAncestorState::Move))
-            .f("---/CUD", Use(Client))
-            .f("cud/cUd", Use(Client));
+        assert_reconciliation(
+            dir777,
+            None,
+            reg777_1,
+            EditEdit(ConflictingEdit::Content, ConflictingEdit::Content),
+        )
+        .f("---/---", Unsync)
+        .f("cud/---", Irreconcilable)
+        .f("---/cud", Irreconcilable)
+        .f("cud/cud", Split(Server, SplitAncestorState::Delete))
+        .f("CUD/---", Split(Client, SplitAncestorState::Move))
+        .f("---/CUD", Use(Client))
+        .f("cud/cUd", Use(Client));
 
         assert_reconciliation(dir777, dir777, reg777_1, NoConflict)
             .f("---/---", Unsync)

@@ -16,20 +16,20 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::ffi::{OsStr,OsString};
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 
 /// Type for content hashes of regular files and for blob identifiers on the
 /// server.
 ///
 /// In practise, this is a 256-bit SHA-3 sum.
-pub type HashId = [u8;32];
+pub type HashId = [u8; 32];
 /// The sentinal hash value indicating an uncomputed hash.
 ///
 /// One does not compare hashes against this, since the hashes on files can be
 /// out-of-date anyway and must be computed when the file is uploaded in any
 /// case.
-pub const UNKNOWN_HASH: HashId = [0;32];
+pub const UNKNOWN_HASH: HashId = [0; 32];
 /// The name of the directory which is a sibling to the configuration and which
 /// is the root of Ensync's private data.
 pub const PRIVATE_DIR_NAME: &'static str = "internal.ensync";
@@ -42,17 +42,45 @@ pub const INVASIVE_TMP_PREFIX: &'static str = "ensync_tmp_";
 pub struct DisplayHash(pub HashId);
 impl fmt::Display for DisplayHash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\
+        write!(
+            f,
+            "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\
                    {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\
                    {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\
                    {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-               self.0[ 0], self.0[ 1], self.0[ 2], self.0[ 3], self.0[ 4],
-               self.0[ 5], self.0[ 6], self.0[ 7], self.0[ 8], self.0[ 9],
-               self.0[10], self.0[11], self.0[12], self.0[13], self.0[14],
-               self.0[15], self.0[16], self.0[17], self.0[18], self.0[19],
-               self.0[20], self.0[21], self.0[22], self.0[23], self.0[24],
-               self.0[25], self.0[26], self.0[27], self.0[28], self.0[29],
-               self.0[30], self.0[31])
+            self.0[0],
+            self.0[1],
+            self.0[2],
+            self.0[3],
+            self.0[4],
+            self.0[5],
+            self.0[6],
+            self.0[7],
+            self.0[8],
+            self.0[9],
+            self.0[10],
+            self.0[11],
+            self.0[12],
+            self.0[13],
+            self.0[14],
+            self.0[15],
+            self.0[16],
+            self.0[17],
+            self.0[18],
+            self.0[19],
+            self.0[20],
+            self.0[21],
+            self.0[22],
+            self.0[23],
+            self.0[24],
+            self.0[25],
+            self.0[26],
+            self.0[27],
+            self.0[28],
+            self.0[29],
+            self.0[30],
+            self.0[31]
+        )
     }
 }
 
@@ -64,7 +92,7 @@ pub type FileTime = i64;
 pub type FileInode = u64;
 
 /// Shallow data about a file in the sync process, excluding its name.
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileData {
     /// A directory. The only immediate data is its mode. In a file stream, the
     /// receiver must either push the new directory or request it to be
@@ -85,13 +113,12 @@ impl FileData {
     /// `other`'s.
     pub fn transrich_unix_mode(&mut self, other: &FileData) {
         match *self {
-            FileData::Directory(ref mut dst) |
-            FileData::Regular(ref mut dst, _, _, _) => {
-                match *other {
-                    FileData::Directory(src) |
-                    FileData::Regular(src, _, _, _) => *dst = src,
-                    _ => (),
+            FileData::Directory(ref mut dst)
+            | FileData::Regular(ref mut dst, _, _, _) => match *other {
+                FileData::Directory(src) | FileData::Regular(src, _, _, _) => {
+                    *dst = src
                 }
+                _ => (),
             },
             _ => (),
         }
@@ -109,9 +136,10 @@ impl FileData {
     /// modification time is greater than `other`'s.
     pub fn newer_than(&self, other: &Self) -> bool {
         match (self, other) {
-            (&FileData::Regular(_, _, tself, _),
-             &FileData::Regular(_, _, tother, _)) =>
-                tself > tother,
+            (
+                &FileData::Regular(_, _, tself, _),
+                &FileData::Regular(_, _, tother, _),
+            ) => tself > tother,
             _ => false,
         }
     }
@@ -126,8 +154,9 @@ impl FileData {
 
         match (self, that) {
             (&Directory(m1), &Directory(m2)) => m1 == m2,
-            (&Regular(m1, _, t1, ref h1), &Regular(m2, _, t2, ref h2)) =>
-                m1 == m2 && t1 == t2 && *h1 == *h2,
+            (&Regular(m1, _, t1, ref h1), &Regular(m2, _, t2, ref h2)) => {
+                m1 == m2 && t1 == t2 && *h1 == *h2
+            }
             (&Symlink(ref t1), &Symlink(ref t2)) => *t1 == *t2,
             (&Special, &Special) => true,
             _ => false,
@@ -140,8 +169,9 @@ impl FileData {
 
         match (self, that) {
             (&Directory(m1), &Directory(m2)) => m1 == m2,
-            (&Regular(m1, _, _, ref h1), &Regular(m2, _, _, ref h2)) =>
-                m1 == m2 && *h1 == *h2,
+            (&Regular(m1, _, _, ref h1), &Regular(m2, _, _, ref h2)) => {
+                m1 == m2 && *h1 == *h2
+            }
             (&Symlink(ref t1), &Symlink(ref t2)) => *t1 == *t2,
             (&Special, &Special) => true,
             _ => false,
@@ -155,8 +185,9 @@ impl FileData {
 
         match (self, that) {
             (&Directory(_), &Directory(_)) => true,
-            (&Regular(_, _, _, ref h1), &Regular(_, _, _, ref h2)) =>
-                *h1 == *h2,
+            (&Regular(_, _, _, ref h1), &Regular(_, _, _, ref h2)) => {
+                *h1 == *h2
+            }
             (&Symlink(ref t1), &Symlink(ref t2)) => *t1 == *t2,
             (&Special, &Special) => true,
             _ => false,
@@ -165,8 +196,8 @@ impl FileData {
 }
 
 /// Convenience for passing a file name and data together.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub struct File<'a> (pub &'a OsStr, pub &'a FileData);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct File<'a>(pub &'a OsStr, pub &'a FileData);
 
 pub fn is_dir(fd: Option<&FileData>) -> bool {
     match fd {
@@ -177,7 +208,7 @@ pub fn is_dir(fd: Option<&FileData>) -> bool {
 
 #[cfg(test)]
 pub mod test_helpers {
-    use std::ffi::{OsStr,OsString};
+    use std::ffi::{OsStr, OsString};
 
     pub fn oss(s: &str) -> OsString {
         OsStr::new(s).to_owned()
@@ -186,13 +217,13 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use super::test_helpers::*;
+    use super::*;
 
     #[test]
     fn file_newer_than() {
-        let older = FileData::Regular(0o777, 0, 42, [1;32]);
-        let newer = FileData::Regular(0o666, 0, 56, [2;32]);
+        let older = FileData::Regular(0o777, 0, 42, [1; 32]);
+        let newer = FileData::Regular(0o666, 0, 56, [2; 32]);
 
         assert!(newer.newer_than(&older));
         assert!(!older.newer_than(&newer));
@@ -202,10 +233,10 @@ mod test {
 
     #[test]
     fn file_matches() {
-        let f1 = FileData::Regular(0o777, 0, 42, [1;32]);
-        let f2 = FileData::Regular(0o666, 0, 56, [1;32]);
-        let f3 = FileData::Regular(0o777, 0, 42, [2;32]);
-        let f4 = FileData::Regular(0o777, 0, 42, [1;32]);
+        let f1 = FileData::Regular(0o777, 0, 42, [1; 32]);
+        let f2 = FileData::Regular(0o666, 0, 56, [1; 32]);
+        let f3 = FileData::Regular(0o777, 0, 42, [2; 32]);
+        let f4 = FileData::Regular(0o777, 0, 42, [1; 32]);
         let d1 = FileData::Directory(0o777);
         let d2 = FileData::Directory(0o666);
         let s1 = FileData::Symlink(oss("foo"));

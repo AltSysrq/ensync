@@ -69,7 +69,7 @@ use crate::errors::*;
 
 /// The representation of a list of blocks into which an input stream was
 /// split.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct BlockList {
     /// The SHA-3 sum of all elements of `blocks` concatenated.
     ///
@@ -89,7 +89,7 @@ pub fn hash_block(secret: &[u8], block: &[u8]) -> HashId {
     let mut kc = Keccak::new_sha3_256();
     kc.update(secret);
     kc.update(block);
-    let mut hash = [0;32];
+    let mut hash = [0; 32];
     kc.finalize(&mut hash);
     hash
 }
@@ -115,14 +115,15 @@ pub fn hash_block(secret: &[u8], block: &[u8]) -> HashId {
 /// coherently even in the presence of concurrent modification, a `Read`
 /// implementation could be based on that, and then this function would
 /// transitively provide a coherence guarantee as well.
-pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> Result<()>,
-                        R : io::Read>
-    (mut input: R, block_size: usize, secret: &[u8],
-     mut block_out: F) -> Result<BlockList>
-{
+pub fn stream_to_blocks<F: FnMut(&HashId, &[u8]) -> Result<()>, R: io::Read>(
+    mut input: R,
+    block_size: usize,
+    secret: &[u8],
+    mut block_out: F,
+) -> Result<BlockList> {
     let mut blocks = Vec::new();
-    let mut hash = [0u8;32];
-    let mut size : FileSize = 0;
+    let mut hash = [0u8; 32];
+    let mut size: FileSize = 0;
     let mut total_kc = Keccak::new_sha3_256();
     total_kc.update(secret);
 
@@ -138,14 +139,17 @@ pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> Result<()>,
             match input.read(&mut block_data[off..]) {
                 Ok(0) => break,
                 Ok(nread) => off += nread,
-                Err(ref e) if e.kind() == io::ErrorKind::Interrupted =>
-                    continue,
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {
+                    continue
+                }
                 Err(e) => return Err(e.into()),
             };
         }
 
         // Empty block == EOF
-        if 0 == off { break; }
+        if 0 == off {
+            break;
+        }
 
         hash = hash_block(secret, &block_data[0..off]);
 
@@ -177,14 +181,18 @@ pub fn stream_to_blocks<F : FnMut (&HashId, &[u8]) -> Result<()>,
 ///
 /// If this returns an error, the data written to `output` must be considered
 /// corrupt; no guarantees are made about it in this case.
-pub fn blocks_to_stream<R : io::Read,
-                        F : FnMut (&HashId) -> Result<R>,
-                        W : io::Write>
-    (input: &BlockList, mut output: W, secret: &[u8],
-     mut block_fetch: F) -> Result<()>
-{
-    let mut hash = [0u8;32];
-    let mut buf = [0u8;4096];
+pub fn blocks_to_stream<
+    R: io::Read,
+    F: FnMut(&HashId) -> Result<R>,
+    W: io::Write,
+>(
+    input: &BlockList,
+    mut output: W,
+    secret: &[u8],
+    mut block_fetch: F,
+) -> Result<()> {
+    let mut hash = [0u8; 32];
+    let mut buf = [0u8; 4096];
 
     // Sanity check the BlockList
     {
@@ -196,8 +204,9 @@ pub fn blocks_to_stream<R : io::Read,
         kc.finalize(&mut hash);
 
         if hash != input.total {
-            return Err(ErrorKind::HmacMismatch(
-                "total", input.total, hash).into());
+            return Err(
+                ErrorKind::HmacMismatch("total", input.total, hash).into()
+            );
         }
     }
 
@@ -211,29 +220,30 @@ pub fn blocks_to_stream<R : io::Read,
                 Ok(0) => break,
                 Ok(nread) => {
                     kc.update(&buf[0..nread]);
-                    output.write_all(&buf[0..nread]).chain_err(
-                        || "Error writing to output stream")?;
-                },
-                Err(ref e) if e.kind() == io::ErrorKind::Interrupted =>
-                    continue,
+                    output
+                        .write_all(&buf[0..nread])
+                        .chain_err(|| "Error writing to output stream")?;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {
+                    continue
+                }
                 Err(e) => return Err(e.into()),
             }
         }
 
         kc.finalize(&mut hash);
         if hash != *id {
-            return Err(ErrorKind::HmacMismatch(
-                "block", *id, hash).into());
+            return Err(ErrorKind::HmacMismatch("block", *id, hash).into());
         }
     }
 
-    return Ok(())
+    return Ok(());
 }
 
 /// A file data source (eg, for `Replica::TransferIn` or
 /// `Replica::TransferOut`) representing a backing store which is not
 /// content-addressable but instead presents files as linear byte streams.
-pub trait StreamSource : io::Read {
+pub trait StreamSource: io::Read {
     /// Resets the stream to the beginning of the file.
     fn reset(&mut self) -> Result<()>;
     /// Notifies the source of the final computed block list that was read from
@@ -265,28 +275,35 @@ pub trait BlockFetch {
 mod test {
     use std::collections::HashMap;
 
-    use crate::defs::*;
-    #[allow(unused_imports)] use crate::errors::*;
     use super::*;
+    use crate::defs::*;
+    #[allow(unused_imports)]
+    use crate::errors::*;
 
-    fn to_blocklist(text: &[u8], secret: &[u8])
-                    -> (BlockList,HashMap<HashId,Vec<u8>>) {
+    fn to_blocklist(
+        text: &[u8],
+        secret: &[u8],
+    ) -> (BlockList, HashMap<HashId, Vec<u8>>) {
         let mut blocks = HashMap::new();
 
-        let blocklist = stream_to_blocks(
-            text, 4, secret, |&id, data| {
-                blocks.insert(id, data.to_vec());
-                Ok(())
-            }).unwrap();
+        let blocklist = stream_to_blocks(text, 4, secret, |&id, data| {
+            blocks.insert(id, data.to_vec());
+            Ok(())
+        })
+        .unwrap();
 
         (blocklist, blocks)
     }
 
-    fn to_stream(blocklist: &BlockList, blocks: &HashMap<HashId,Vec<u8>>,
-                 secret: &[u8]) -> Result<Vec<u8>> {
+    fn to_stream(
+        blocklist: &BlockList,
+        blocks: &HashMap<HashId, Vec<u8>>,
+        secret: &[u8],
+    ) -> Result<Vec<u8>> {
         let mut output = Vec::new();
-        blocks_to_stream(&blocklist, &mut output, secret,
-                              |h| Ok(&blocks[h][..]))?;
+        blocks_to_stream(&blocklist, &mut output, secret, |h| {
+            Ok(&blocks[h][..])
+        })?;
         Ok(output)
     }
 
@@ -301,10 +318,9 @@ mod test {
 
         assert_eq!(b"hell", &blocks[&blocklist.blocks[0]][..]);
         assert_eq!(b"o wo", &blocks[&blocklist.blocks[1]][..]);
-        assert_eq!(b"rld",  &blocks[&blocklist.blocks[2]][..]);
+        assert_eq!(b"rld", &blocks[&blocklist.blocks[2]][..]);
 
-        let output = to_stream(&blocklist, &blocks, &b"secret"[..])
-            .unwrap();
+        let output = to_stream(&blocklist, &blocks, &b"secret"[..]).unwrap();
         assert_eq!(text, &output[..]);
     }
 
@@ -323,8 +339,11 @@ mod test {
         let text = &b"hello world"[..];
         let (blocklist, blocks) = to_blocklist(text, &b"secret"[..]);
 
-        assert_hmac_mismatch(
-            to_stream(&blocklist, &blocks, &b"geheimniss"[..]));
+        assert_hmac_mismatch(to_stream(
+            &blocklist,
+            &blocks,
+            &b"geheimniss"[..],
+        ));
     }
 
     #[test]
@@ -334,8 +353,7 @@ mod test {
 
         blocklist.blocks.swap(0, 1);
 
-        assert_hmac_mismatch(
-            to_stream(&blocklist, &blocks, &b"secret"[..]));
+        assert_hmac_mismatch(to_stream(&blocklist, &blocks, &b"secret"[..]));
     }
 
     #[test]
@@ -345,7 +363,6 @@ mod test {
 
         blocks.get_mut(&blocklist.blocks[2]).unwrap()[0] ^= 1;
 
-        assert_hmac_mismatch(
-            to_stream(&blocklist, &blocks, &b"secret"[..]));
+        assert_hmac_mismatch(to_stream(&blocklist, &blocks, &b"secret"[..]));
     }
 }

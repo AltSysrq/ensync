@@ -18,19 +18,19 @@
 
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
-use std::sync::{Arc,Mutex};
+use std::sync::{Arc, Mutex};
 
 use sqlite;
 
+use super::dao::*;
 use crate::defs::*;
 use crate::errors::*;
 use crate::replica::*;
-use crate::sql::{AsNBytes,AsNStr};
-use super::dao::*;
+use crate::sql::{AsNBytes, AsNStr};
 
-const T_REGULAR : i64 = 0;
-const T_DIRECTORY : i64 = 1;
-const T_SYMLINK : i64 = 2;
+const T_REGULAR: i64 = 0;
+const T_DIRECTORY: i64 = 1;
+const T_SYMLINK: i64 = 2;
 
 /// The ancestor replica used in production contexts.
 ///
@@ -46,7 +46,7 @@ pub struct AncestorReplica {
 ///
 /// This does not support the `ReplicaDirectory::full_path()` method
 /// meaningfully.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub enum DirHandle {
     /// A real directory, identified simply by its database id.
     Real(RealDir),
@@ -55,10 +55,10 @@ pub enum DirHandle {
 }
 
 /// Newtype which hides the content of `DirHandle::Real`.
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RealDir(i64);
 /// Represents a possibly-uncreated synthetic directory.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct SynthDir {
     /// The parent directory.
     parent: DirHandle,
@@ -79,11 +79,13 @@ impl DirHandle {
     fn get_h(&self) -> Result<i64> {
         match *self {
             DirHandle::Real(RealDir(v)) => Ok(v),
-            DirHandle::Synth(ref sd) => if let Some(v) = sd.lock().unwrap().id {
-                Ok(v)
-            } else {
-                Err(ErrorKind::NotFound.into())
-            },
+            DirHandle::Synth(ref sd) => {
+                if let Some(v) = sd.lock().unwrap().id {
+                    Ok(v)
+                } else {
+                    Err(ErrorKind::NotFound.into())
+                }
+            }
         }
     }
 
@@ -115,7 +117,7 @@ impl DirHandle {
                         Err(ErrorKind::CreateExists.into())
                     }
                 }
-            },
+            }
         }
     }
 
@@ -135,8 +137,7 @@ impl DirHandle {
     fn is_deferred(&self) -> bool {
         match *self {
             DirHandle::Real(_) => false,
-            DirHandle::Synth(ref sd) =>
-                sd.lock().unwrap().id.is_none(),
+            DirHandle::Synth(ref sd) => sd.lock().unwrap().id.is_none(),
         }
     }
 }
@@ -194,8 +195,9 @@ impl AsEntry for FileData {
                 mtime: 0,
                 content: Cow::Borrowed(target.as_nbytes()),
             },
-            FileData::Special =>
-                panic!("Attempt to store Special file in ancestor replica"),
+            FileData::Special => {
+                panic!("Attempt to store Special file in ancestor replica")
+            }
         }
     }
 }
@@ -213,14 +215,18 @@ impl Replica for AncestorReplica {
     type TransferIn = FileData;
     type TransferOut = ();
 
-    fn is_dir_dirty(&self, _: &DirHandle) -> bool { false }
-    fn set_dir_clean(&self, _: &DirHandle) -> Result<bool> { Ok(true) }
+    fn is_dir_dirty(&self, _: &DirHandle) -> bool {
+        false
+    }
+    fn set_dir_clean(&self, _: &DirHandle) -> Result<bool> {
+        Ok(true)
+    }
 
     fn root(&self) -> Result<DirHandle> {
         Ok(DirHandle::Real(RealDir(0)))
     }
 
-    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
+    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString, FileData)>> {
         let mut ret = Vec::new();
 
         if dir.is_deferred() {
@@ -241,35 +247,38 @@ impl Replica for AncestorReplica {
                                 hash_error = true;
                                 None
                             } else {
-                                let mut hash = [0;32];
+                                let mut hash = [0; 32];
                                 hash.copy_from_slice(&*e.content);
                                 Some(FileData::Regular(
                                     e.mode as FileMode,
-                                    0, e.mtime as FileTime, hash))
+                                    0,
+                                    e.mtime as FileTime,
+                                    hash,
+                                ))
                             }
-                        },
+                        }
                         T_DIRECTORY => {
                             Some(FileData::Directory(e.mode as FileMode))
-                        },
-                        T_SYMLINK => {
-                            match e.content.as_nstr() {
-                                Ok(target) => {
-                                    Some(FileData::Symlink(target.to_owned()))
-                                },
-                                Err(ne) => {
-                                    nul_error = Some(ne);
-                                    None
-                                },
+                        }
+                        T_SYMLINK => match e.content.as_nstr() {
+                            Ok(target) => {
+                                Some(FileData::Symlink(target.to_owned()))
+                            }
+                            Err(ne) => {
+                                nul_error = Some(ne);
+                                None
                             }
                         },
                         t => {
                             invalid_type = Some(t);
                             None
                         }
-                    } /* then */ {
+                    }
+                    /* then */
+                    {
                         ret.push((name.to_owned(), d));
                     }
-                },
+                }
                 Err(ne) => {
                     nul_error = Some(ne);
                 }
@@ -289,17 +298,21 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
-              -> Result<()> {
+    fn rename(
+        &self,
+        dir: &mut DirHandle,
+        old: &OsStr,
+        new: &OsStr,
+    ) -> Result<()> {
         let h = dir.get_h()?;
         match self.dao.lock().unwrap().rename(
-            h, old.as_nbytes(), new.as_nbytes())?
-        {
+            h,
+            old.as_nbytes(),
+            new.as_nbytes(),
+        )? {
             RenameStatus::Ok => Ok(()),
-            RenameStatus::SourceNotFound =>
-                Err(ErrorKind::NotFound.into()),
-            RenameStatus::DestExists =>
-                Err(ErrorKind::RenameDestExists.into()),
+            RenameStatus::SourceNotFound => Err(ErrorKind::NotFound.into()),
+            RenameStatus::DestExists => Err(ErrorKind::RenameDestExists.into()),
         }
     }
 
@@ -308,15 +321,19 @@ impl Replica for AncestorReplica {
         match self.dao.lock().unwrap().delete(&target.as_entry(h))? {
             DeleteStatus::Ok => Ok(()),
             DeleteStatus::NotFound => Err(ErrorKind::NotFound.into()),
-            DeleteStatus::NotMatched =>
-                Err(ErrorKind::ExpectationNotMatched.into()),
-            DeleteStatus::DirNotEmpty =>
-                Err(ErrorKind::DirNotEmpty.into()),
+            DeleteStatus::NotMatched => {
+                Err(ErrorKind::ExpectationNotMatched.into())
+            }
+            DeleteStatus::DirNotEmpty => Err(ErrorKind::DirNotEmpty.into()),
         }
     }
 
-    fn create(&self, dir: &mut DirHandle, source: File,
-              xfer: FileData) -> Result<FileData> {
+    fn create(
+        &self,
+        dir: &mut DirHandle,
+        source: File,
+        xfer: FileData,
+    ) -> Result<FileData> {
         let dao = self.dao.lock().unwrap();
         let h = dir.mk_h(&*dao)?;
         if dao.create(&File(source.0, &xfer).as_entry(h))?.is_some() {
@@ -326,9 +343,14 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn update(&self, dir: &mut DirHandle, name: &OsStr,
-              old: &FileData, new_nonxfer: &FileData,
-              xfer: FileData) -> Result<FileData> {
+    fn update(
+        &self,
+        dir: &mut DirHandle,
+        name: &OsStr,
+        old: &FileData,
+        new_nonxfer: &FileData,
+        xfer: FileData,
+    ) -> Result<FileData> {
         if is_dir(Some(old)) && !is_dir(Some(&xfer)) {
             // Instead of updating, remove old then create new.
             // This gets us an implicit emptyness check and clearing of the
@@ -340,20 +362,24 @@ impl Replica for AncestorReplica {
 
         let h = dir.get_h()?;
         match self.dao.lock().unwrap().update(
-            &File(name, old).as_entry(h), &File(name, &xfer).as_entry(h))?
-        {
+            &File(name, old).as_entry(h),
+            &File(name, &xfer).as_entry(h),
+        )? {
             UpdateStatus::Ok => Ok(xfer),
-            UpdateStatus::NotFound =>
-                Err(ErrorKind::NotFound.into()),
-            UpdateStatus::NotMatched =>
-                Err(ErrorKind::ExpectationNotMatched.into()),
+            UpdateStatus::NotFound => Err(ErrorKind::NotFound.into()),
+            UpdateStatus::NotMatched => {
+                Err(ErrorKind::ExpectationNotMatched.into())
+            }
         }
     }
 
     fn chdir(&self, dir: &DirHandle, subdir: &OsStr) -> Result<DirHandle> {
         let h = dir.get_h()?;
-        if let Some(f) = self.dao.lock().unwrap().get_by_name(
-            h, subdir.as_nbytes())?
+        if let Some(f) = self
+            .dao
+            .lock()
+            .unwrap()
+            .get_by_name(h, subdir.as_nbytes())?
         {
             if T_DIRECTORY == f.typ {
                 Ok(DirHandle::Real(RealDir(f.id)))
@@ -365,8 +391,12 @@ impl Replica for AncestorReplica {
         }
     }
 
-    fn synthdir(&self, dir: &mut DirHandle, subdir: &OsStr, mode: FileMode)
-                -> DirHandle {
+    fn synthdir(
+        &self,
+        dir: &mut DirHandle,
+        subdir: &OsStr,
+        mode: FileMode,
+    ) -> DirHandle {
         dir.push_synth(subdir, mode)
     }
 
@@ -381,8 +411,9 @@ impl Replica for AncestorReplica {
         match self.dao.lock().unwrap().delete_raw(h)? {
             DeleteStatus::Ok | DeleteStatus::NotFound => Ok(()),
             DeleteStatus::DirNotEmpty => Err(ErrorKind::DirNotEmpty.into()),
-            DeleteStatus::NotMatched =>
-                panic!("Got NotMatched from delete_raw()"),
+            DeleteStatus::NotMatched => {
+                panic!("Got NotMatched from delete_raw()")
+            }
         }
     }
 
@@ -392,7 +423,9 @@ impl Replica for AncestorReplica {
 }
 
 impl NullTransfer for AncestorReplica {
-    fn null_transfer(file: &FileData) -> FileData { file.clone() }
+    fn null_transfer(file: &FileData) -> FileData {
+        file.clone()
+    }
 }
 
 impl Condemn for AncestorReplica {
@@ -409,33 +442,47 @@ impl Condemn for AncestorReplica {
 
 #[cfg(test)]
 mod test {
-    use crate::defs::*;
-    use crate::defs::test_helpers::*;
-    #[allow(unused_imports)] use crate::errors::*;
-    use crate::replica::*;
     use super::*;
+    use crate::defs::test_helpers::*;
+    use crate::defs::*;
+    #[allow(unused_imports)]
+    use crate::errors::*;
+    use crate::replica::*;
 
-    fn new() -> (AncestorReplica,DirHandle) {
+    fn new() -> (AncestorReplica, DirHandle) {
         let replica = AncestorReplica::open(":memory:").unwrap();
         let root = replica.root().unwrap();
         (replica, root)
     }
 
-    fn mkreg(replica: &AncestorReplica, dir: &mut DirHandle,
-             name: &str, mode: FileMode, mtime: FileTime, h: u8)
-             -> Result<FileData> {
-        let data = FileData::Regular(mode, 0, mtime, [h;32]);
+    fn mkreg(
+        replica: &AncestorReplica,
+        dir: &mut DirHandle,
+        name: &str,
+        mode: FileMode,
+        mtime: FileTime,
+        h: u8,
+    ) -> Result<FileData> {
+        let data = FileData::Regular(mode, 0, mtime, [h; 32]);
         replica.create(dir, File(&oss(name), &data), data.clone())
     }
 
-    fn mkdir(replica: &AncestorReplica, dir: &mut DirHandle,
-             name: &str, mode: FileMode) -> Result<FileData> {
+    fn mkdir(
+        replica: &AncestorReplica,
+        dir: &mut DirHandle,
+        name: &str,
+        mode: FileMode,
+    ) -> Result<FileData> {
         let data = FileData::Directory(mode);
         replica.create(dir, File(&oss(name), &data), data.clone())
     }
 
-    fn mksym(replica: &AncestorReplica, dir: &mut DirHandle,
-             name: &str, target: &str) -> Result<FileData> {
+    fn mksym(
+        replica: &AncestorReplica,
+        dir: &mut DirHandle,
+        name: &str,
+        target: &str,
+    ) -> Result<FileData> {
         let data = FileData::Symlink(oss(target));
         replica.create(dir, File(&oss(name), &data), data.clone())
     }
@@ -445,13 +492,18 @@ mod test {
         let (replica, mut root) = new();
         assert!(replica.list(&mut root).unwrap().is_empty());
         assert!(replica.rename(&mut root, &oss("foo"), &oss("bar")).is_err());
-        assert!(replica.remove(
-            &mut root, File(&oss("foo"), &FileData::Directory(0o666)))
+        assert!(replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Directory(0o666)))
             .is_err());
-        assert!(replica.update(&mut root, &oss("foo"),
-                               &FileData::Directory(0o666),
-                               &FileData::Directory(0o777),
-                               FileData::Directory(0o777)).is_err());
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o666),
+                &FileData::Directory(0o777),
+                FileData::Directory(0o777)
+            )
+            .is_err());
         assert!(replica.chdir(&root, &oss("foo")).is_err());
     }
 
@@ -470,7 +522,7 @@ mod test {
                 if let FileData::Regular(mode, _, mtime, hash) = data {
                     assert_eq!(0o666, mode);
                     assert_eq!(42, mtime);
-                    assert_eq!([1;32], hash);
+                    assert_eq!([1; 32], hash);
                 } else {
                     panic!("`foo` was returned as a non-file: {:?}", data);
                 }
@@ -499,8 +551,9 @@ mod test {
         mkdir(&replica, &mut root, "foo", 0o666).unwrap();
 
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Directory(0o666))).unwrap();
+        replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Directory(0o666)))
+            .unwrap();
 
         assert!(replica.list(&mut subdir).is_err());
     }
@@ -518,8 +571,9 @@ mod test {
         let (replica, mut root) = new();
 
         mkdir(&replica, &mut root, "foo", 0o666).unwrap();
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Directory(0o777))).is_err());
+        assert!(replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Directory(0o777)))
+            .is_err());
     }
 
     #[test]
@@ -530,8 +584,9 @@ mod test {
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         mkdir(&replica, &mut subdir, "bar", 0o777).unwrap();
 
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Directory(0o666))).is_err());
+        assert!(replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Directory(0o666)))
+            .is_err());
     }
 
     #[test]
@@ -539,11 +594,15 @@ mod test {
         let (replica, mut root) = new();
 
         mkdir(&replica, &mut root, "foo", 0o666).unwrap();
-        assert!(replica.update(&mut root, &oss("foo"),
-                               &FileData::Directory(0o777),
-                               &FileData::Directory(0o111),
-                               FileData::Directory(0o111))
-                .is_err());
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o777),
+                &FileData::Directory(0o111),
+                FileData::Directory(0o111)
+            )
+            .is_err());
     }
 
     #[test]
@@ -552,10 +611,15 @@ mod test {
 
         mkdir(&replica, &mut root, "foo", 0o666).unwrap();
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        replica.update(&mut root, &oss("foo"),
-                       &FileData::Directory(0o666),
-                       &FileData::Directory(0o111),
-                       FileData::Directory(0o111)).unwrap();
+        replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o666),
+                &FileData::Directory(0o111),
+                FileData::Directory(0o111),
+            )
+            .unwrap();
 
         replica.list(&mut subdir).unwrap();
     }
@@ -566,10 +630,15 @@ mod test {
 
         mkdir(&replica, &mut root, "foo", 0o666).unwrap();
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        replica.update(&mut root, &oss("foo"),
-                       &FileData::Directory(0o666),
-                       &FileData::Symlink(oss("bar")),
-                       FileData::Symlink(oss("bar"))).unwrap();
+        replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o666),
+                &FileData::Symlink(oss("bar")),
+                FileData::Symlink(oss("bar")),
+            )
+            .unwrap();
 
         assert!(replica.list(&mut subdir).is_err());
     }
@@ -582,10 +651,15 @@ mod test {
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         mksym(&replica, &mut subdir, "foo", "bar").unwrap();
 
-        assert!(replica.update(&mut root, &oss("foo"),
-                               &FileData::Directory(0o666),
-                               &FileData::Symlink(oss("bar")),
-                               FileData::Symlink(oss("bar"))).is_err());
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o666),
+                &FileData::Symlink(oss("bar")),
+                FileData::Symlink(oss("bar"))
+            )
+            .is_err());
     }
 
     #[test]

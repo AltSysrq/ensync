@@ -16,33 +16,35 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
+use libc::isatty;
 use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write, stdout, stderr};
+use std::io::{self, stderr, stdout, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::Ordering::SeqCst;
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
-use libc::isatty;
 
 use crate::ancestor::*;
-use crate::cli::open_server::open_server_replica;
 use crate::cli::config::Config;
 use crate::cli::format_date;
+use crate::cli::open_server::open_server_replica;
 use crate::defs::*;
 use crate::dry_run_replica::DryRunReplica;
 use crate::errors::*;
 use crate::interrupt;
 use crate::log::*;
 use crate::posix::*;
-use crate::reconcile::compute::*;
 use crate::reconcile;
-use crate::replica::{Condemn, NullTransfer, PrepareType, Replica, Watch, WatchHandle};
+use crate::reconcile::compute::*;
+use crate::replica::{
+    Condemn, NullTransfer, PrepareType, Replica, Watch, WatchHandle,
+};
 use crate::rules;
 use crate::server::*;
 use crate::work_stack;
@@ -71,17 +73,18 @@ impl AsPath for OsStr {
 struct PathDisplay<'a, T>(&'a Path, T);
 impl<'a> fmt::Display for PathDisplay<'a, &'a OsStr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.1.as_path().strip_prefix(self.0)
-               .unwrap().display())
+        write!(
+            f,
+            "{}",
+            self.1.as_path().strip_prefix(self.0).unwrap().display()
+        )
     }
 }
 impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, &'a OsStr)> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let prefix = (self.1).0.as_path().strip_prefix(self.0).unwrap();
         if prefix.components().next().is_some() {
-            write!(f, "{}/{}",
-                   prefix.display(),
-                   (self.1).1.as_path().display())
+            write!(f, "{}/{}", prefix.display(), (self.1).1.as_path().display())
         } else {
             write!(f, "{}", (self.1).1.as_path().display())
         }
@@ -143,7 +146,7 @@ impl LoggerImpl {
             }
         }
 
-        fn name_side<S : Into<ReplicaSide>> (side: S) -> &'static str {
+        fn name_side<S: Into<ReplicaSide>>(side: S) -> &'static str {
             match side.into() {
                 ReplicaSide::Client => "local",
                 ReplicaSide::Server => "remote",
@@ -159,8 +162,8 @@ impl LoggerImpl {
         }
 
         fn pretty_size(mut size: u64) -> String {
-            let suffixes = ["bytes", "kB", "MB", "GB",
-                            "TB", "PB", "EB", "ZB", "YB"];
+            let suffixes =
+                ["bytes", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
             let mut suffix_ix = 0usize;
             while size > 10000 {
                 size /= 1024;
@@ -174,17 +177,22 @@ impl LoggerImpl {
         impl<'a> fmt::Display for FDD<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match *self.0 {
-                    FileData::Directory(mode) =>
-                        write!(f, "directory (mode {:04o})", mode),
+                    FileData::Directory(mode) => {
+                        write!(f, "directory (mode {:04o})", mode)
+                    }
                     FileData::Regular(mode, size, time, _) => {
-                        write!(f, "regular file (mode {:04o}, size {}, \
+                        write!(
+                            f,
+                            "regular file (mode {:04o}, size {}, \
                                    modified {})",
-                               mode, pretty_size(size),
-                               format_date::format_timestamp(time))
-                    },
-                    FileData::Symlink(ref target) =>
-                        write!(f, "symlink to {}",
-                               target.as_path().display()),
+                            mode,
+                            pretty_size(size),
+                            format_date::format_timestamp(time)
+                        )
+                    }
+                    FileData::Symlink(ref target) => {
+                        write!(f, "symlink to {}", target.as_path().display())
+                    }
                     FileData::Special => write!(f, "special file"),
                 }
             }
@@ -250,39 +258,51 @@ impl LoggerImpl {
                     $body;
                     reprint_spin = true;
                 }
-            }
+            };
         }
 
         match *what {
             Log::Inspect(dir, name, reconciliation, conflict) => {
                 let recon_str = match reconciliation {
-                    Reconciliation::InSync =>
-                        Cow::Borrowed("in sync"),
-                    Reconciliation::Unsync =>
-                        Cow::Borrowed("out of sync, not changing"),
-                    Reconciliation::Irreconcilable =>
-                        Cow::Borrowed("irreconcilable"),
-                    Reconciliation::Use(side) => Cow::Owned(
-                        format!("using {} version", name_side(side))),
-                    Reconciliation::Split(side, _) => Cow::Owned(
-                        format!("renaming file on {}", name_side(side))),
+                    Reconciliation::InSync => Cow::Borrowed("in sync"),
+                    Reconciliation::Unsync => {
+                        Cow::Borrowed("out of sync, not changing")
+                    }
+                    Reconciliation::Irreconcilable => {
+                        Cow::Borrowed("irreconcilable")
+                    }
+                    Reconciliation::Use(side) => {
+                        Cow::Owned(format!("using {} version", name_side(side)))
+                    }
+                    Reconciliation::Split(side, _) => Cow::Owned(format!(
+                        "renaming file on {}",
+                        name_side(side)
+                    )),
                 };
                 let conflict_str = match conflict {
                     Conflict::NoConflict => Cow::Borrowed(""),
-                    Conflict::EditDelete(deleted_side) => Cow::Owned(
-                        format!("\n        (conflict: deleted on {} side, \
+                    Conflict::EditDelete(deleted_side) => Cow::Owned(format!(
+                        "\n        (conflict: deleted on {} side, \
                                  changed on {} side)",
-                                name_side(deleted_side),
-                                name_side(deleted_side.rev()))),
-                    Conflict::EditEdit(client, server) => Cow::Owned(
-                        format!("\n        (conflict: {} changed locally, \
-                                 {} changed remotely)", name_edit(client),
-                                name_edit(server))),
+                        name_side(deleted_side),
+                        name_side(deleted_side.rev())
+                    )),
+                    Conflict::EditEdit(client, server) => Cow::Owned(format!(
+                        "\n        (conflict: {} changed locally, \
+                                 {} changed remotely)",
+                        name_edit(client),
+                        name_edit(server)
+                    )),
                 };
 
-                say!((dir, name), ReplicaSide::Client, "{}{}",
-                     recon_str, conflict_str)
-            },
+                say!(
+                    (dir, name),
+                    ReplicaSide::Client,
+                    "{}{}",
+                    recon_str,
+                    conflict_str
+                )
+            }
 
             Log::Create(side, path, name, state) => {
                 update_spin!(|spin| {
@@ -290,28 +310,38 @@ impl LoggerImpl {
                         ReplicaSide::Client => {
                             spin.cli.created += 1;
                             spin.cli.transfer += spin_size(state);
-                        },
+                        }
                         ReplicaSide::Server => {
                             spin.srv.created += 1;
                             spin.srv.transfer += spin_size(state);
-                        },
-                        ReplicaSide::Ancestor => { },
+                        }
+                        ReplicaSide::Ancestor => {}
                     }
                 });
 
                 if let FileData::Directory(..) = *state {
-                    self.created_directories.write().unwrap()
+                    self.created_directories
+                        .write()
+                        .unwrap()
                         .insert(Path::new(path).join(name));
                 }
 
-                if self.include_ops_under_opped_directory ||
-                    !self.created_directories.read().unwrap().contains(
-                        Path::new(path))
+                if self.include_ops_under_opped_directory
+                    || !self
+                        .created_directories
+                        .read()
+                        .unwrap()
+                        .contains(Path::new(path))
                 {
-                    say!((path, name), side, "create\
-                                              \n        + {}", FDD(state))
+                    say!(
+                        (path, name),
+                        side,
+                        "create\
+                                              \n        + {}",
+                        FDD(state)
+                    )
                 }
-            },
+            }
 
             Log::Update(side, path, name, old, new) => {
                 let content_change = !old.matches_content(new);
@@ -322,27 +352,35 @@ impl LoggerImpl {
                             if content_change {
                                 spin.cli.transfer += spin_size(new);
                             }
-                        },
+                        }
                         ReplicaSide::Server => {
                             spin.srv.updated += 1;
                             if content_change {
                                 spin.srv.transfer += spin_size(new);
                             }
-                        },
-                        ReplicaSide::Ancestor => { },
+                        }
+                        ReplicaSide::Ancestor => {}
                     }
                 });
 
-                say!((path, name), side, "update\
+                say!(
+                    (path, name),
+                    side,
+                    "update\
                                           \n        - {}\
                                           \n        + {}",
-                     FDD(old), FDD(new));
-            },
+                    FDD(old),
+                    FDD(new)
+                );
+            }
 
-            Log::Rename(side, path, old, new) =>
-                say!((path, old), side, "rename\
+            Log::Rename(side, path, old, new) => say!(
+                (path, old),
+                side,
+                "rename\
                                          \n        -> {}",
-                     new.as_path().display()),
+                new.as_path().display()
+            ),
 
             Log::Remove(side, path, name, state) => {
                 update_spin!(|spin| {
@@ -352,38 +390,51 @@ impl LoggerImpl {
                         ReplicaSide::Ancestor => (),
                     }
                 });
-                if self.include_ops_under_opped_directory ||
-                    !self.recdel_directories.read().unwrap().contains(
-                        Path::new(path))
+                if self.include_ops_under_opped_directory
+                    || !self
+                        .recdel_directories
+                        .read()
+                        .unwrap()
+                        .contains(Path::new(path))
                 {
-                    say!((path, name), side, "delete\
-                                              \n        - {}", FDD(state));
+                    say!(
+                        (path, name),
+                        side,
+                        "delete\
+                                              \n        - {}",
+                        FDD(state)
+                    );
                 }
-            },
+            }
 
             Log::RecursiveDelete(side, path) => {
-                self.recdel_directories.write().unwrap()
+                self.recdel_directories
+                    .write()
+                    .unwrap()
                     .insert(Path::new(path).to_owned());
-                if self.include_ops_under_opped_directory ||
-                    Path::new(path).parent().map_or(
-                        true, |p| !self.recdel_directories.read()
-                            .unwrap().contains(p))
+                if self.include_ops_under_opped_directory
+                    || Path::new(path).parent().map_or(true, |p| {
+                        !self.recdel_directories.read().unwrap().contains(p)
+                    })
                 {
                     say!(path, side, "delete recursively");
                 }
-            },
+            }
 
             Log::Rmdir(side, path) => {
                 // Don't update the spinner here, since we don't know whether
                 // there is an actual directory being deleted.
 
-                if self.include_ops_under_opped_directory ||
-                    !self.recdel_directories.read().unwrap().contains(
-                        Path::new(path))
+                if self.include_ops_under_opped_directory
+                    || !self
+                        .recdel_directories
+                        .read()
+                        .unwrap()
+                        .contains(Path::new(path))
                 {
                     say!(path, side, "remove directory");
                 }
-            },
+            }
 
             Log::Error(side, path, ref op, err) => {
                 let mut errs = err.to_string();
@@ -397,52 +448,67 @@ impl LoggerImpl {
                 }
 
                 match *op {
-                    ErrorOperation::List =>
-                        say!(path, side, "Failed to list directory: {}", errs),
+                    ErrorOperation::List => {
+                        say!(path, side, "Failed to list directory: {}", errs)
+                    }
 
-                    ErrorOperation::MarkClean =>
-                        say!(path, side, "Failed to mark directory clean: {}",
-                             errs),
+                    ErrorOperation::MarkClean => say!(
+                        path,
+                        side,
+                        "Failed to mark directory clean: {}",
+                        errs
+                    ),
 
-                    ErrorOperation::Chdir(name) =>
-                        say!((path, name), side,
-                             "Failed to enter directory: {}", errs),
+                    ErrorOperation::Chdir(name) => say!(
+                        (path, name),
+                        side,
+                        "Failed to enter directory: {}",
+                        errs
+                    ),
 
-                    ErrorOperation::Create(name) =>
-                        say!((path, name), side,
-                             "Failed to create: {}", errs),
+                    ErrorOperation::Create(name) => {
+                        say!((path, name), side, "Failed to create: {}", errs)
+                    }
 
-                    ErrorOperation::Update(name) =>
-                        say!((path, name), side,
-                             "Failed to update: {}", errs),
+                    ErrorOperation::Update(name) => {
+                        say!((path, name), side, "Failed to update: {}", errs)
+                    }
 
-                    ErrorOperation::Rename(name) =>
-                        say!((path, name), side,
-                             "Failed to rename: {}", errs),
+                    ErrorOperation::Rename(name) => {
+                        say!((path, name), side, "Failed to rename: {}", errs)
+                    }
 
-                    ErrorOperation::Remove(name) =>
-                        say!((path, name), side,
-                             "Failed to remove: {}", errs),
+                    ErrorOperation::Remove(name) => {
+                        say!((path, name), side, "Failed to remove: {}", errs)
+                    }
 
-                    ErrorOperation::Rmdir =>
-                        say!(path, side, "Failed to remove: {}", errs),
+                    ErrorOperation::Rmdir => {
+                        say!(path, side, "Failed to remove: {}", errs)
+                    }
 
-                    ErrorOperation::Access(name) =>
-                        say!((path, name), side, "Failed to access: {}", errs),
+                    ErrorOperation::Access(name) => {
+                        say!((path, name), side, "Failed to access: {}", errs)
+                    }
                 }
-            },
+            }
         }
 
         if reprint_spin {
             if let Some(ref spin) = self.spin {
                 let mut spin = spin.lock().unwrap();
                 spin.cycle = (spin.cycle + 1) % 4;
-                perr!("\x1B[K{} in: +{} *{} -{} {}, out: +{} *{} -{} {}\r",
-                      ['-', '\\', '|', '/'][spin.cycle as usize],
-                      spin.cli.created, spin.cli.updated, spin.cli.deleted,
-                      pretty_size(spin.cli.transfer),
-                      spin.srv.created, spin.srv.updated, spin.srv.deleted,
-                      pretty_size(spin.srv.transfer));
+                perr!(
+                    "\x1B[K{} in: +{} *{} -{} {}, out: +{} *{} -{} {}\r",
+                    ['-', '\\', '|', '/'][spin.cycle as usize],
+                    spin.cli.created,
+                    spin.cli.updated,
+                    spin.cli.deleted,
+                    pretty_size(spin.cli.transfer),
+                    spin.srv.created,
+                    spin.srv.updated,
+                    spin.srv.deleted,
+                    pretty_size(spin.srv.transfer)
+                );
             }
         }
     }
@@ -524,26 +590,33 @@ impl LoggerImpl {
                 }
 
                 let fill = self.fill.unwrap_or('.');
-                write!(f, "{}{}{}{}{}{}{}{}{}{}{}",
-                       self.update_type.unwrap_or(fill),
-                       self.file_type.unwrap_or(fill),
-                       self.content_change.ifc('c', fill),
-                       self.size_change.ifc('s', fill),
-                       self.time_change.ifc('t', fill),
-                       self.mode_change.ifc('p', fill),
-                       fill,
-                       fill,
-                       fill,
-                       fill,
-                       fill)
+                write!(
+                    f,
+                    "{}{}{}{}{}{}{}{}{}{}{}",
+                    self.update_type.unwrap_or(fill),
+                    self.file_type.unwrap_or(fill),
+                    self.content_change.ifc('c', fill),
+                    self.size_change.ifc('s', fill),
+                    self.time_change.ifc('t', fill),
+                    self.mode_change.ifc('p', fill),
+                    fill,
+                    fill,
+                    fill,
+                    fill,
+                    fill
+                )
             }
         }
 
         macro_rules! say {
-            ($item:expr, $path:expr) => { {
-                let _ = writeln!(stdout_lock, "{:<11} {}",
-                                 $item, PathDisplay(&self.client_root, $path));
-            } }
+            ($item:expr, $path:expr) => {{
+                let _ = writeln!(
+                    stdout_lock,
+                    "{:<11} {}",
+                    $item,
+                    PathDisplay(&self.client_root, $path)
+                );
+            }};
         }
 
         fn file_type(fd: &FileData) -> Option<char> {
@@ -568,96 +641,140 @@ impl LoggerImpl {
         }
 
         match *what {
-            Log::Error(..) => { },
-            Log::RecursiveDelete(..) => { },
+            Log::Error(..) => {}
+            Log::RecursiveDelete(..) => {}
 
-            Log::Inspect(parent, name, Reconciliation::InSync, _) |
-            Log::Inspect(parent, name, Reconciliation::Unsync, _) |
-            Log::Inspect(parent, name, Reconciliation::Irreconcilable, _) => {
+            Log::Inspect(parent, name, Reconciliation::InSync, _)
+            | Log::Inspect(parent, name, Reconciliation::Unsync, _)
+            | Log::Inspect(parent, name, Reconciliation::Irreconcilable, _) => {
                 // We can't really output a file type even if the data were
                 // included in this log type, since the three replicas could
                 // each have a different file type.
-                say!(LineItem {
-                    fill: Some(' '),
-                    update_type: Some('.'),
-                    file_type: Some('?'),
-                    .. LineItem::default()
-                }, (parent, name));
-            },
-
-            Log::Inspect(..) => { },
-
-            Log::Create(side, parent, name, data) => if nan(side) {
-                say!(LineItem {
-                    fill: Some('+'),
-                    update_type: update_type(side, data),
-                    file_type: file_type(data),
-                    .. LineItem::default()
-                }, (parent, name))
-            },
-
-            Log::Update(side, parent, name, old, new) => if nan(side) {
-                let (content_change, size_change, time_change, mode_change) =
-                    match (old, new) {
-                        (&FileData::Regular(mode1, size1, time1, content1),
-                         &FileData::Regular(mode2, size2, time2, content2)) =>
-                            (content1 != content2, size1 != size2,
-                             time1 != time2, mode1 != mode2),
-
-                        (&FileData::Symlink(..), &FileData::Symlink(..)) =>
-                            (true, false, false, false),
-
-                        (&FileData::Directory(..), &FileData::Directory(..)) =>
-                            (false, false, false, true),
-
-                        _ => (true, false, false, true),
-                    };
-
-                say!(LineItem {
-                    update_type: if content_change {
-                        update_type(side, new)
-                    } else {
-                        Some('.')
+                say!(
+                    LineItem {
+                        fill: Some(' '),
+                        update_type: Some('.'),
+                        file_type: Some('?'),
+                        ..LineItem::default()
                     },
-                    file_type: file_type(new),
-                    content_change: content_change,
-                    mode_change: mode_change,
-                    time_change: time_change,
-                    size_change: size_change,
-                    .. LineItem::default()
-                }, (parent, name));
-            },
+                    (parent, name)
+                );
+            }
 
-            Log::Rename(side, parent, old, new) => if nan(side) {
-                say!("*renamefrom", (parent, old));
-                say!("*renameto", (parent, new));
-            },
+            Log::Inspect(..) => {}
 
-            Log::Remove(side, parent, name, _) => if nan(side) {
-                say!("*delete", (parent, name));
-            },
+            Log::Create(side, parent, name, data) => {
+                if nan(side) {
+                    say!(
+                        LineItem {
+                            fill: Some('+'),
+                            update_type: update_type(side, data),
+                            file_type: file_type(data),
+                            ..LineItem::default()
+                        },
+                        (parent, name)
+                    )
+                }
+            }
 
-            Log::Rmdir(side, path) => if nan(side) {
-                say!("*delete", path);
-            },
+            Log::Update(side, parent, name, old, new) => {
+                if nan(side) {
+                    let (content_change, size_change, time_change, mode_change) =
+                        match (old, new) {
+                            (
+                                &FileData::Regular(
+                                    mode1,
+                                    size1,
+                                    time1,
+                                    content1,
+                                ),
+                                &FileData::Regular(
+                                    mode2,
+                                    size2,
+                                    time2,
+                                    content2,
+                                ),
+                            ) => (
+                                content1 != content2,
+                                size1 != size2,
+                                time1 != time2,
+                                mode1 != mode2,
+                            ),
+
+                            (
+                                &FileData::Symlink(..),
+                                &FileData::Symlink(..),
+                            ) => (true, false, false, false),
+
+                            (
+                                &FileData::Directory(..),
+                                &FileData::Directory(..),
+                            ) => (false, false, false, true),
+
+                            _ => (true, false, false, true),
+                        };
+
+                    say!(
+                        LineItem {
+                            update_type: if content_change {
+                                update_type(side, new)
+                            } else {
+                                Some('.')
+                            },
+                            file_type: file_type(new),
+                            content_change: content_change,
+                            mode_change: mode_change,
+                            time_change: time_change,
+                            size_change: size_change,
+                            ..LineItem::default()
+                        },
+                        (parent, name)
+                    );
+                }
+            }
+
+            Log::Rename(side, parent, old, new) => {
+                if nan(side) {
+                    say!("*renamefrom", (parent, old));
+                    say!("*renameto", (parent, new));
+                }
+            }
+
+            Log::Remove(side, parent, name, _) => {
+                if nan(side) {
+                    say!("*delete", (parent, name));
+                }
+            }
+
+            Log::Rmdir(side, path) => {
+                if nan(side) {
+                    say!("*delete", path);
+                }
+            }
         }
     }
 }
 
-pub fn run(config: &Config, storage: Arc<dyn Storage>,
-           verbosity: i32, quietness: i32,
-           itemise: bool, itemise_unchanged: bool,
-           colour: &str, spin: &str,
-           include_ancestors: bool,
-           dry_run: bool,
-           watch: bool,
-           num_threads: u32,
-           prepare_type: &str,
-           override_mode: Option<rules::SyncMode>,
-           // Since --reconnect can cause multiple runs to occur, allow the
-           // caller to remember the derived keychain so we don't need to
-           // prompt for the passphrase again.
-           key_chain: &mut Option<Arc<KeyChain>>) -> Result<()> {
+pub fn run(
+    config: &Config,
+    storage: Arc<dyn Storage>,
+    verbosity: i32,
+    quietness: i32,
+    itemise: bool,
+    itemise_unchanged: bool,
+    colour: &str,
+    spin: &str,
+    include_ancestors: bool,
+    dry_run: bool,
+    watch: bool,
+    num_threads: u32,
+    prepare_type: &str,
+    override_mode: Option<rules::SyncMode>,
+    // Since --reconnect can cause multiple runs to occur, allow the
+    // caller to remember the derived keychain so we don't need to
+    // prompt for the passphrase again.
+    key_chain: &mut Option<Arc<KeyChain>>,
+) -> Result<()> {
     let colour = match colour {
         "never" => false,
         "always" => true,
@@ -671,11 +788,13 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
         _ => false,
     };
     let prepare_type = match prepare_type {
-        "auto" => if override_mode.is_some() {
-            PrepareType::Clean
-        } else {
-            PrepareType::Fast
-        },
+        "auto" => {
+            if override_mode.is_some() {
+                PrepareType::Clean
+            } else {
+                PrepareType::Fast
+            }
+        }
         "fast" => PrepareType::Fast,
         "clean" => PrepareType::Clean,
         "scrub" => PrepareType::Scrub,
@@ -683,32 +802,45 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
     };
 
     if key_chain.is_none() {
-        let passphrase = config.passphrase.read_passphrase(
-            "passphrase", false)?;
-        *key_chain = Some(Arc::new(
-            keymgmt::derive_key_chain(&*storage, &passphrase)?));
+        let passphrase =
+            config.passphrase.read_passphrase("passphrase", false)?;
+        *key_chain =
+            Some(Arc::new(keymgmt::derive_key_chain(&*storage, &passphrase)?));
     }
 
     let key_chain = key_chain.as_ref().unwrap().clone();
 
-    let mut server_replica = open_server_replica(
-        config, storage, Some(key_chain.clone()))?;
+    let mut server_replica =
+        open_server_replica(config, storage, Some(key_chain.clone()))?;
 
     let client_private_dir = config.private_root.join("client");
-    fs::create_dir_all(&client_private_dir).chain_err(
-        || format!("Failed to create client replica private directory '{}'",
-                   client_private_dir.display()))?;
+    fs::create_dir_all(&client_private_dir).chain_err(|| {
+        format!(
+            "Failed to create client replica private directory '{}'",
+            client_private_dir.display()
+        )
+    })?;
     let mut client_replica = PosixReplica::new(
-        config.client_root.clone(), client_private_dir,
-        key_chain.obj_hmac_secret()?, config.block_size as usize)
-        .chain_err(|| "Failed to set up client replica")?;
+        config.client_root.clone(),
+        client_private_dir,
+        key_chain.obj_hmac_secret()?,
+        config.block_size as usize,
+    )
+    .chain_err(|| "Failed to set up client replica")?;
 
     let ancestor_replica = AncestorReplica::open(
-        config.private_root.join("ancestor.sqlite")
-            .to_str().ok_or_else(
-                || format!("Path '{}' is not valid UTF-8",
-                           config.private_root.display()))?)
-        .chain_err(|| "Failed to set up ancestor replica")?;
+        config
+            .private_root
+            .join("ancestor.sqlite")
+            .to_str()
+            .ok_or_else(|| {
+                format!(
+                    "Path '{}' is not valid UTF-8",
+                    config.private_root.display()
+                )
+            })?,
+    )
+    .chain_err(|| "Failed to set up ancestor replica")?;
 
     // Default to EDIT, but don't show newly created items under a directory
     // which itself is now since that does not convey information.
@@ -729,8 +861,7 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
     let log = LoggerImpl {
         client_root: config.client_root.to_owned(),
         verbose_level: level,
-        include_ops_under_opped_directory:
-            include_ops_under_opped_directory,
+        include_ops_under_opped_directory: include_ops_under_opped_directory,
         itemise_level: if !itemise {
             0
         } else if !itemise_unchanged {
@@ -753,8 +884,9 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
 
     let rules = match override_mode {
         None => config.sync_rules.clone(),
-        Some(overide) => Arc::new(
-            rules::engine::SyncRules::single_mode(overide, true)),
+        Some(overide) => {
+            Arc::new(rules::engine::SyncRules::single_mode(overide, true))
+        }
     };
 
     if dry_run {
@@ -768,14 +900,24 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context, level, num_threads, prepare_type, config, true, spin)
+        run_sync(
+            context,
+            level,
+            num_threads,
+            prepare_type,
+            config,
+            true,
+            spin,
+        )
     } else {
         let watch_handle = Arc::new(WatchHandle::default());
         if watch {
-            client_replica.watch(Arc::downgrade(&watch_handle)).chain_err(
-                || "Error setting watch on client replica")?;
-            server_replica.watch(Arc::downgrade(&watch_handle)).chain_err(
-                || "Error setting watch on server replica")?;
+            client_replica
+                .watch(Arc::downgrade(&watch_handle))
+                .chain_err(|| "Error setting watch on client replica")?;
+            server_replica
+                .watch(Arc::downgrade(&watch_handle))
+                .chain_err(|| "Error setting watch on server replica")?;
             interrupt::notify_on_signal(watch_handle.clone());
         }
 
@@ -789,102 +931,135 @@ pub fn run(config: &Config, storage: Arc<dyn Storage>,
             tasks: reconcile::UnqueuedTasks::new(),
         });
 
-        run_sync(context.clone(), level, num_threads, prepare_type,
-                 config, true, spin)?;
+        run_sync(
+            context.clone(),
+            level,
+            num_threads,
+            prepare_type,
+            config,
+            true,
+            spin,
+        )?;
 
         if watch && !interrupt::is_interrupted() && level >= EDIT {
-            perrln!("Ensync will now continue to monitor for changes.\n\
+            perrln!(
+                "Ensync will now continue to monitor for changes.\n\
                      Note that it may take a minute or so for changes \
                      to be noticed.\n\
-                     Press Control+C to stop.");
+                     Press Control+C to stop."
+            );
         }
 
-        if watch { while !interrupt::is_interrupted() {
-            watch_handle.wait();
-            // Sleep for a few seconds in case there are multiple notifications
-            // coming in, but bail immediately if we're responding to ^C.
-            for _ in 0..50 {
-                if interrupt::is_interrupted() { break; }
-                thread::sleep(Duration::new(0, 100_000_000));
-            }
-            if !watch_handle.check_dirty() { continue; }
+        if watch {
+            while !interrupt::is_interrupted() {
+                watch_handle.wait();
+                // Sleep for a few seconds in case there are multiple notifications
+                // coming in, but bail immediately if we're responding to ^C.
+                for _ in 0..50 {
+                    if interrupt::is_interrupted() {
+                        break;
+                    }
+                    thread::sleep(Duration::new(0, 100_000_000));
+                }
+                if !watch_handle.check_dirty() {
+                    continue;
+                }
 
-            run_sync(context.clone(), level, num_threads,
-                     if watch_handle.check_context_lost() {
-                         PrepareType::Fast
-                     } else {
-                         PrepareType::Watched
-                     }, config, false, spin)?;
-        } }
+                run_sync(
+                    context.clone(),
+                    level,
+                    num_threads,
+                    if watch_handle.check_context_lost() {
+                        PrepareType::Fast
+                    } else {
+                        PrepareType::Watched
+                    },
+                    config,
+                    false,
+                    spin,
+                )?;
+            }
+        }
 
         Ok(())
     }
 }
 
-fn run_sync<CLI : Replica + 'static,
-            ANC : Replica + NullTransfer + Condemn + 'static,
-            SRV : Replica<TransferIn = CLI::TransferOut,
-                          TransferOut = CLI::TransferIn> + 'static>
-    (context: Arc<reconcile::Context<CLI, ANC, SRV>>,
-     level: LogLevel, num_threads: u32, prepare_type: PrepareType,
-     config: &Config, show_messages: bool, spin: bool)
-    -> Result<()>
-{
+fn run_sync<
+    CLI: Replica + 'static,
+    ANC: Replica + NullTransfer + Condemn + 'static,
+    SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>
+        + 'static,
+>(
+    context: Arc<reconcile::Context<CLI, ANC, SRV>>,
+    level: LogLevel,
+    num_threads: u32,
+    prepare_type: PrepareType,
+    config: &Config,
+    show_messages: bool,
+    spin: bool,
+) -> Result<()> {
     macro_rules! spawn {
-        (|$context:ident| $body:expr) => { {
+        (|$context:ident| $body:expr) => {{
             let $context = $context.clone();
             thread::spawn(move || $body)
-        } }
+        }};
     }
 
     let last_config_path = config.private_root.join("last-config.dat");
-    let min_prepare_type = match fs::File::open(&last_config_path).and_then(
-        |mut file| {
+    let min_prepare_type =
+        match fs::File::open(&last_config_path).and_then(|mut file| {
             let mut hash = HashId::default();
             file.read_exact(&mut hash)?;
             Ok(hash)
-        })
-    {
-        Ok(h) if h == config.hash => PrepareType::Fast,
-        Ok(_) => {
-            perrln!("Configuration changed since last sync; all directories \
-                     will be re-scanned.");
-            PrepareType::Clean
-        },
-        Err(ref e) if io::ErrorKind::NotFound == e.kind() =>
-            PrepareType::Clean,
-        Err(e) => {
-            perrln!("Error reading '{}': {}.\n\
+        }) {
+            Ok(h) if h == config.hash => PrepareType::Fast,
+            Ok(_) => {
+                perrln!(
+                    "Configuration changed since last sync; all directories \
+                     will be re-scanned."
+                );
+                PrepareType::Clean
+            }
+            Err(ref e) if io::ErrorKind::NotFound == e.kind() => {
+                PrepareType::Clean
+            }
+            Err(e) => {
+                perrln!(
+                    "Error reading '{}': {}.\n\
                      Assuming configuration may have \
                      changed; all directories will be re-scanned.",
-                    last_config_path.display(), e);
-            PrepareType::Clean
-        },
-    };
+                    last_config_path.display(),
+                    e
+                );
+                PrepareType::Clean
+            }
+        };
 
     let prepare_type = max(prepare_type, min_prepare_type);
 
     if level >= EDIT && show_messages {
         perrln!("Scanning files for changes...");
     }
-    let client_prepare = spawn!(
-        |context| context.cli.prepare(prepare_type));
-    let server_prepare = spawn!(
-        |context| context.srv.prepare(prepare_type));
-    client_prepare.join()
+    let client_prepare = spawn!(|context| context.cli.prepare(prepare_type));
+    let server_prepare = spawn!(|context| context.srv.prepare(prepare_type));
+    client_prepare
+        .join()
         .expect("Child thread panicked")
         .chain_err(|| "Scanning for local changes failed")?;
-    server_prepare.join()
+    server_prepare
+        .join()
         .expect("Child thread panicked")
         .chain_err(|| "Scanning for remote changes failed")?;
 
-    if let Err(e) = fs::File::create(&last_config_path).and_then(
-        |mut file| file.write_all(&config.hash))
+    if let Err(e) = fs::File::create(&last_config_path)
+        .and_then(|mut file| file.write_all(&config.hash))
     {
         perrln!("Failed to write to '{}': {}", last_config_path.display(), e);
     }
 
-    let root_state = context.start_root()
+    let root_state = context
+        .start_root()
         .chain_err(|| "Failed to start sync process")?;
 
     let mut threads = Vec::new();

@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::ffi::{OsStr,OsString};
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use sqlite::{State, Statement};
@@ -37,7 +37,7 @@ pub struct CleanDirs<'a>(Statement<'a>);
 
 fn to_hashid(v: Vec<u8>) -> Result<HashId> {
     if 32 == v.len() {
-        let mut ret = [0;32];
+        let mut ret = [0; 32];
         ret.copy_from_slice(&*v);
         Ok(ret)
     } else {
@@ -46,11 +46,11 @@ fn to_hashid(v: Vec<u8>) -> Result<HashId> {
 }
 
 impl<'a> Iterator for CleanDirs<'a> {
-    type Item = Result<(OsString,HashId)>;
+    type Item = Result<(OsString, HashId)>;
 
-    fn next(&mut self) -> Option<Result<(OsString,HashId)>> {
+    fn next(&mut self) -> Option<Result<(OsString, HashId)>> {
         match self.0.next() {
-            Ok(State::Row) => { },
+            Ok(State::Row) => {}
             Ok(State::Done) => return None,
             Err(err) => return Some(Err(err.into())),
         }
@@ -60,7 +60,7 @@ impl<'a> Iterator for CleanDirs<'a> {
 }
 
 impl<'a> CleanDirs<'a> {
-    fn read_row(&mut self) -> Result<(OsString,HashId)> {
+    fn read_row(&mut self) -> Result<(OsString, HashId)> {
         let path = self.0.read::<Vec<u8>>(0)?.as_nstr()?.to_owned();
         let hash = to_hashid(self.0.read::<Vec<u8>>(1)?)?;
         Ok((path, hash))
@@ -68,7 +68,7 @@ impl<'a> CleanDirs<'a> {
 }
 
 /// The subset of `struct stat` that we actually care about here.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InodeStatus {
     pub ino: FileInode,
     pub mtime: FileTime,
@@ -82,11 +82,13 @@ impl Dao {
     /// open a temporary, in-memory database.
     ///
     /// The database is implicitly initialised and/or updated as needed.
-    pub fn open<P : AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         Ok(Dao(VolatileConnection::new(
-            path, include_str!("schema.sql"),
+            path,
+            include_str!("schema.sql"),
             "This sync may be slower than normal \
-             while things are recalculated.")?))
+             while things are recalculated.",
+        )?))
     }
 
     /// Returns an iterator over the whole `clean_dirs` table.
@@ -94,8 +96,7 @@ impl Dao {
     /// Until this iterator is dropped, one should not call any methods that
     /// operate on the `clean_dirs` table other than `set_dir_dirty`.
     pub fn iter_clean_dirs(&self) -> Result<CleanDirs> {
-        let stmt = self.0.prepare(
-            "SELECT `path`, `hash` FROM `clean_dirs`")?;
+        let stmt = self.0.prepare("SELECT `path`, `hash` FROM `clean_dirs`")?;
 
         Ok(CleanDirs(stmt))
     }
@@ -110,10 +111,14 @@ impl Dao {
         debug_assert!(b'/' == path[0]);
         debug_assert!(b'/' == path[path.len() - 1]);
 
-        self.0.prepare(
-            "INSERT OR REPLACE INTO `clean_dirs` (`path`, `hash`) \
-             VALUES (?1, ?2)")
-             .binding(1, path).binding(2, &hash[..]).run()?;
+        self.0
+            .prepare(
+                "INSERT OR REPLACE INTO `clean_dirs` (`path`, `hash`) \
+             VALUES (?1, ?2)",
+            )
+            .binding(1, path)
+            .binding(2, &hash[..])
+            .run()?;
         Ok(())
     }
 
@@ -134,13 +139,15 @@ impl Dao {
             debug_assert!(b'/' == path[0]);
             debug_assert!(b'/' == path[path.len() - 1]);
 
-            self.0.prepare("DELETE FROM `clean_dirs` WHERE `path` = ?1")
-                 .binding(1, path).run()?;
+            self.0
+                .prepare("DELETE FROM `clean_dirs` WHERE `path` = ?1")
+                .binding(1, path)
+                .run()?;
 
-            if let Some(slash) = path[0..path.len()-1].iter().rposition(
-                |c| b'/' == *c)
+            if let Some(slash) =
+                path[0..path.len() - 1].iter().rposition(|c| b'/' == *c)
             {
-                path = &path[0..slash+1];
+                path = &path[0..slash + 1];
             } else {
                 break;
             }
@@ -160,16 +167,22 @@ impl Dao {
             debug_assert!(b'/' == path[0]);
             debug_assert!(b'/' == path[path.len() - 1]);
 
-            if self.0.prepare("SELECT 1 FROM `clean_dirs` \
-                                    WHERE `path` = ?1")
-                    .binding(1, path).exists()? {
+            if self
+                .0
+                .prepare(
+                    "SELECT 1 FROM `clean_dirs` \
+                                    WHERE `path` = ?1",
+                )
+                .binding(1, path)
+                .exists()?
+            {
                 return Ok(true);
             }
 
-            if let Some(slash) = path[0..path.len()-1].iter().rposition(
-                |c| b'/' == *c)
+            if let Some(slash) =
+                path[0..path.len() - 1].iter().rposition(|c| b'/' == *c)
             {
-                path = &path[0..slash+1];
+                path = &path[0..slash + 1];
             } else {
                 break;
             }
@@ -185,9 +198,14 @@ impl Dao {
 
     /// Determines the new generation number for the cache.
     pub fn next_generation(&self) -> Result<i64> {
-        Ok(self.0.prepare("SELECT MAX(`generation`) + 1 \
-                                FROM `hash_cache`")
-                .first(|s| s.read(0)).map(|o| o.unwrap_or(0))?)
+        Ok(self
+            .0
+            .prepare(
+                "SELECT MAX(`generation`) + 1 \
+                                FROM `hash_cache`",
+            )
+            .first(|s| s.read(0))
+            .map(|o| o.unwrap_or(0))?)
     }
 
     /// Populates the hash and block caches with the given file.
@@ -197,41 +215,62 @@ impl Dao {
     /// the file. `block_size` indicates the block size used in the
     /// calculation. `stat` indicates the status of the file at the time the
     /// hashes were computed.
-    pub fn cache_file_hashes(&self, path_str: &OsStr, hash: &HashId,
-                             blocks: &[HashId], block_size: usize,
-                             stat: &InodeStatus, generation: i64)
-                             -> Result<()> {
+    pub fn cache_file_hashes(
+        &self,
+        path_str: &OsStr,
+        hash: &HashId,
+        blocks: &[HashId],
+        block_size: usize,
+        stat: &InodeStatus,
+        generation: i64,
+    ) -> Result<()> {
         let path = path_str.as_nbytes();
 
         // Kill any existing entry to transitively remove any block caches
         // as well.
-        self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
-             .binding(1, path).run()?;
+        self.0
+            .prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
+            .binding(1, path)
+            .run()?;
 
-        self.0.prepare("INSERT INTO `hash_cache` ( \
+        self.0
+            .prepare(
+                "INSERT INTO `hash_cache` ( \
                              path, hash, block_size, inode, size, mtime, \
                              generation \
                              ) VALUES ( \
                              ?1,   ?2,   ?3,         ?4,    ?5,   ?6, \
-                             ?7)")
-             .binding(1, path)
-             .binding(2, &hash[..])
-             .binding(3, block_size as i64).binding(4, stat.ino as i64)
-             .binding(5, stat.size as i64).binding(6, stat.mtime as i64)
-             .binding(7, generation)
-             .run()?;
-        let id = self.0.prepare("SELECT `id` FROM `hash_cache` \
-                                      WHERE `path` = ?1")
-                      .binding(1, path)
-                      .first(|s| s.read::<i64>(0))?
+                             ?7)",
+            )
+            .binding(1, path)
+            .binding(2, &hash[..])
+            .binding(3, block_size as i64)
+            .binding(4, stat.ino as i64)
+            .binding(5, stat.size as i64)
+            .binding(6, stat.mtime as i64)
+            .binding(7, generation)
+            .run()?;
+        let id = self
+            .0
+            .prepare(
+                "SELECT `id` FROM `hash_cache` \
+                                      WHERE `path` = ?1",
+            )
+            .binding(1, path)
+            .first(|s| s.read::<i64>(0))?
             .expect("Couldn't find the id of the row just inserted");
         for (ix, block) in blocks.iter().enumerate() {
-            self.0.prepare("INSERT INTO `block_cache` ( \
+            self.0
+                .prepare(
+                    "INSERT INTO `block_cache` ( \
                                  file, offset, hash \
                                  ) VALUES ( \
-                                 ?1,   ?2,     ?3)")
-                 .binding(1, id).binding(2, ix as i64)
-                 .binding(3, &block[..]).run()?;
+                                 ?1,   ?2,     ?3)",
+                )
+                .binding(1, id)
+                .binding(2, ix as i64)
+                .binding(3, &block[..])
+                .run()?;
         }
         Ok(())
     }
@@ -245,29 +284,35 @@ impl Dao {
     ///
     /// When an entry is matched, its generation is updated to `generation` so
     /// that it will survive pruning.
-    pub fn cached_file_hash(&self, path: &OsStr, stat: &InodeStatus,
-                            generation: i64)
-                            -> Result<Option<HashId>> {
-        if let Some((id, hashvec)) =
-            self.0.prepare(
+    pub fn cached_file_hash(
+        &self,
+        path: &OsStr,
+        stat: &InodeStatus,
+        generation: i64,
+    ) -> Result<Option<HashId>> {
+        if let Some((id, hashvec)) = self
+            .0
+            .prepare(
                 "SELECT `id`, `hash` FROM `hash_cache` \
                  WHERE `path` = ?1 \
                  AND   `inode` = ?2 AND `size` = ?3 \
-                 AND   `mtime` = ?4")
-                .binding(1, path.as_nbytes())
-                .binding(2, stat.ino as i64)
-                .binding(3, stat.size as i64)
-                .binding(4, stat.mtime as i64)
-                .first(|s| Ok((s.read::<i64>(0)?,
-                               s.read::<Vec<u8>>(1)?)))?
+                 AND   `mtime` = ?4",
+            )
+            .binding(1, path.as_nbytes())
+            .binding(2, stat.ino as i64)
+            .binding(3, stat.size as i64)
+            .binding(4, stat.mtime as i64)
+            .first(|s| Ok((s.read::<i64>(0)?, s.read::<Vec<u8>>(1)?)))?
         {
-            self.0.prepare(
-                "UPDATE `hash_cache` \
+            self.0
+                .prepare(
+                    "UPDATE `hash_cache` \
                  SET `generation` = ?2 \
-                 WHERE `id` = ?1")
-                 .binding(1, id)
-                 .binding(2, generation)
-                 .run()?;
+                 WHERE `id` = ?1",
+                )
+                .binding(1, id)
+                .binding(2, generation)
+                .run()?;
 
             Ok(Some(to_hashid(hashvec)?))
         } else {
@@ -277,8 +322,11 @@ impl Dao {
 
     /// Prunes from the file and block hash caches all entries beneath `root`
     /// whose generation predates `generation`.
-    pub fn prune_hash_cache(&self, root: &OsStr, generation: i64)
-                            -> Result<()> {
+    pub fn prune_hash_cache(
+        &self,
+        root: &OsStr,
+        generation: i64,
+    ) -> Result<()> {
         let mut lower = root.as_nbytes().to_vec();
         if Some(&b'/') != lower.last() {
             lower.push(b'/');
@@ -286,12 +334,16 @@ impl Dao {
         let mut upper = lower.clone();
         *upper.last_mut().unwrap() = b'/' + 1;
 
-        self.0.prepare("DELETE FROM `hash_cache` \
+        self.0
+            .prepare(
+                "DELETE FROM `hash_cache` \
                              WHERE `path` >= ?1 AND path < ?2 \
-                             AND `generation` < ?3")
-             .binding(1, &lower[..]).binding(2, &upper[..])
-             .binding(3, generation)
-             .run()?;
+                             AND `generation` < ?3",
+            )
+            .binding(1, &lower[..])
+            .binding(2, &upper[..])
+            .binding(3, generation)
+            .run()?;
         Ok(())
     }
 
@@ -300,13 +352,19 @@ impl Dao {
     /// If found, returns the absolute path of that file. Note that there is no
     /// guarantee that the file still has that hash, or that it even exists for
     /// that matter.
-    pub fn find_file_with_hash(&self, hash: &HashId)
-                               -> Result<Option<OsString>> {
-        let pathvec = self.0.prepare("SELECT `path` FROM `hash_cache` \
+    pub fn find_file_with_hash(
+        &self,
+        hash: &HashId,
+    ) -> Result<Option<OsString>> {
+        let pathvec = self
+            .0
+            .prepare(
+                "SELECT `path` FROM `hash_cache` \
                                            WHERE `hash` = ?1 \
-                                           LIMIT 1")
-                           .binding(1, &hash[..])
-                           .first(|s| s.read::<Vec<u8>>(0))?;
+                                           LIMIT 1",
+            )
+            .binding(1, &hash[..])
+            .first(|s| s.read::<Vec<u8>>(0))?;
 
         if let Some(pv) = pathvec {
             Ok(Some(pv.as_nstr()?.to_owned()))
@@ -326,18 +384,27 @@ impl Dao {
     /// There is no guarantee that the block in that file still has that hash,
     /// that the file is actually large enough to contain that block, or even
     /// that the file still exists.
-    pub fn find_block_with_hash(&self, hash: &HashId)
-                                -> Result<Option<(OsString,i64,i64)>> {
-        let res = self.0.prepare(
-            "SELECT `hash_cache`.`path`, `hash_cache`.`block_size`, \
+    pub fn find_block_with_hash(
+        &self,
+        hash: &HashId,
+    ) -> Result<Option<(OsString, i64, i64)>> {
+        let res = self
+            .0
+            .prepare(
+                "SELECT `hash_cache`.`path`, `hash_cache`.`block_size`, \
                     `block_cache`.`offset` \
              FROM `block_cache` JOIN `hash_cache` \
              ON   `block_cache`.`file` = `hash_cache`.`id` \
-             WHERE `block_cache`.`hash` = ?1 LIMIT 1")
+             WHERE `block_cache`.`hash` = ?1 LIMIT 1",
+            )
             .binding(1, &hash[..])
-            .first(|s| Ok((s.read::<Vec<u8>>(0)?,
-                           s.read::<i64>(1)?,
-                           s.read::<i64>(2)?)))?;
+            .first(|s| {
+                Ok((
+                    s.read::<Vec<u8>>(0)?,
+                    s.read::<i64>(1)?,
+                    s.read::<i64>(2)?,
+                ))
+            })?;
 
         if let Some((pathvec, bs, off)) = res {
             Ok(Some((pathvec.as_nstr()?.to_owned(), bs, off)))
@@ -348,27 +415,43 @@ impl Dao {
 
     /// Updates the modified time on the hash cache entry (if any) for the
     /// given path.
-    pub fn update_cache_mtime(&self, path: &OsStr, mtime: FileTime)
-                              -> Result<()> {
-        Ok(self.0.prepare("UPDATE `hash_cache` SET `mtime` = ?2 \
-                           WHERE `path` = ?1")
-           .binding(1, path.as_nbytes()).binding(2, mtime as i64)
-           .run()?)
+    pub fn update_cache_mtime(
+        &self,
+        path: &OsStr,
+        mtime: FileTime,
+    ) -> Result<()> {
+        Ok(self
+            .0
+            .prepare(
+                "UPDATE `hash_cache` SET `mtime` = ?2 \
+                           WHERE `path` = ?1",
+            )
+            .binding(1, path.as_nbytes())
+            .binding(2, mtime as i64)
+            .run()?)
     }
 
     /// Updates any cache for the file at path `old` to be at path `new`,
     /// preserving all caching information.
     pub fn rename_cache(&self, old: &OsStr, new: &OsStr) -> Result<()> {
-        Ok(self.0.prepare("UPDATE `hash_cache` SET `path` = ?2 \
-                                WHERE `path` = ?1")
-                .binding(1, old.as_nbytes()).binding(2, new.as_nbytes())
-                .run()?)
+        Ok(self
+            .0
+            .prepare(
+                "UPDATE `hash_cache` SET `path` = ?2 \
+                                WHERE `path` = ?1",
+            )
+            .binding(1, old.as_nbytes())
+            .binding(2, new.as_nbytes())
+            .run()?)
     }
 
     /// Deletes any cache entry for the file at `path`.
     pub fn delete_cache(&self, path: &OsStr) -> Result<()> {
-        Ok(self.0.prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
-                .binding(1, path.as_nbytes()).run()?)
+        Ok(self
+            .0
+            .prepare("DELETE FROM `hash_cache` WHERE `path` = ?1")
+            .binding(1, path.as_nbytes())
+            .run()?)
     }
 
     /// Completely clears the hash cache.
@@ -381,9 +464,9 @@ impl Dao {
 mod test {
     use std::collections::HashSet;
 
-    use crate::defs::*;
-    use crate::defs::test_helpers::*;
     use super::*;
+    use crate::defs::test_helpers::*;
+    use crate::defs::*;
 
     fn new() -> Dao {
         Dao::open(":memory:").unwrap()
@@ -397,7 +480,7 @@ mod test {
         dao.set_dir_dirty(&oss("/foo/bar/baz/")).unwrap();
     }
 
-    static H: HashId = [1;32];
+    static H: HashId = [1; 32];
 
     #[test]
     fn clean_dir_crd() {
@@ -428,9 +511,12 @@ mod test {
         // Whether /foo/ and /foo/bar/ are actually iterated is unspecified,
         // since that row may be deleted before the select gets there.
 
-        let second = dao.iter_clean_dirs().unwrap()
-            .map(|r| r.unwrap()).collect::<Vec<_>>();
-        assert_eq!(vec![(oss("/foo/plugh/"),H)], second);
+        let second = dao
+            .iter_clean_dirs()
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(vec![(oss("/foo/plugh/"), H)], second);
     }
 
     #[test]
@@ -458,22 +544,38 @@ mod test {
         assert_eq!(0, dao.next_generation().unwrap());
         assert!(dao.cached_file_hash(&path, &stat, 0).unwrap().is_none());
 
-        dao.cache_file_hashes(&path, &[1;32],
-                              &[[2;32],[3;32]], 2048,
-                              &stat, 0).unwrap();
+        dao.cache_file_hashes(
+            &path,
+            &[1; 32],
+            &[[2; 32], [3; 32]],
+            2048,
+            &stat,
+            0,
+        )
+        .unwrap();
         assert_eq!(1, dao.next_generation().unwrap());
-        assert_eq!([1;32], dao.cached_file_hash(&path, &stat, 99)
-                   .unwrap().unwrap());
+        assert_eq!(
+            [1; 32],
+            dao.cached_file_hash(&path, &stat, 99).unwrap().unwrap()
+        );
         assert_eq!(100, dao.next_generation().unwrap());
 
-        assert!(dao.cached_file_hash(&path, &InodeStatus {
-            ino: 4, .. stat }, 0).unwrap().is_none());
-        assert!(dao.cached_file_hash(&path, &InodeStatus {
-            mtime: 42, .. stat }, 0).unwrap().is_none());
-        assert!(dao.cached_file_hash(&path, &InodeStatus {
-            size: 42, .. stat }, 0).unwrap().is_none());
-        assert!(dao.cached_file_hash(&oss("/bar"), &stat, 0)
-                .unwrap().is_none());
+        assert!(dao
+            .cached_file_hash(&path, &InodeStatus { ino: 4, ..stat }, 0)
+            .unwrap()
+            .is_none());
+        assert!(dao
+            .cached_file_hash(&path, &InodeStatus { mtime: 42, ..stat }, 0)
+            .unwrap()
+            .is_none());
+        assert!(dao
+            .cached_file_hash(&path, &InodeStatus { size: 42, ..stat }, 0)
+            .unwrap()
+            .is_none());
+        assert!(dao
+            .cached_file_hash(&oss("/bar"), &stat, 0)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -486,13 +588,19 @@ mod test {
             size: 1024,
         };
 
-        dao.cache_file_hashes(&path, &[1;32],
-                              &[[2;32],[3;32]], 2048,
-                              &stat, 0).unwrap();
-        assert!(dao.find_block_with_hash(&[2;32]).unwrap().is_some());
-        dao.cache_file_hashes(&path, &[1;32],
-                              &[], 2048, &stat, 0).unwrap();
-        assert!(dao.find_block_with_hash(&[2;32]).unwrap().is_none());
+        dao.cache_file_hashes(
+            &path,
+            &[1; 32],
+            &[[2; 32], [3; 32]],
+            2048,
+            &stat,
+            0,
+        )
+        .unwrap();
+        assert!(dao.find_block_with_hash(&[2; 32]).unwrap().is_some());
+        dao.cache_file_hashes(&path, &[1; 32], &[], 2048, &stat, 0)
+            .unwrap();
+        assert!(dao.find_block_with_hash(&[2; 32]).unwrap().is_none());
     }
 
     #[test]
@@ -505,19 +613,27 @@ mod test {
             size: 1024,
         };
 
-        assert!(dao.find_file_with_hash(&[1;32]).unwrap().is_none());
-        assert!(dao.find_block_with_hash(&[2;32]).unwrap().is_none());
+        assert!(dao.find_file_with_hash(&[1; 32]).unwrap().is_none());
+        assert!(dao.find_block_with_hash(&[2; 32]).unwrap().is_none());
 
-        dao.cache_file_hashes(&path, &[1;32],
-                              &[[2;32],[3;32]], 2048,
-                              &stat, 0).unwrap();
+        dao.cache_file_hashes(
+            &path,
+            &[1; 32],
+            &[[2; 32], [3; 32]],
+            2048,
+            &stat,
+            0,
+        )
+        .unwrap();
 
-        assert_eq!(path, dao.find_file_with_hash(&[1;32]).unwrap().unwrap());
-        assert!(dao.find_file_with_hash(&[2;32]).unwrap().is_none());
+        assert_eq!(path, dao.find_file_with_hash(&[1; 32]).unwrap().unwrap());
+        assert!(dao.find_file_with_hash(&[2; 32]).unwrap().is_none());
 
-        assert_eq!((path, 2048, 1), dao.find_block_with_hash(&[3;32])
-                   .unwrap().unwrap());
-        assert!(dao.find_block_with_hash(&[4;32]).unwrap().is_none());
+        assert_eq!(
+            (path, 2048, 1),
+            dao.find_block_with_hash(&[3; 32]).unwrap().unwrap()
+        );
+        assert!(dao.find_block_with_hash(&[4; 32]).unwrap().is_none());
     }
 
     #[test]
@@ -529,23 +645,29 @@ mod test {
             size: 1024,
         };
 
-        dao.cache_file_hashes(&oss("/foo/bar"), &[1;32], &[], 2048, &stat, 0)
+        dao.cache_file_hashes(&oss("/foo/bar"), &[1; 32], &[], 2048, &stat, 0)
             .unwrap();
-        dao.cache_file_hashes(&oss("/foo/new"), &[2;32], &[], 2048, &stat, 1)
+        dao.cache_file_hashes(&oss("/foo/new"), &[2; 32], &[], 2048, &stat, 1)
             .unwrap();
-        dao.cache_file_hashes(&oss("/fooo"), &[3;32], &[], 2048, &stat, 0)
+        dao.cache_file_hashes(&oss("/fooo"), &[3; 32], &[], 2048, &stat, 0)
             .unwrap();
         dao.prune_hash_cache(&oss("/foo"), 1).unwrap();
 
         // /foo/bar removed since it's under /foo and has a generation of 0.
-        assert!(dao.cached_file_hash(&oss("/foo/bar"), &stat, 2)
-                .unwrap().is_none());
+        assert!(dao
+            .cached_file_hash(&oss("/foo/bar"), &stat, 2)
+            .unwrap()
+            .is_none());
         // /foo/new survives since it has a generation of 1.
-        assert!(dao.cached_file_hash(&oss("/foo/new"), &stat, 2)
-                .unwrap().is_some());
+        assert!(dao
+            .cached_file_hash(&oss("/foo/new"), &stat, 2)
+            .unwrap()
+            .is_some());
         // /fooo survives since it is not under /foo
-        assert!(dao.cached_file_hash(&oss("/fooo"), &stat, 2)
-                .unwrap().is_some());
+        assert!(dao
+            .cached_file_hash(&oss("/fooo"), &stat, 2)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -557,14 +679,18 @@ mod test {
             size: 1024,
         };
 
-        dao.cache_file_hashes(&oss("/foo"), &[1;32], &[], 2048, &stat, 0)
+        dao.cache_file_hashes(&oss("/foo"), &[1; 32], &[], 2048, &stat, 0)
             .unwrap();
-        assert_eq!(oss("/foo"), dao.find_file_with_hash(&[1;32])
-                   .unwrap().unwrap());
+        assert_eq!(
+            oss("/foo"),
+            dao.find_file_with_hash(&[1; 32]).unwrap().unwrap()
+        );
         dao.rename_cache(&oss("/foo"), &oss("/bar")).unwrap();
-        assert_eq!(oss("/bar"), dao.find_file_with_hash(&[1;32])
-                   .unwrap().unwrap());
+        assert_eq!(
+            oss("/bar"),
+            dao.find_file_with_hash(&[1; 32]).unwrap().unwrap()
+        );
         dao.delete_cache(&oss("/bar")).unwrap();
-        assert!(dao.find_file_with_hash(&[1;32]).unwrap().is_none());
+        assert!(dao.find_file_with_hash(&[1; 32]).unwrap().is_none());
     }
 }

@@ -16,8 +16,8 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry::*;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, Read, Seek, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -27,14 +27,14 @@ use std::thread;
 use std::time::Duration;
 use std::u32;
 
-use tiny_keccak::Keccak;
 use sqlite;
 use tempfile::{self, NamedTempFile, PersistError};
+use tiny_keccak::Keccak;
 
 use crate::defs::{DisplayHash, HashId, UNKNOWN_HASH};
 use crate::errors::*;
-use crate::sql::{self, SendConnection, StatementEx};
 use crate::server::storage::*;
+use crate::sql::{self, SendConnection, StatementEx};
 
 const NX: u32 = !0o7111;
 
@@ -144,17 +144,21 @@ impl LocalStorage {
         let dirdir = path.join("dirs");
 
         fn create_dir_all(path: &Path, perm: &fs::Permissions) -> Result<()> {
-            fs::DirBuilder::new().recursive(true).mode(perm.mode())
-                .create(path).chain_err(
-                    || format!("Failed to create directory '{}'",
-                               path.display()))
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(perm.mode())
+                .create(path)
+                .chain_err(|| {
+                    format!("Failed to create directory '{}'", path.display())
+                })
         }
 
-        fs::create_dir_all(&root).chain_err(
-            || format!("Failed to create server root '{}'", root.display()))?;
-        let permissions = fs::metadata(&root).map(
-            |md| md.permissions()).chain_err(
-            || "Failed to read server directory permissions")?;
+        fs::create_dir_all(&root).chain_err(|| {
+            format!("Failed to create server root '{}'", root.display())
+        })?;
+        let permissions = fs::metadata(&root)
+            .map(|md| md.permissions())
+            .chain_err(|| "Failed to read server directory permissions")?;
 
         create_dir_all(&tmpdir, &permissions)?;
         create_dir_all(&objdir, &permissions)?;
@@ -173,16 +177,20 @@ impl LocalStorage {
         // the database file if it does not already exist and ensure it has the
         // proper mode.
         let sqlite_path = path.join("state.sqlite");
-        fs::OpenOptions::new().append(true).create(true).mode(
-            permissions.mode() & NX).open(&sqlite_path)
-            .chain_err(|| format!("Error creating '{}'",
-                                  sqlite_path.display()))?;
+        fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(permissions.mode() & NX)
+            .open(&sqlite_path)
+            .chain_err(|| {
+                format!("Error creating '{}'", sqlite_path.display())
+            })?;
         let cxn = sqlite::Connection::open(sqlite_path)?;
 
         cxn.execute(include_str!("storage-schema.sql"))?;
 
-        let tmpfile = tempfile::tempfile().chain_err(
-            || "Failed to create temporary file")?;
+        let tmpfile = tempfile::tempfile()
+            .chain_err(|| "Failed to create temporary file")?;
 
         Ok(LocalStorage {
             tmpdir: tmpdir,
@@ -232,178 +240,223 @@ impl LocalStorage {
 
     fn named_temp_file(&self) -> io::Result<NamedTempFile> {
         let file = NamedTempFile::new_in(&self.tmpdir)?;
-        let perm = fs::Permissions::from_mode(
-            self.permissions.mode() & NX);
+        let perm = fs::Permissions::from_mode(self.permissions.mode() & NX);
         fs::set_permissions(file.path(), perm)?;
         Ok(file)
     }
 
-    fn do_commit(&self, db: &sqlite::Connection, tx: &mut TxData)
-                 -> Result<bool> {
-        for op in &mut tx.ops { match *op {
-            TxOp::Mkdir { ref id, ref ver, ref sver, ref data } => {
-                if db.prepare("SELECT 1 FROM `dirs` WHERE `id` = ?1")
+    fn do_commit(
+        &self,
+        db: &sqlite::Connection,
+        tx: &mut TxData,
+    ) -> Result<bool> {
+        for op in &mut tx.ops {
+            match *op {
+                TxOp::Mkdir {
+                    ref id,
+                    ref ver,
+                    ref sver,
+                    ref data,
+                } => {
+                    if db
+                        .prepare("SELECT 1 FROM `dirs` WHERE `id` = ?1")
                         .binding(1, &id[..])
-                        .exists()? {
-                    return Ok(false);
+                        .exists()?
+                    {
+                        return Ok(false);
+                    }
+
+                    db.prepare(
+                        "INSERT INTO `dirs` (`id`, `ver`, `sver`, `length`)\
+                                 VALUES (?1, ?2, ?3, ?4)",
+                    )
+                    .binding(1, &id[..])
+                    .binding(2, &ver[..])
+                    .binding(3, &sver[..])
+                    .binding(4, data.len() as i64)
+                    .run()?;
+                    let mut tmpfile = self.named_temp_file()?;
+                    tmpfile.write_all(data)?;
+
+                    match tmpfile.persist(self.dir_path(&id, &ver)) {
+                        Ok(persisted) => {
+                            persisted.sync_all()?;
+                        }
+                        Err(PersistError { error, .. }) => {
+                            return Err(error.into())
+                        }
+                    }
                 }
 
-                db.prepare("INSERT INTO `dirs` (`id`, `ver`, `sver`, `length`)\
-                                 VALUES (?1, ?2, ?3, ?4)")
-                     .binding(1, &id[..])
-                     .binding(2, &ver[..])
-                     .binding(3, &sver[..])
-                     .binding(4, data.len() as i64)
-                     .run()?;
-                let mut tmpfile = self.named_temp_file()?;
-                tmpfile.write_all(data)?;
+                TxOp::Updir {
+                    ref id,
+                    ref sver,
+                    old_len,
+                    ref append,
+                } => {
+                    let ver =
+                        match self.get_ver_for_modify(db, id, sver, old_len)? {
+                            Some(v) => v,
+                            None => return Ok(false),
+                        };
 
-                match tmpfile.persist(self.dir_path(&id, &ver)) {
-                    Ok(persisted) => { persisted.sync_all()?; },
-                    Err(PersistError { error, .. }) =>
-                        return Err(error.into()),
-                }
-            },
+                    if (u32::MAX as u64) - (old_len as u64)
+                        < (append.len() as u64)
+                    {
+                        return Err(ErrorKind::DirectoryTooLarge.into());
+                    }
 
-            TxOp::Updir { ref id, ref sver, old_len, ref append } => {
-                let ver = match self.get_ver_for_modify(db, id, sver,
-                                                        old_len)? {
-                    Some(v) => v,
-                    None => return Ok(false),
-                };
+                    // Run the update in SQLite first to ensure we have a write
+                    // lock on the database, thus preventing two processes from
+                    // appending to the same offset simultaneously.
+                    db.prepare(
+                        "UPDATE `dirs` SET `length` = ?2 \
+                                 WHERE `id` = ?1",
+                    )
+                    .binding(1, &id[..])
+                    .binding(2, (old_len as usize + append.len()) as i64)
+                    .run()?;
 
-                if (u32::MAX as u64) - (old_len as u64) <
-                    (append.len() as u64)
-                {
-                    return Err(ErrorKind::DirectoryTooLarge.into());
-                }
-
-                // Run the update in SQLite first to ensure we have a write
-                // lock on the database, thus preventing two processes from
-                // appending to the same offset simultaneously.
-                db.prepare("UPDATE `dirs` SET `length` = ?2 \
-                                 WHERE `id` = ?1")
-                     .binding(1, &id[..])
-                     .binding(2, (old_len as usize + append.len()) as i64)
-                     .run()?;
-
-                let mut file =
-                    fs::OpenOptions::new()
+                    let mut file = fs::OpenOptions::new()
                         .write(true)
                         .create(false)
                         .open(self.dir_path(&id, &ver))?;
-                file.seek(io::SeekFrom::Start(old_len as u64))?;
-                // This will have effect even if the transaction rolls
-                // back, but the length in SQLite will still reflect the
-                // correct length.
-                file.write_all(append)?;
-                file.sync_data()?;
-            },
-
-            TxOp::Rmdir { ref id, ref mut sver, old_len } => {
-                let ver = match self.get_ver_for_modify(db, id, sver,
-                                                        old_len)? {
-                    Some(v) => v,
-                    None => return Ok(false),
-                };
-
-                db.prepare("DELETE FROM `dirs` \
-                                 WHERE `id` = ?1")
-                     .binding(1, &id[..])
-                     .run()?;
-                // We have to wait with removing the actual file until
-                // postexecute so that readers can see the fact that the
-                // entry has been deleted and because we wouldn't be able
-                // to undo that should the transaction roll back.
-                //
-                // But we do need to store the normal version, which we do by
-                // stashing it in the `sver` field (kind of hackish, oh well).
-                *sver = ver;
-            },
-
-            TxOp::LinkObj { ref id, ref linkid, ref mut handle } => {
-                // Write tho the database first so that we get a lock on
-                // the table. This will block cleaners from noticing the
-                // entry has no refs and trying to delete it.
-                self.update_ref(db, id, linkid)?;
-
-                // Make sure the object actually exists.
-                //
-                // Since we do this *before* the database entry is visible
-                // to readers, if we fail halfway after reconstituting the
-                // object, it will be orphaned. However, we cannot delay
-                // reconstitution until after the database is committed, as
-                // this would make it possible for the transaction to
-                // commit without all data being available.
-                //
-                // In virtually all cases, the object will already exist,
-                // as `PutObj` adds a zero-ref entry eagerly. We only get
-                // here if we lost a race to a cleaner.
-                let objpath = self.obj_path(&id);
-                if fs::symlink_metadata(&objpath).is_err() {
-                    let mut tmpfile = self.named_temp_file()?;
-                    io::copy(handle, &mut tmpfile)?;
-                    let persisted = tmpfile.persist(&objpath)?;
-                    persisted.sync_all()?;
+                    file.seek(io::SeekFrom::Start(old_len as u64))?;
+                    // This will have effect even if the transaction rolls
+                    // back, but the length in SQLite will still reflect the
+                    // correct length.
+                    file.write_all(append)?;
+                    file.sync_data()?;
                 }
-            },
 
-            TxOp::UnlinkObj { ref id, ref linkid } => {
-                self.update_ref(db, id, linkid)?;
-                // We cannot delete the backing file now even if the ref
-                // vector becomes zero, because there'd be no way to undo
-                // it if the transaction rolls back.
-                //
-                // Note that we wouldn't want to anyway, so that renames
-                // can later reuse the object.
-                //
-                // Objects with zero references are cleaned during general
-                // cleanup.
-            },
-        } }
+                TxOp::Rmdir {
+                    ref id,
+                    ref mut sver,
+                    old_len,
+                } => {
+                    let ver =
+                        match self.get_ver_for_modify(db, id, sver, old_len)? {
+                            Some(v) => v,
+                            None => return Ok(false),
+                        };
+
+                    db.prepare(
+                        "DELETE FROM `dirs` \
+                                 WHERE `id` = ?1",
+                    )
+                    .binding(1, &id[..])
+                    .run()?;
+                    // We have to wait with removing the actual file until
+                    // postexecute so that readers can see the fact that the
+                    // entry has been deleted and because we wouldn't be able
+                    // to undo that should the transaction roll back.
+                    //
+                    // But we do need to store the normal version, which we do by
+                    // stashing it in the `sver` field (kind of hackish, oh well).
+                    *sver = ver;
+                }
+
+                TxOp::LinkObj {
+                    ref id,
+                    ref linkid,
+                    ref mut handle,
+                } => {
+                    // Write tho the database first so that we get a lock on
+                    // the table. This will block cleaners from noticing the
+                    // entry has no refs and trying to delete it.
+                    self.update_ref(db, id, linkid)?;
+
+                    // Make sure the object actually exists.
+                    //
+                    // Since we do this *before* the database entry is visible
+                    // to readers, if we fail halfway after reconstituting the
+                    // object, it will be orphaned. However, we cannot delay
+                    // reconstitution until after the database is committed, as
+                    // this would make it possible for the transaction to
+                    // commit without all data being available.
+                    //
+                    // In virtually all cases, the object will already exist,
+                    // as `PutObj` adds a zero-ref entry eagerly. We only get
+                    // here if we lost a race to a cleaner.
+                    let objpath = self.obj_path(&id);
+                    if fs::symlink_metadata(&objpath).is_err() {
+                        let mut tmpfile = self.named_temp_file()?;
+                        io::copy(handle, &mut tmpfile)?;
+                        let persisted = tmpfile.persist(&objpath)?;
+                        persisted.sync_all()?;
+                    }
+                }
+
+                TxOp::UnlinkObj { ref id, ref linkid } => {
+                    self.update_ref(db, id, linkid)?;
+                    // We cannot delete the backing file now even if the ref
+                    // vector becomes zero, because there'd be no way to undo
+                    // it if the transaction rolls back.
+                    //
+                    // Note that we wouldn't want to anyway, so that renames
+                    // can later reuse the object.
+                    //
+                    // Objects with zero references are cleaned during general
+                    // cleanup.
+                }
+            }
+        }
 
         Ok(true)
     }
 
-    fn update_ref(&self, db: &sqlite::Connection, id: &HashId, linkid: &HashId)
-                  -> Result<()> {
-        let vold_refs: Option<Vec<u8>> =
-            db.prepare("SELECT `refs` FROM `objs` WHERE `id` = ?1")
-                .binding(1, &id[..])
-                .first(|s| s.read(0))?;
+    fn update_ref(
+        &self,
+        db: &sqlite::Connection,
+        id: &HashId,
+        linkid: &HashId,
+    ) -> Result<()> {
+        let vold_refs: Option<Vec<u8>> = db
+            .prepare("SELECT `refs` FROM `objs` WHERE `id` = ?1")
+            .binding(1, &id[..])
+            .first(|s| s.read(0))?;
         if let Some(vold_refs) = vold_refs {
             let mut refs = UNKNOWN_HASH;
             if vold_refs.len() != refs.len() {
                 return Err(ErrorKind::InvalidRefVector.into());
             }
             refs.copy_from_slice(&vold_refs);
-            for (accum, &new) in refs.iter_mut().zip(linkid.iter())
-            {
+            for (accum, &new) in refs.iter_mut().zip(linkid.iter()) {
                 *accum ^= new;
             }
 
-            db.prepare("UPDATE `objs` SET `refs` = ?2 \
-                             WHERE `id` = ?1")
-                 .binding(1, &id[..])
-                 .binding(2, &refs[..])
-                 .run()?;
+            db.prepare(
+                "UPDATE `objs` SET `refs` = ?2 \
+                             WHERE `id` = ?1",
+            )
+            .binding(1, &id[..])
+            .binding(2, &refs[..])
+            .run()?;
         } else {
-            db.prepare("INSERT INTO `objs` (`id`, `refs`) \
-                             VALUES (?1, ?2)")
-                 .binding(1, &id[..])
-                 .binding(2, &linkid[..])
-                 .run()?;
+            db.prepare(
+                "INSERT INTO `objs` (`id`, `refs`) \
+                             VALUES (?1, ?2)",
+            )
+            .binding(1, &id[..])
+            .binding(2, &linkid[..])
+            .run()?;
         }
         Ok(())
     }
 
-    fn get_ver_for_modify(&self, db: &sqlite::Connection,
-                          id: &HashId, sver: &HashId, old_len: u32)
-                          -> Result<Option<HashId>> {
-        let vver: Option<Vec<u8>> =
-            db.prepare("SELECT `ver` FROM `dirs` \
+    fn get_ver_for_modify(
+        &self,
+        db: &sqlite::Connection,
+        id: &HashId,
+        sver: &HashId,
+        old_len: u32,
+    ) -> Result<Option<HashId>> {
+        let vver: Option<Vec<u8>> = db
+            .prepare(
+                "SELECT `ver` FROM `dirs` \
                         WHERE `id` = ?1 AND `sver` = ?2 \
-                        AND   `length` = ?3")
+                        AND   `length` = ?3",
+            )
             .binding(1, &id[..])
             .binding(2, &sver[..])
             .binding(3, old_len as i64)
@@ -422,24 +475,28 @@ impl LocalStorage {
     }
 
     fn postcommit_cleanup(&self, tx: &TxData) {
-        for op in &tx.ops { match *op {
-            TxOp::Mkdir { ref id, .. } | TxOp::Updir { ref id, .. } => {
-                if let Some(ref wl) = self.watch_list {
-                    wl.lock().unwrap().remove(id);
-                }
-            },
-
-            TxOp::Rmdir { ref id, ref sver, .. } => {
-                if let Some(ref wl) = self.watch_list {
-                    wl.lock().unwrap().remove(id);
+        for op in &tx.ops {
+            match *op {
+                TxOp::Mkdir { ref id, .. } | TxOp::Updir { ref id, .. } => {
+                    if let Some(ref wl) = self.watch_list {
+                        wl.lock().unwrap().remove(id);
+                    }
                 }
 
-                // `sver` has been overwritten with the normal version.
-                let _ = fs::remove_file(self.dir_path(id, sver));
-            },
+                TxOp::Rmdir {
+                    ref id, ref sver, ..
+                } => {
+                    if let Some(ref wl) = self.watch_list {
+                        wl.lock().unwrap().remove(id);
+                    }
 
-            _ => { },
-        } }
+                    // `sver` has been overwritten with the normal version.
+                    let _ = fs::remove_file(self.dir_path(id, sver));
+                }
+
+                _ => {}
+            }
+        }
     }
 
     fn do_clean_up(&self) -> Result<()> {
@@ -448,8 +505,8 @@ impl LocalStorage {
             // Make sure we have a write lock.
             db.prepare("DELETE FROM `lock`").run()?;
 
-            let mut stmt = db.prepare(
-                "SELECT `id` FROM `objs` WHERE `refs` = ?1")
+            let mut stmt = db
+                .prepare("SELECT `id` FROM `objs` WHERE `refs` = ?1")
                 .binding(1, &UNKNOWN_HASH[..])?;
 
             while sqlite::State::Done != stmt.next()? {
@@ -462,8 +519,8 @@ impl LocalStorage {
 
                 // Delete the entry first to be sure we have the SQLite lock
                 db.prepare("DELETE FROM `objs` WHERE `id` = ?1")
-                     .binding(1, &id[..])
-                     .run()?;
+                    .binding(1, &id[..])
+                    .run()?;
 
                 let _ = fs::remove_file(self.obj_path(&id));
             }
@@ -472,30 +529,41 @@ impl LocalStorage {
     }
 }
 
-fn dir_exists_with_version(db: &SendConnection, id: &HashId, ver: &HashId,
-                           len: u32) -> Result<bool> {
+fn dir_exists_with_version(
+    db: &SendConnection,
+    id: &HashId,
+    ver: &HashId,
+    len: u32,
+) -> Result<bool> {
     db.prepare(
         "SELECT 1 FROM `dirs` \
-         WHERE `id` = ?1 AND ver = ?2 AND length = ?3")
-        .binding(1, &id[..])
-        .binding(2, &ver[..])
-        .binding(3, len as u64 as i64)
-        .exists()
-        .chain_err(|| format!("Error checking state of directory {}/{}",
-                              DisplayHash(*id), DisplayHash(*ver)))
+         WHERE `id` = ?1 AND ver = ?2 AND length = ?3",
+    )
+    .binding(1, &id[..])
+    .binding(2, &ver[..])
+    .binding(3, len as u64 as i64)
+    .exists()
+    .chain_err(|| {
+        format!(
+            "Error checking state of directory {}/{}",
+            DisplayHash(*id),
+            DisplayHash(*ver)
+        )
+    })
 }
 
 impl Storage for LocalStorage {
     fn getdir(&self, id: &HashId) -> Result<Option<(HashId, Vec<u8>)>> {
         for _ in 0..256 {
-            let r: Option<(Vec<u8>, i64)> = {
-                let db = self.db.lock().unwrap();
-                let r = db.prepare(
+            let r: Option<(Vec<u8>, i64)> =
+                {
+                    let db = self.db.lock().unwrap();
+                    let r = db.prepare(
                     "SELECT `ver`, `length` FROM `dirs` WHERE `id` = ?1")
                      .binding(1, &id[..])
                      .first(|s| Ok((s.read(0)?, s.read(1)?)))?;
-                r
-            };
+                    r
+                };
 
             if let Some((vh, iv)) = r {
                 let mut v = UNKNOWN_HASH;
@@ -509,12 +577,13 @@ impl Storage for LocalStorage {
                         let mut data = vec![0u8; iv as usize];
                         file.read_exact(&mut data[..])?;
                         return Ok(Some((v, data)));
-                    },
+                    }
                     // If the file was not found, we probably raced with
                     // another process which was deleting it, so reread from
                     // the database.
-                    Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() =>
-                        continue,
+                    Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() => {
+                        continue
+                    }
                     Err(e) => return Err(e.into()),
                 }
             } else {
@@ -534,53 +603,63 @@ impl Storage for LocalStorage {
                 let mut v = Vec::new();
                 file.read_to_end(&mut v)?;
                 Ok(Some(v))
-            },
-            Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() =>
-                Ok(None),
+            }
+            Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
 
-    fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
-                       -> Result<()> {
+    fn check_dir_dirty(
+        &self,
+        id: &HashId,
+        ver: &HashId,
+        len: u32,
+    ) -> Result<()> {
         if let Some(ref watch_list) = self.watch_list {
             watch_list.lock().unwrap().insert(*id, (*ver, len));
         }
 
-        let exists = dir_exists_with_version(
-            &self.db.lock().unwrap(), id, ver, len)?;
+        let exists =
+            dir_exists_with_version(&self.db.lock().unwrap(), id, ver, len)?;
 
         if !exists {
-            self.dirty_dir_buf.lock().unwrap().write_all(id).chain_err(
-                || "Error writing to dirty directory buffer")?;
+            self.dirty_dir_buf
+                .lock()
+                .unwrap()
+                .write_all(id)
+                .chain_err(|| "Error writing to dirty directory buffer")?;
         }
 
         Ok(())
     }
 
-    fn for_dirty_dir(&self, f: &mut dyn FnMut (&HashId) -> Result<()>)
-                     -> Result<()> {
+    fn for_dirty_dir(
+        &self,
+        f: &mut dyn FnMut(&HashId) -> Result<()>,
+    ) -> Result<()> {
         let mut d = self.dirty_dir_buf.lock().unwrap();
-        d.seek(io::SeekFrom::Start(0)).chain_err(
-            || "Error seeking dirty directory buffer")?;
+        d.seek(io::SeekFrom::Start(0))
+            .chain_err(|| "Error seeking dirty directory buffer")?;
 
         {
-            let mut reader = io::BufReader::new(&mut*d);
-            while !reader.fill_buf()
+            let mut reader = io::BufReader::new(&mut *d);
+            while !reader
+                .fill_buf()
                 .chain_err(|| "Error reading dirty directory buffer")?
                 .is_empty()
             {
                 let mut id = HashId::default();
-                reader.read_exact(&mut id).chain_err(
-                    || "Error reading dirty directory buffer")?;
+                reader
+                    .read_exact(&mut id)
+                    .chain_err(|| "Error reading dirty directory buffer")?;
                 f(&id)?;
             }
         }
 
-        d.seek(io::SeekFrom::Start(0)).chain_err(
-            || "Error seeking dirty directory buffer")?;
-        d.set_len(0).chain_err(
-            || "Error truncating dirty directory buffer")?;
+        d.seek(io::SeekFrom::Start(0))
+            .chain_err(|| "Error seeking dirty directory buffer")?;
+        d.set_len(0)
+            .chain_err(|| "Error truncating dirty directory buffer")?;
         Ok(())
     }
 
@@ -601,15 +680,20 @@ impl Storage for LocalStorage {
             CommitFailed,
         }
         impl<T> From<T> for CommitError
-        where Error : From<T> {
+        where
+            Error: From<T>,
+        {
             fn from(t: T) -> Self {
                 CommitError::Error(Error::from(t))
             }
         }
 
-        let mut txdat =
-            self.txns.lock().unwrap().remove(&tx)
-                .ok_or("No such transaction")?;
+        let mut txdat = self
+            .txns
+            .lock()
+            .unwrap()
+            .remove(&tx)
+            .ok_or("No such transaction")?;
 
         {
             let db = self.db.lock().unwrap();
@@ -639,58 +723,94 @@ impl Storage for LocalStorage {
     }
 
     fn abort(&self, tx: Tx) -> Result<()> {
-        self.txns.lock().unwrap().remove(&tx)
+        self.txns
+            .lock()
+            .unwrap()
+            .remove(&tx)
             .ok_or("No such transaction")?;
         Ok(())
     }
 
-    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, sv: &HashId, data: &[u8])
-             -> Result<()> {
-        self.tx_add(tx, TxOp::Mkdir {
-            id: *id,
-            ver: *v,
-            sver: *sv,
-            data: data.to_vec(),
-        })
+    fn mkdir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        v: &HashId,
+        sv: &HashId,
+        data: &[u8],
+    ) -> Result<()> {
+        self.tx_add(
+            tx,
+            TxOp::Mkdir {
+                id: *id,
+                ver: *v,
+                sver: *sv,
+                data: data.to_vec(),
+            },
+        )
     }
 
-    fn updir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32,
-             append: &[u8]) -> Result<()> {
-        self.tx_add(tx, TxOp::Updir {
-            id: *id,
-            sver: *sv,
-            old_len: old_len,
-            append: append.to_vec(),
-        })
+    fn updir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        sv: &HashId,
+        old_len: u32,
+        append: &[u8],
+    ) -> Result<()> {
+        self.tx_add(
+            tx,
+            TxOp::Updir {
+                id: *id,
+                sver: *sv,
+                old_len: old_len,
+                append: append.to_vec(),
+            },
+        )
     }
 
-    fn rmdir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32)
-             -> Result<()> {
-        self.tx_add(tx, TxOp::Rmdir {
-            id: *id,
-            sver: *sv,
-            old_len: old_len,
-        })
+    fn rmdir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        sv: &HashId,
+        old_len: u32,
+    ) -> Result<()> {
+        self.tx_add(
+            tx,
+            TxOp::Rmdir {
+                id: *id,
+                sver: *sv,
+                old_len: old_len,
+            },
+        )
     }
 
     fn linkobj(&self, tx: Tx, id: &HashId, linkid: &HashId) -> Result<bool> {
         match fs::File::open(self.obj_path(id)) {
             Ok(file) => {
-                self.tx_add(tx, TxOp::LinkObj {
-                    id: *id,
-                    linkid: *linkid,
-                    handle: file,
-                })?;
+                self.tx_add(
+                    tx,
+                    TxOp::LinkObj {
+                        id: *id,
+                        linkid: *linkid,
+                        handle: file,
+                    },
+                )?;
                 Ok(true)
-            },
-            Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() =>
-                Ok(false),
+            }
+            Err(ref ioe) if io::ErrorKind::NotFound == ioe.kind() => Ok(false),
             Err(e) => Err(e.into()),
         }
     }
 
-    fn putobj(&self, tx: Tx, id: &HashId, linkid: &HashId, data: &[u8])
-              -> Result<()> {
+    fn putobj(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        linkid: &HashId,
+        data: &[u8],
+    ) -> Result<()> {
         // First, write the data out, register it with no links, then move it
         // into place.
         //
@@ -710,11 +830,13 @@ impl Storage for LocalStorage {
             sql::tx(&db, || {
                 // No need to invoke the `lock` table since we only do an
                 // insert here.
-                db.prepare("INSERT OR IGNORE INTO `objs` (\
-                            `id`, `refs`) VALUES (?1, ?2)")
-                    .binding(1, &id[..])
-                    .binding(2, &UNKNOWN_HASH[..])
-                    .run()
+                db.prepare(
+                    "INSERT OR IGNORE INTO `objs` (\
+                            `id`, `refs`) VALUES (?1, ?2)",
+                )
+                .binding(1, &id[..])
+                .binding(2, &UNKNOWN_HASH[..])
+                .run()
             })?;
         }
 
@@ -722,22 +844,30 @@ impl Storage for LocalStorage {
         persisted.sync_all()?;
         persisted.seek(io::SeekFrom::Start(0))?;
 
-        self.tx_add(tx, TxOp::LinkObj {
-            id: *id,
-            linkid: *linkid,
-            handle: persisted,
-        })
+        self.tx_add(
+            tx,
+            TxOp::LinkObj {
+                id: *id,
+                linkid: *linkid,
+                handle: persisted,
+            },
+        )
     }
 
-    fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
-                 -> Result<()> {
-        self.tx_add(tx, TxOp::UnlinkObj {
-            id: *id,
-            linkid: *linkid,
-        })
+    fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId) -> Result<()> {
+        self.tx_add(
+            tx,
+            TxOp::UnlinkObj {
+                id: *id,
+                linkid: *linkid,
+            },
+        )
     }
 
-    fn watch(&mut self, mut f: Box<dyn FnMut (Option<&HashId>) + Send>) -> Result<()> {
+    fn watch(
+        &mut self,
+        mut f: Box<dyn FnMut(Option<&HashId>) + Send>,
+    ) -> Result<()> {
         if self.watch_list.is_some() {
             return Err(ErrorKind::AlreadyWatching.into());
         }
@@ -763,21 +893,23 @@ impl Storage for LocalStorage {
             // - Using polling means zero overhead for uses not requiring
             // watching, nor do other parts of the code need to be aware of how
             // change detection happens.
-            #[cfg(test)] const POLL_INTERVAL: u64 = 1;
-            #[cfg(not(test))] const POLL_INTERVAL: u64 = 30;
+            #[cfg(test)]
+            const POLL_INTERVAL: u64 = 1;
+            #[cfg(not(test))]
+            const POLL_INTERVAL: u64 = 30;
 
             thread::sleep(Duration::new(POLL_INTERVAL, 0));
 
-            let (watch_list, db) = match (weak_watch_list.upgrade(),
-                                          weak_db.upgrade()) {
-                (Some(w), Some(d)) => (w, d),
-                _ => return,
-            };
+            let (watch_list, db) =
+                match (weak_watch_list.upgrade(), weak_db.upgrade()) {
+                    (Some(w), Some(d)) => (w, d),
+                    _ => return,
+                };
 
             let wl_copy = watch_list.lock().unwrap().clone();
             for (id, (ver, len)) in wl_copy {
-                if let Ok(false) = dir_exists_with_version(
-                    &db.lock().unwrap(), &id, &ver, len)
+                if let Ok(false) =
+                    dir_exists_with_version(&db.lock().unwrap(), &id, &ver, len)
                 {
                     watch_list.lock().unwrap().remove(&id);
                     f(Some(&id));
@@ -808,15 +940,18 @@ mod test {
     fn adding_ops_to_nx_transaction_is_err() {
         init!(dir, storage);
 
-        assert!(storage.mkdir(42, &hashid(1), &hashid(2), &hashid(3),
-                              b"hello world").is_err());
-        assert!(storage.updir(42, &hashid(1), &hashid(2), 99, b"hello world")
-                .is_err());
+        assert!(storage
+            .mkdir(42, &hashid(1), &hashid(2), &hashid(3), b"hello world")
+            .is_err());
+        assert!(storage
+            .updir(42, &hashid(1), &hashid(2), 99, b"hello world")
+            .is_err());
         assert!(storage.rmdir(42, &hashid(1), &hashid(2), 99).is_err());
         // Use `putobj` first as it will actually create the object anyway, and
         // then `linkobj` will actually need to interact with the transaction.
-        assert!(storage.putobj(42, &hashid(1), &hashid(2), b"hello world")
-                .is_err());
+        assert!(storage
+            .putobj(42, &hashid(1), &hashid(2), b"hello world")
+            .is_err());
         assert!(storage.linkobj(42, &hashid(1), &hashid(2)).is_err());
         assert!(storage.unlinkobj(42, &hashid(1), &hashid(2)).is_err());
     }

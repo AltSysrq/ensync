@@ -38,7 +38,7 @@ pub struct DryRunDirectory<T> {
     renames: HashMap<OsString, OsString>,
 }
 
-impl<T : ReplicaDirectory> ReplicaDirectory for DryRunDirectory<T> {
+impl<T: ReplicaDirectory> ReplicaDirectory for DryRunDirectory<T> {
     fn full_path(&self) -> &OsStr {
         &self.path
     }
@@ -54,7 +54,7 @@ impl<T : ReplicaDirectory> ReplicaDirectory for DryRunDirectory<T> {
 #[derive(Debug)]
 pub struct DryRunReplica<T>(pub T);
 
-impl<T : Replica> Replica for DryRunReplica<T> {
+impl<T: Replica> Replica for DryRunReplica<T> {
     type Directory = DryRunDirectory<T::Directory>;
     type TransferIn = ();
     type TransferOut = ();
@@ -64,7 +64,9 @@ impl<T : Replica> Replica for DryRunReplica<T> {
     }
 
     fn is_dir_dirty(&self, dir: &Self::Directory) -> bool {
-        dir.delegate.as_ref().map_or(true, |d| self.0.is_dir_dirty(d))
+        dir.delegate
+            .as_ref()
+            .map_or(true, |d| self.0.is_dir_dirty(d))
     }
 
     fn set_dir_clean(&self, _: &Self::Directory) -> Result<bool> {
@@ -81,14 +83,21 @@ impl<T : Replica> Replica for DryRunReplica<T> {
         })
     }
 
-    fn list(&self, dir: &mut Self::Directory)
-            -> Result<Vec<(OsString, FileData)>> {
-        dir.delegate.as_mut().map_or_else(
-            || Ok(Vec::new()), |d| self.0.list(d))
+    fn list(
+        &self,
+        dir: &mut Self::Directory,
+    ) -> Result<Vec<(OsString, FileData)>> {
+        dir.delegate
+            .as_mut()
+            .map_or_else(|| Ok(Vec::new()), |d| self.0.list(d))
     }
 
-    fn rename(&self, dir: &mut Self::Directory, old: &OsStr, new: &OsStr)
-              -> Result<()> {
+    fn rename(
+        &self,
+        dir: &mut Self::Directory,
+        old: &OsStr,
+        new: &OsStr,
+    ) -> Result<()> {
         dir.renames.insert(new.to_owned(), old.to_owned());
         Ok(())
     }
@@ -97,8 +106,12 @@ impl<T : Replica> Replica for DryRunReplica<T> {
         Ok(())
     }
 
-    fn create(&self, dir: &mut Self::Directory, source: File,
-              _: ()) -> Result<FileData> {
+    fn create(
+        &self,
+        dir: &mut Self::Directory,
+        source: File,
+        _: (),
+    ) -> Result<FileData> {
         if let FileData::Directory(..) = *source.1 {
             dir.new_subdirs.insert(source.0.to_owned());
         }
@@ -106,21 +119,31 @@ impl<T : Replica> Replica for DryRunReplica<T> {
         Ok(source.1.to_owned())
     }
 
-    fn update(&self, _: &mut Self::Directory, _: &OsStr,
-              _: &FileData, new: &FileData, _: ()) -> Result<FileData> {
+    fn update(
+        &self,
+        _: &mut Self::Directory,
+        _: &OsStr,
+        _: &FileData,
+        new: &FileData,
+        _: (),
+    ) -> Result<FileData> {
         Ok(new.to_owned())
     }
 
-    fn chdir(&self, dir: &Self::Directory, name: &OsStr)
-             -> Result<Self::Directory> {
+    fn chdir(
+        &self,
+        dir: &Self::Directory,
+        name: &OsStr,
+    ) -> Result<Self::Directory> {
         let mut sub_path = dir.full_path().to_owned();
         sub_path.push("/");
         sub_path.push(name);
 
         let name: &OsStr = dir.renames.get(name).map(|s| &**s).unwrap_or(name);
 
-        if let (Some(d), false) = (dir.delegate.as_ref(),
-                                   dir.new_subdirs.contains(name)) {
+        if let (Some(d), false) =
+            (dir.delegate.as_ref(), dir.new_subdirs.contains(name))
+        {
             Ok(DryRunDirectory {
                 path: sub_path,
                 delegate: Some(self.0.chdir(d, name)?),
@@ -137,8 +160,12 @@ impl<T : Replica> Replica for DryRunReplica<T> {
         }
     }
 
-    fn synthdir(&self, dir: &mut Self::Directory, name: &OsStr, _: FileMode)
-                -> Self::Directory {
+    fn synthdir(
+        &self,
+        dir: &mut Self::Directory,
+        name: &OsStr,
+        _: FileMode,
+    ) -> Self::Directory {
         let mut sub_path = dir.full_path().to_owned();
         sub_path.push("/");
         sub_path.push(name);
@@ -168,11 +195,13 @@ impl<T : Replica> Replica for DryRunReplica<T> {
     }
 }
 
-impl<T : NullTransfer> NullTransfer for DryRunReplica<T> {
-    fn null_transfer(_: &FileData) -> () { () }
+impl<T: NullTransfer> NullTransfer for DryRunReplica<T> {
+    fn null_transfer(_: &FileData) -> () {
+        ()
+    }
 }
 
-impl<T : Condemn> Condemn for DryRunReplica<T> {
+impl<T: Condemn> Condemn for DryRunReplica<T> {
     fn condemn(&self, _: &mut Self::Directory, _: &OsStr) -> Result<()> {
         Ok(())
     }
@@ -184,11 +213,11 @@ impl<T : Condemn> Condemn for DryRunReplica<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::defs::*;
-    use crate::defs::test_helpers::*;
-    use crate::replica::*;
-    use crate::memory_replica::*;
     use super::DryRunReplica;
+    use crate::defs::test_helpers::*;
+    use crate::defs::*;
+    use crate::memory_replica::*;
+    use crate::replica::*;
 
     #[test]
     fn mundane_requests_proxied_directly() {
@@ -196,13 +225,21 @@ mod test {
         {
             let mut root = mr.root().unwrap();
             let fd = FileData::Directory(0o600);
-            mr.create(&mut root, File(&oss("subdir"), &fd),
-                      MemoryReplica::null_transfer(&fd)).unwrap();
+            mr.create(
+                &mut root,
+                File(&oss("subdir"), &fd),
+                MemoryReplica::null_transfer(&fd),
+            )
+            .unwrap();
 
             let mut subdir = mr.chdir(&root, &oss("subdir")).unwrap();
             let fd = FileData::Symlink(oss("plugh"));
-            mr.create(&mut subdir, File(&oss("sym"), &fd),
-                      MemoryReplica::null_transfer(&fd)).unwrap();
+            mr.create(
+                &mut subdir,
+                File(&oss("sym"), &fd),
+                MemoryReplica::null_transfer(&fd),
+            )
+            .unwrap();
         }
 
         let rep = DryRunReplica(mr);
@@ -223,8 +260,12 @@ mod test {
     fn mkdir_emulated() {
         let rep = DryRunReplica(MemoryReplica::empty());
         let mut root = rep.root().unwrap();
-        rep.create(&mut root, File(&oss("subdir"),
-                                   &FileData::Directory(0o600)), ()).unwrap();
+        rep.create(
+            &mut root,
+            File(&oss("subdir"), &FileData::Directory(0o600)),
+            (),
+        )
+        .unwrap();
 
         let mut subdir = rep.chdir(&root, &oss("subdir")).unwrap();
         let list = rep.list(&mut subdir).unwrap();
@@ -237,13 +278,21 @@ mod test {
         {
             let mut root = mr.root().unwrap();
             let fd = FileData::Directory(0o600);
-            mr.create(&mut root, File(&oss("subdir"), &fd),
-                      MemoryReplica::null_transfer(&fd)).unwrap();
+            mr.create(
+                &mut root,
+                File(&oss("subdir"), &fd),
+                MemoryReplica::null_transfer(&fd),
+            )
+            .unwrap();
 
             let mut subdir = mr.chdir(&root, &oss("subdir")).unwrap();
             let fd = FileData::Symlink(oss("plugh"));
-            mr.create(&mut subdir, File(&oss("sym"), &fd),
-                      MemoryReplica::null_transfer(&fd)).unwrap();
+            mr.create(
+                &mut subdir,
+                File(&oss("sym"), &fd),
+                MemoryReplica::null_transfer(&fd),
+            )
+            .unwrap();
         }
 
         let rep = DryRunReplica(mr);
@@ -251,7 +300,8 @@ mod test {
         let list = rep.list(&mut root).unwrap();
         assert_eq!(1, list.len());
         assert_eq!(oss("subdir"), list[0].0);
-        rep.rename(&mut root, &oss("subdir"), &oss("xyzzy")).unwrap();
+        rep.rename(&mut root, &oss("subdir"), &oss("xyzzy"))
+            .unwrap();
 
         let mut subdir = rep.chdir(&root, &oss("xyzzy")).unwrap();
         let list = rep.list(&mut subdir).unwrap();

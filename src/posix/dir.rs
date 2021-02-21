@@ -32,7 +32,7 @@ use crate::defs::*;
 use crate::errors::*;
 use crate::replica::{Replica, ReplicaDirectory};
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 struct DirContentMut {
     /// If `Some`, this is an as-yet-uncreated synthetic directory which should
     /// be created when needed with the given mode, at which point this field
@@ -74,7 +74,7 @@ struct DirContent {
 /// The full path of a directory handle always includes a trailing slash, so it
 /// can be used directly with the DAO methods and child paths can be created by
 /// simply appending the base name of the child to that of the directory.
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct DirHandle(Arc<DirContent>);
 
 impl ReplicaDirectory for DirHandle {
@@ -85,12 +85,11 @@ impl ReplicaDirectory for DirHandle {
 
 fn kc_update_mode(kc: &mut Keccak, mode: FileMode) {
     let m = mode as u32;
-    kc.update(&[m as u8, (m >> 8) as u8,
-                (m >> 16) as u8, (m >> 24) as u8])
+    kc.update(&[m as u8, (m >> 8) as u8, (m >> 16) as u8, (m >> 24) as u8])
 }
 
 static NUL: &'static [u8] = &[0u8];
-const INIT_HASH: HashId = [0;32];
+const INIT_HASH: HashId = [0; 32];
 
 impl DirHandle {
     pub fn root(path: PathBuf, dev: u64) -> Self {
@@ -106,9 +105,12 @@ impl DirHandle {
         }))
     }
 
-    pub fn subdir(&self, name: &OsStr, synth: Option<FileMode>,
-                  dev: u64)
-                  -> DirHandle {
+    pub fn subdir(
+        &self,
+        name: &OsStr,
+        synth: Option<FileMode>,
+        dev: u64,
+    ) -> DirHandle {
         DirHandle(Arc::new(DirContent {
             path: self.child(name),
             name: name.to_owned(),
@@ -142,7 +144,7 @@ impl DirHandle {
         self.0.parent.as_ref()
     }
 
-    pub fn child<P : AsRef<Path>>(&self, name: P) -> PathBuf {
+    pub fn child<P: AsRef<Path>>(&self, name: P) -> PathBuf {
         self.0.path.join(name)
     }
 
@@ -179,22 +181,22 @@ impl DirHandle {
                     kc.update(&[0u8]);
                     kc_update_mode(&mut kc, mode);
                     kc.update(&h[..]);
-                },
+                }
                 FileData::Directory(mode) => {
                     kc.update(&[1u8]);
                     kc_update_mode(&mut kc, mode);
-                },
+                }
                 FileData::Symlink(ref target) => {
                     kc.update(&[2u8]);
                     kc.update(target.as_bytes());
                     kc.update(NUL);
-                },
+                }
                 FileData::Special => {
                     kc.update(&[3u8]);
-                },
+                }
             }
 
-            let mut hash = [0;32];
+            let mut hash = [0; 32];
             kc.finalize(&mut hash);
             hash
         };
@@ -211,17 +213,23 @@ impl DirHandle {
     /// `xfer` is needed to pass to `Replica::create()`. It should be whatever
     /// the replica uses for "not a file", since this call will only attempt to
     /// create directories.
-    pub fn create_if_needed<R : Replica<Directory = Self>>(
-        &self, replica: &R, xfer: R::TransferIn) -> Result<()>
-        where R::TransferIn : Clone
+    pub fn create_if_needed<R: Replica<Directory = Self>>(
+        &self,
+        replica: &R,
+        xfer: R::TransferIn,
+    ) -> Result<()>
+    where
+        R::TransferIn: Clone,
     {
         let mut locked = self.0.mcontent.lock().unwrap();
         if let Some(mode) = locked.synth_mode {
             let mut parent = self.0.parent.clone().unwrap();
             parent.create_if_needed(replica, xfer.clone())?;
-            replica.create(&mut parent,
-                                File(&self.0.name, &FileData::Directory(mode)),
-                                xfer)?;
+            replica.create(
+                &mut parent,
+                File(&self.0.name, &FileData::Directory(mode)),
+                xfer,
+            )?;
             locked.synth_mode = None;
         }
         Ok(())

@@ -16,10 +16,10 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use libc;
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::Arc;
 
 use crate::replica::WatchHandle;
 
@@ -34,8 +34,11 @@ pub fn is_interrupted() -> bool {
 unsafe extern "C" fn handle_sigint(_: libc::c_int) {
     let message = b"\nSync interrupted, stopping gracefully.\n\
                     Press ^C again to terminate immediately.\n";
-    libc::write(2, message.as_ptr() as *const libc::c_void,
-                message.len() as libc::size_t);
+    libc::write(
+        2,
+        message.as_ptr() as *const libc::c_void,
+        message.len() as libc::size_t,
+    );
     INTERRUPTED.store(true, Relaxed);
     libc::signal(libc::SIGTERM, libc::SIG_DFL);
     libc::signal(libc::SIGINT, libc::SIG_DFL);
@@ -50,20 +53,25 @@ unsafe extern "C" fn handle_sigint(_: libc::c_int) {
 
 pub fn install_signal_handler() {
     unsafe {
-        libc::signal(libc::SIGTERM, handle_sigint
-                     as unsafe extern "C" fn (libc::c_int)
-                     as libc::sighandler_t);
-        libc::signal(libc::SIGINT, handle_sigint
-                     as unsafe extern "C" fn (libc::c_int)
-                     as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            handle_sigint as unsafe extern "C" fn(libc::c_int)
+                as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            handle_sigint as unsafe extern "C" fn(libc::c_int)
+                as libc::sighandler_t,
+        );
     }
 }
 
 pub fn notify_on_signal(watch: Arc<WatchHandle>) {
     let ptr = Arc::into_raw(watch);
 
-    assert!(Ok(0) == NOTIFY_WATCH.compare_exchange(
-        0, ptr as usize, SeqCst, SeqCst));
+    assert!(
+        Ok(0) == NOTIFY_WATCH.compare_exchange(0, ptr as usize, SeqCst, SeqCst)
+    );
 }
 
 pub fn clear_notify() {

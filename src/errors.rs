@@ -327,8 +327,10 @@ impl Error {
         // returns `&Error`.
         let cause: Option<&(dyn StdError + Send + 'static)> =
             self.1.next_error.as_ref().map(|e| &**e);
-        cause.and_then(|c| c.downcast_ref::<Error>())
-            .map(|c| c.is_fatal()).unwrap_or(false)
+        cause
+            .and_then(|c| c.downcast_ref::<Error>())
+            .map(|c| c.is_fatal())
+            .unwrap_or(false)
     }
 
     /// Returns the log level to use for this error.

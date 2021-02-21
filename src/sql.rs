@@ -18,8 +18,8 @@
 
 //! Miscelaneous utilities for working with SQLite.
 
+use std::ffi::{CString, NulError, OsStr};
 use std::fs;
-use std::ffi::{CString,OsStr,NulError};
 use std::io::{self, Write};
 use std::ops::{Deref, DerefMut};
 // Because we need to be able to represent an `OsStr` as bytes in the database.
@@ -43,16 +43,19 @@ use sqlite::*;
 ///
 /// The return value from `f` is always returned, unless starting or committing
 /// the transaction fails.
-pub fn tx_gen<T, E, F : FnOnce () -> StdResult<T,E>>(
-    cxn: &Connection, f: F)
-    -> StdResult<T,E>
-where E : From<sqlite::Error> {
+pub fn tx_gen<T, E, F: FnOnce() -> StdResult<T, E>>(
+    cxn: &Connection,
+    f: F,
+) -> StdResult<T, E>
+where
+    E: From<sqlite::Error>,
+{
     cxn.execute("BEGIN TRANSACTION")?;
     match f() {
         Ok(v) => {
             cxn.execute("COMMIT")?;
             Ok(v)
-        },
+        }
         Err(e) => {
             // Silently drop errors from ROLLBACK, since it will fail if
             // the error above caused SQLite to roll back automatically.
@@ -64,17 +67,19 @@ where E : From<sqlite::Error> {
 
 /// A less general version of `tx_gen` which only deals in `sqlite::Error`s,
 /// which makes it work better with type inferrence.
-pub fn tx<T, F : FnOnce () -> sqlite::Result<T>>(cxn: &Connection, f: F)
-                                                 -> sqlite::Result<T> {
+pub fn tx<T, F: FnOnce() -> sqlite::Result<T>>(
+    cxn: &Connection,
+    f: F,
+) -> sqlite::Result<T> {
     tx_gen(cxn, f)
 }
 
-pub trait StatementEx : Sized {
-    type Bound : StatementEx;
+pub trait StatementEx: Sized {
+    type Bound: StatementEx;
 
     /// Like `Statement::bind`, but returns a self-like value to allow chaining
     /// onto other methods in this trait.
-    fn binding<T : Bindable>(self, i: usize, value: T) -> Self::Bound;
+    fn binding<T: Bindable>(self, i: usize, value: T) -> Self::Bound;
 
     /// Executes this statement (if possible), discarding all rows until `Done`
     /// is returned or an error is returned.
@@ -84,8 +89,10 @@ pub trait StatementEx : Sized {
     /// underlying statement to convert the value, and `Ok(Some(_))` is
     /// returned if `f` succeeds. `Ok(None)` is returned if there are no result
     /// rows.
-    fn first<R, F : FnOnce (&Statement) -> Result<R>>
-        (self, f: F) -> Result<Option<R>>;
+    fn first<R, F: FnOnce(&Statement) -> Result<R>>(
+        self,
+        f: F,
+    ) -> Result<Option<R>>;
 
     /// Returns whether there are any rows in the result set.
     fn exists(self) -> Result<bool> {
@@ -96,19 +103,23 @@ pub trait StatementEx : Sized {
 impl<'l> StatementEx for Statement<'l> {
     type Bound = Result<Statement<'l>>;
 
-    fn binding<T : Bindable>(mut self, i: usize, value: T)
-                             -> Result<Statement<'l>> {
+    fn binding<T: Bindable>(
+        mut self,
+        i: usize,
+        value: T,
+    ) -> Result<Statement<'l>> {
         self.bind(i, value).map(|_| self)
     }
 
     fn run(mut self) -> Result<()> {
-        while State::Done != self.next()? { }
+        while State::Done != self.next()? {}
         Ok(())
     }
 
-    fn first<R, F : FnOnce (&Statement) -> Result<R>>
-        (mut self, f: F) -> Result<Option<R>>
-    {
+    fn first<R, F: FnOnce(&Statement) -> Result<R>>(
+        mut self,
+        f: F,
+    ) -> Result<Option<R>> {
         if State::Done == self.next()? {
             Ok(None)
         } else {
@@ -120,7 +131,7 @@ impl<'l> StatementEx for Statement<'l> {
 impl<'l> StatementEx for Result<Statement<'l>> {
     type Bound = Self;
 
-    fn binding<T : Bindable>(self, i: usize, value: T) -> Self {
+    fn binding<T: Bindable>(self, i: usize, value: T) -> Self {
         self.and_then(|r| r.binding(i, value))
     }
 
@@ -128,9 +139,10 @@ impl<'l> StatementEx for Result<Statement<'l>> {
         self.and_then(|r| r.run())
     }
 
-    fn first<R, F : FnOnce (&Statement) -> Result<R>>
-        (self, f: F) -> Result<Option<R>>
-    {
+    fn first<R, F: FnOnce(&Statement) -> Result<R>>(
+        self,
+        f: F,
+    ) -> Result<Option<R>> {
         self.and_then(|r| r.first(f))
     }
 }
@@ -139,11 +151,11 @@ impl<'l> StatementEx for Result<Statement<'l>> {
 /// NUL bytes (which aren't actually legal in any syscall, but nonetheless
 /// allowed in generic `OsStr`s).
 pub trait AsNStr {
-    fn as_nstr(&self) -> StdResult<&OsStr,NulError>;
+    fn as_nstr(&self) -> StdResult<&OsStr, NulError>;
 }
 
 impl AsNStr for [u8] {
-    fn as_nstr(&self) -> StdResult<&OsStr,NulError> {
+    fn as_nstr(&self) -> StdResult<&OsStr, NulError> {
         if self.contains(&0u8) {
             // There's no public API for constructing a `NulError`, so let
             // `CString` do it for us.
@@ -183,7 +195,7 @@ impl DerefMut for SendConnection {
 // `sqlite::Connection` cannot make itself `Send` because the optional callback
 // it contains might not be `Send`. We do not use that feature, and SQLite
 // itself is prepared for cross-thread requests, so it is safe to be `Send`.
-unsafe impl Send for SendConnection { }
+unsafe impl Send for SendConnection {}
 
 /// Wrapper for `Connection` which runs the database in non-synchronous mode.
 ///
@@ -216,7 +228,7 @@ unsafe impl Send for SendConnection { }
 ///
 /// Additionally, this type also has the same properties as `SendConnection`.
 pub struct VolatileConnection(pub sqlite::Connection);
-unsafe impl Send for VolatileConnection { }
+unsafe impl Send for VolatileConnection {}
 
 impl Deref for VolatileConnection {
     type Target = sqlite::Connection;
@@ -241,33 +253,47 @@ impl VolatileConnection {
     ///
     /// `bad_stuff` specifies a message to display to describe what the
     /// consequences of nuking the database are.
-    pub fn new<P : AsRef<Path>>(path: P, schema: &str, bad_stuff: &str)
-                                -> sqlite::Result<Self> {
-        fn open_with_schema(path: &Path, schema: &str)
-                            -> sqlite::Result<sqlite::Connection> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        schema: &str,
+        bad_stuff: &str,
+    ) -> sqlite::Result<Self> {
+        fn open_with_schema(
+            path: &Path,
+            schema: &str,
+        ) -> sqlite::Result<sqlite::Connection> {
             let cxn = sqlite::Connection::open(path)?;
             cxn.execute(schema)?;
             Ok(cxn)
         }
 
-        fn open_first_try(path: &Path, schema: &str)
-                          -> sqlite::Result<sqlite::Connection> {
+        fn open_first_try(
+            path: &Path,
+            schema: &str,
+        ) -> sqlite::Result<sqlite::Connection> {
             let cxn = open_with_schema(path, schema)?;
             if cxn.prepare("SELECT 1 FROM `db_dirty`").exists()? {
-                eprintln!("Database '{}' not closed cleanly, performing \
-                           integrity check...", path.display());
-                let error: String = cxn.prepare("PRAGMA integrity_check(1)")
+                eprintln!(
+                    "Database '{}' not closed cleanly, performing \
+                           integrity check...",
+                    path.display()
+                );
+                let error: String = cxn
+                    .prepare("PRAGMA integrity_check(1)")
                     .first(|s| s.read(0))?
                     .unwrap_or_else(|| "(not ok)".to_owned());
                 if "ok" != &error {
                     return Err(sqlite::Error {
-                        code: None, message: Some(error) });
+                        code: None,
+                        message: Some(error),
+                    });
                 }
                 if cxn.prepare("PRAGMA foreign_key_check").exists()? {
                     return Err(sqlite::Error {
                         code: None,
-                        message: Some("foreign key constraint violated"
-                                      .to_owned())
+                        message: Some(
+                            "foreign key constraint violated".to_owned(),
+                        ),
                     });
                 }
                 eprintln!("Integrity check passed");
@@ -277,10 +303,15 @@ impl VolatileConnection {
 
         let path = path.as_ref();
         let cxn = open_first_try(path, schema).or_else(|e| {
-            eprintln!("Database '{}' is corrupt: {}\n\
+            eprintln!(
+                "Database '{}' is corrupt: {}\n\
                        Deleting this file and creating a new, \
                        empty database.\n\
-                       {}", path.display(), e, bad_stuff);
+                       {}",
+                path.display(),
+                e,
+                bad_stuff
+            );
             let _ = fs::remove_file(path);
             open_with_schema(path, schema)
         })?;
@@ -295,8 +326,10 @@ impl VolatileConnection {
 
 impl Drop for VolatileConnection {
     fn drop(&mut self) {
-        self.0.prepare("PRAGMA synchronous = FULL").run().and_then(
-            |_| self.0.prepare("DELETE FROM `db_dirty`").run())
+        self.0
+            .prepare("PRAGMA synchronous = FULL")
+            .run()
+            .and_then(|_| self.0.prepare("DELETE FROM `db_dirty`").run())
             .unwrap_or_else(|e| {
                 eprintln!("Failed to clean database up: {}", e);
             });

@@ -55,42 +55,54 @@ impl PathExt for Path {
     }
 }
 
-pub fn run<CFG : AsRef<Path>, LOC : AsRef<Path>, REM : AsRef<Path>>
-    (passphrase: &PassphraseConfig,
-     config: CFG, local: LOC, remote: REM) -> Result<()>
-{
+pub fn run<CFG: AsRef<Path>, LOC: AsRef<Path>, REM: AsRef<Path>>(
+    passphrase: &PassphraseConfig,
+    config: CFG,
+    local: LOC,
+    remote: REM,
+) -> Result<()> {
     let config = config.as_ref();
     let local = local.as_ref();
     let remote = remote.as_ref();
-    let cwd = env::current_dir().chain_err(
-        || "Failed to determine current directory")?;
+    let cwd = env::current_dir()
+        .chain_err(|| "Failed to determine current directory")?;
 
     if config.exists() {
-        return Err(format!("\
+        return Err(format!(
+            "\
 Configuration location '{}' already exists.
 The configuration location should be the name of a directory to be created
-under an already existing directory.", config.display()).into());
+under an already existing directory.",
+            config.display()
+        )
+        .into());
     }
 
     if config.extension().is_some() {
-        confirm(&format!("\
+        confirm(&format!(
+            "\
 The path '{}' looks like it was intended as a file name rather than a directory
 name. You can go ahead with this name anyway, which would result in the
 configuration being stored at '{}'.
 Use this configuration path? ",
-                         config.display(),
-                         config.join("config.toml").display()))?;
+            config.display(),
+            config.join("config.toml").display()
+        ))?;
     }
 
     if !config.parent().map_or(true, |p| p.exists2()) {
-        confirm(&format!("\
+        confirm(&format!(
+            "\
 Parent of configuration location, '{}', does not exist;
-Should it be created too? ", config.parent().unwrap().display()))?;
+Should it be created too? ",
+            config.parent().unwrap().display()
+        ))?;
     }
 
     if !local.is_dir() {
-        return Err(format!("Local path '{}' does not exist",
-                           local.display()).into());
+        return Err(
+            format!("Local path '{}' does not exist", local.display()).into()
+        );
     }
 
     let full_local = cwd.join(local);
@@ -98,36 +110,49 @@ Should it be created too? ", config.parent().unwrap().display()))?;
 
     let storage: Arc<dyn Storage>;
     let server_spec: String;
-    if let Some((host, remote_path)) = remote.to_str()
-        .and_then(|s| s.find(':').map(|ix| (&s[..ix], &s[ix+1..])))
+    if let Some((host, remote_path)) = remote
+        .to_str()
+        .and_then(|s| s.find(':').map(|ix| (&s[..ix], &s[ix + 1..])))
     {
-        confirm(&format!("This will set up the following configuration:
+        confirm(&format!(
+            "This will set up the following configuration:
 Files synced to/from: {}
 Encrypted data written to REMOTE path: {} on {}
 Server accessed via: ssh {}
 Configuration and state stored in: {}
 
-Does this look reasonable? ", full_local.display(), remote_path,
-                         host, shell_escape(&host), full_config.display()))?;
+Does this look reasonable? ",
+            full_local.display(),
+            remote_path,
+            host,
+            shell_escape(&host),
+            full_config.display()
+        ))?;
 
         let mut child = process::Command::new("ssh")
             .arg(&host)
             // If we actually connect to a POSIX shell, we get the `0`
             // response. However, if the server is running ensync shell, it
             // ignores these arguments and returns `SHELL_IDENTITY`.
-            .arg("printf").arg("'0\\0'").arg("&&").arg("exec").arg("sh")
+            .arg("printf")
+            .arg("'0\\0'")
+            .arg("&&")
+            .arg("exec")
+            .arg("sh")
             .stderr(process::Stdio::inherit())
             .stdin(process::Stdio::piped())
             .stdout(process::Stdio::piped())
-            .spawn().chain_err(
-                || format!("Failed to run `ssh {}`", shell_escape(&host)))?;
+            .spawn()
+            .chain_err(|| {
+                format!("Failed to run `ssh {}`", shell_escape(&host))
+            })?;
 
-        let mut input = child.stdin.take().expect(
-            "Missing stdin pipe on child");
-        let mut output = child.stdout.take().expect(
-            "Missing stdout pipe on child");
-        let ensync_path = configure_server(&mut output, &mut input,
-                                           remote_path)?;
+        let mut input =
+            child.stdin.take().expect("Missing stdin pipe on child");
+        let mut output =
+            child.stdout.take().expect("Missing stdout pipe on child");
+        let ensync_path =
+            configure_server(&mut output, &mut input, remote_path)?;
 
         let command;
         if let Some(ensync_path) = ensync_path {
@@ -136,56 +161,71 @@ Does this look reasonable? ", full_local.display(), remote_path,
             // data into the shell. We also put the `printf` in the same
             // statement so that we can wait for that byte come in to know that
             // the shell as relinquished stdin.
-            writeln!(input, "printf . && exec {} server {}",
-                     shell_escape(&ensync_path), shell_escape(remote_path))
-                .and_then(|_| input.flush())
-                .chain_err(|| "Failed to start server process")?;
+            writeln!(
+                input,
+                "printf . && exec {} server {}",
+                shell_escape(&ensync_path),
+                shell_escape(remote_path)
+            )
+            .and_then(|_| input.flush())
+            .chain_err(|| "Failed to start server process")?;
 
-            let mut period = [0u8;1];
-            output.read_exact(&mut period).chain_err(
-                || "Failed to wait for server process to start")?;
+            let mut period = [0u8; 1];
+            output
+                .read_exact(&mut period)
+                .chain_err(|| "Failed to wait for server process to start")?;
 
-            command = format!("ssh -T {} {} server {}",
-                              shell_escape(&host),
-                              // Awkwardly, we need to double-escape the paths
-                              // here since they get passed to `sh -c`.
-                              shell_escape(&shell_escape(&ensync_path)),
-                              shell_escape(&shell_escape(remote_path)));
+            command = format!(
+                "ssh -T {} {} server {}",
+                shell_escape(&host),
+                // Awkwardly, we need to double-escape the paths
+                // here since they get passed to `sh -c`.
+                shell_escape(&shell_escape(&ensync_path)),
+                shell_escape(&shell_escape(remote_path))
+            );
         } else {
             command = format!("ssh -T {}", shell_escape(&host));
         }
         server_spec = format!("shell:{}", command);
-        storage = Arc::new(
-            connect_server_storage(child, input, output, &command, true)?);
+        storage = Arc::new(connect_server_storage(
+            child, input, output, &command, true,
+        )?);
     } else {
         sanity_check_remote(LocalPathAccess, remote)?;
 
         let full_remote = cwd.join(remote);
-        confirm(&format!("This will set up the following configuration:
+        confirm(&format!(
+            "This will set up the following configuration:
 Files synced to/from: {}
 Encrypted data written to LOCAL path: {}
 Configuration and state stored in: {}
 
-Does this look reasonable? ", full_local.display(), full_remote.display(),
-        full_config.display()))?;
+Does this look reasonable? ",
+            full_local.display(),
+            full_remote.display(),
+            full_config.display()
+        ))?;
 
         server_spec = format!("path:{}", full_remote.to_str().unwrap());
-        storage = Arc::new(LocalStorage::open(&full_remote).chain_err(
-            || "Error opening local storage")?);
+        storage = Arc::new(
+            LocalStorage::open(&full_remote)
+                .chain_err(|| "Error opening local storage")?,
+        );
     }
 
     println!("Remote storage initialised successfully.");
 
-    let key_chain = if storage.getdir(&server::DIRID_KEYS).chain_err(
-        || "Failed to check whether key store initialised")?.is_none()
+    let key_chain = if storage
+        .getdir(&server::DIRID_KEYS)
+        .chain_err(|| "Failed to check whether key store initialised")?
+        .is_none()
     {
-        let passphrase = passphrase.read_passphrase(
-            "new passphrase", true)?;
+        let passphrase = passphrase.read_passphrase("new passphrase", true)?;
         keymgmt::init_keys(&*storage, &passphrase, "original")
             .chain_err(|| "Failed to initialise key store")?
     } else {
-        let passphrase = passphrase.read_passphrase(
-            "existing passphrase", false)?;
+        let passphrase =
+            passphrase.read_passphrase("existing passphrase", false)?;
         keymgmt::derive_key_chain(&*storage, &passphrase)?
     };
 
@@ -203,18 +243,24 @@ compression = "none"
 
 [[rules.root.files]]
 mode = "---/---"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    fs::create_dir_all(&dummy_config.private_root).chain_err(
-        || format!("Failed to create '{}'",
-                   dummy_config.private_root.display()))?;
+    fs::create_dir_all(&dummy_config.private_root).chain_err(|| {
+        format!("Failed to create '{}'", dummy_config.private_root.display())
+    })?;
 
-    let replica = open_server_replica(&dummy_config, storage.clone(),
-                                      Some(Arc::new(key_chain)))?;
+    let replica = open_server_replica(
+        &dummy_config,
+        storage.clone(),
+        Some(Arc::new(key_chain)),
+    )?;
     let mut proot = replica.pseudo_root();
     let mut existing_roots = BTreeSet::new();
-    for (name, fd) in replica.list(&mut proot).chain_err(
-        || "Failed to list logical roots on server")?
+    for (name, fd) in replica
+        .list(&mut proot)
+        .chain_err(|| "Failed to list logical roots on server")?
     {
         if let FileData::Directory(..) = fd {
             if let Ok(name) = name.into_string() {
@@ -224,25 +270,34 @@ mode = "---/---"
     }
 
     let chosen_root = if existing_roots.is_empty() {
-        println!("\nNo logical roots exist yet.
-Enter a name for the new logical root, or just press enter to use \"root\".");
+        println!(
+            "\nNo logical roots exist yet.
+Enter a name for the new logical root, or just press enter to use \"root\"."
+        );
         prompt_line("root", "Logical root name")?
     } else {
         println!("\nThe following logical roots exist:");
         for name in &existing_roots {
             println!("\t{}", name);
         }
-        println!("\
+        println!(
+            "\
 If you want to sync with an existing root, enter its name below. Otherwise,
-enter a name for a new logical root.");
+enter a name for a new logical root."
+        );
         let mut selected;
         loop {
-            selected = prompt_line(existing_roots.iter().next().unwrap(),
-                                   "Logical root name")?;
+            selected = prompt_line(
+                existing_roots.iter().next().unwrap(),
+                "Logical root name",
+            )?;
             if !existing_roots.contains(&selected) {
-                if !ask(&format!("Root '{}' does not exist. Create it? ",
-                                 selected))?
-                { continue; }
+                if !ask(&format!(
+                    "Root '{}' does not exist. Create it? ",
+                    selected
+                ))? {
+                    continue;
+                }
             }
             break;
         }
@@ -250,22 +305,27 @@ enter a name for a new logical root.");
     };
 
     if !existing_roots.contains(&chosen_root) {
-        replica.create(&mut proot, File(OsStr::new(&chosen_root),
-                                        &FileData::Directory(0o600)),
-                       None)
+        replica
+            .create(
+                &mut proot,
+                File(OsStr::new(&chosen_root), &FileData::Directory(0o600)),
+                None,
+            )
             .chain_err(|| format!("Failed to create root '{}'", chosen_root))?;
         println!("Created new logical root '{}'", chosen_root);
     }
 
     let mut compression;
-    println!(r#"
+    println!(
+        r#"
 ensync supports transparent compression of files. This can substantially reduce
 disk space usage on the remote side as well as reducing network bandwidth, but
 does leak some information about the nature of the files to someone who gets
 their hands on the encrypted files. It also has a minor performance hit, so you
 may also wish to turn it off if you know virtually all your files are
 uncompressible.
-Valid values are "none", "fast", "default", "best"."#);
+Valid values are "none", "fast", "default", "best"."#
+    );
     loop {
         compression = prompt_line("best", "Desired compression level")?;
         if parse_compression_name(&config_file_name, &compression).is_ok() {
@@ -276,7 +336,8 @@ Valid values are "none", "fast", "default", "best"."#);
     }
 
     let mut sync_mode;
-    println!(r#"
+    println!(
+        r#"
 The sync mode controls how changes are propagated between the local and remote
 replicas. The sync mode is normally specified as a string like "cud/cud", where
 each letter indicates a type of propagation being turned on, using hyphens to
@@ -320,7 +381,8 @@ You can also use one of the following aliases:
 
 This will configure using the selected sync mode for all files. It is possible
 to use different sync modes in different contexts by editing the configuration
-later."#);
+later."#
+    );
 
     loop {
         sync_mode = prompt_line("conservative-sync", "Desired sync mode")?;
@@ -333,14 +395,20 @@ later."#);
     let trust_client_unix_mode =
         unix_permissions_survive(&full_local).unwrap_or(true);
     if !trust_client_unix_mode {
-        println!("NOTE: The filesystem at '{}' does not appear to fully \
+        println!(
+            "NOTE: The filesystem at '{}' does not appear to fully \
                   support UNIX permissions.\n\
                   Setting `trust_client_unix_mode = false` in the \
-                  configuration.", full_local.display());
+                  configuration.",
+            full_local.display()
+        );
     }
 
-    fs::File::create(&config_file_name).and_then(
-        |mut f| writeln!(f, r#"# Ensync configuration file
+    fs::File::create(&config_file_name)
+        .and_then(|mut f| {
+            writeln!(
+                f,
+                r#"# Ensync configuration file
 # Generated by `ensync setup`.
 
 # Relative file names in this file are relative to the directory containing
@@ -396,22 +464,31 @@ mode = {sync_mode}
 # don't want the lossy permissions to propagate.
 trust_client_unix_mode = {trust_client_unix_mode}
 "#,
-                     path = toml::Value::String(
-                         full_local.to_str().unwrap().to_owned()),
-                     server = toml::Value::String(server_spec.clone()),
-                     server_root = toml::Value::String(chosen_root.clone()),
-                     passphrase = toml::Value::String(
-                         passphrase.clone().relativise(&cwd).to_string_lossy()),
-                     compression = toml::Value::String(compression.clone()),
-                     sync_mode = toml::Value::String(sync_mode.clone()),
-                     trust_client_unix_mode = toml::Value::Boolean(
-                         trust_client_unix_mode),
-        ).and_then(|_| f.flush())).chain_err(
-        || format!("Error writing to '{}'", config_file_name.display()))?;
+                path = toml::Value::String(
+                    full_local.to_str().unwrap().to_owned()
+                ),
+                server = toml::Value::String(server_spec.clone()),
+                server_root = toml::Value::String(chosen_root.clone()),
+                passphrase = toml::Value::String(
+                    passphrase.clone().relativise(&cwd).to_string_lossy()
+                ),
+                compression = toml::Value::String(compression.clone()),
+                sync_mode = toml::Value::String(sync_mode.clone()),
+                trust_client_unix_mode =
+                    toml::Value::Boolean(trust_client_unix_mode),
+            )
+            .and_then(|_| f.flush())
+        })
+        .chain_err(|| {
+            format!("Error writing to '{}'", config_file_name.display())
+        })?;
 
     println!("Wrote configuration to '{}'", config_file_name.display());
-    println!("Setup is complete. Edit the configuration if desired, or run\n\
-              `ensync sync {}` to start syncing.", config.display());
+    println!(
+        "Setup is complete. Edit the configuration if desired, or run\n\
+              `ensync sync {}` to start syncing.",
+        config.display()
+    );
     Ok(())
 }
 
@@ -453,9 +530,11 @@ fn confirm(msg: &str) -> Result<()> {
     ask(msg).and_then(|y| if y { Ok(()) } else { Err("Cancelled".into()) })
 }
 
-fn configure_server<R : Read, W : Write>(output: R, mut input: W,
-                                         remote_path: &str)
-                                         -> Result<Option<String>> {
+fn configure_server<R: Read, W: Write>(
+    output: R,
+    mut input: W,
+    remote_path: &str,
+) -> Result<Option<String>> {
     let mut output = io::BufReader::new(output);
 
     // Read the response from the `printf` at the beginning of the ssh shell
@@ -465,24 +544,31 @@ fn configure_server<R : Read, W : Write>(output: R, mut input: W,
         if !remote_path.is_empty() {
             return Err("The server is running ensync as a shell; you cannot \
                         specify the server-side path (just write `host:` or \
-                        `user@host:`".into());
+                        `user@host:`"
+                .into());
         }
         return Ok(None);
     } else if "0" != &is_ensync_shell {
         return Err("Unexpected response from server shell".into());
     }
 
-    sanity_check_remote(ShellPathAccess {
-        input: &mut input, output: &mut output
-    }, remote_path)?;
+    sanity_check_remote(
+        ShellPathAccess {
+            input: &mut input,
+            output: &mut output,
+        },
+        remote_path,
+    )?;
 
     // Try to find an existing ensync installation
     let found = remote_shell_command(
-        &mut input, &mut output,
+        &mut input,
+        &mut output,
         "(which ensync >/dev/null && printf 'ensync\\0') || \
          (test -f .cargo/bin/ensync && printf '.cargo/bin/ensync\\0') || \
          (test -f ./ensync && printf './ensync\\0') || \
-         printf 'nothing\\0'")?;
+         printf 'nothing\\0'",
+    )?;
 
     if "nothing" != &found {
         return Ok(Some(found));
@@ -493,40 +579,58 @@ fn configure_server<R : Read, W : Write>(output: R, mut input: W,
     Err("ensync does not appear to be installed on the server".into())
 }
 
-fn remote_shell_command<R : BufRead, W : Write>
-    (mut input: W, output: R, command: &str) -> Result<String>
-{
-    writeln!(input, "{}", command).and_then(|_| input.flush())
+fn remote_shell_command<R: BufRead, W: Write>(
+    mut input: W,
+    output: R,
+    command: &str,
+) -> Result<String> {
+    writeln!(input, "{}", command)
+        .and_then(|_| input.flush())
         .chain_err(|| "Error writing shell command to server")?;
     read_shell_response(output)
 }
 
-fn read_shell_response<R : BufRead>(mut output: R) -> Result<String> {
+fn read_shell_response<R: BufRead>(mut output: R) -> Result<String> {
     let mut buf = Vec::new();
-    output.read_until(0, &mut buf).chain_err(
-        || "Failed to read shell response from server")?;
+    output
+        .read_until(0, &mut buf)
+        .chain_err(|| "Failed to read shell response from server")?;
     if Some(0) != buf.pop() {
         return Err("Unexpected EOF from server".into());
     }
 
-    String::from_utf8(buf).chain_err(
-        || "Failed to decode shell response from server")
+    String::from_utf8(buf)
+        .chain_err(|| "Failed to decode shell response from server")
 }
 
 fn shell_escape(s: &str) -> String {
-    if s.is_empty() { return "''".to_owned(); }
+    if s.is_empty() {
+        return "''".to_owned();
+    }
 
     // Do nothing if safe (by a very conservative definition)
     let mut safe = true;
     for ch in s.chars() {
         match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' |
-            '.' | '/' | ':' | '@' | '-' | '_' => (),
-            _ => { safe = false; break; },
+            'a'..='z'
+            | 'A'..='Z'
+            | '0'..='9'
+            | '.'
+            | '/'
+            | ':'
+            | '@'
+            | '-'
+            | '_' => (),
+            _ => {
+                safe = false;
+                break;
+            }
         }
     }
 
-    if safe { return s.to_owned(); }
+    if safe {
+        return s.to_owned();
+    }
 
     let mut escaped = "'".to_owned();
     for ch in s.chars() {
@@ -546,7 +650,7 @@ trait PathAccess {
 }
 
 struct LocalPathAccess;
-impl PathAccess  for LocalPathAccess {
+impl PathAccess for LocalPathAccess {
     fn is_dir(&mut self, path: &Path) -> Result<bool> {
         Ok(path.is_dir2())
     }
@@ -556,36 +660,49 @@ impl PathAccess  for LocalPathAccess {
     }
 }
 
-struct ShellPathAccess<R : BufRead, W : Write> {
+struct ShellPathAccess<R: BufRead, W: Write> {
     input: W,
     output: R,
 }
 
-impl<R : BufRead, W : Write> PathAccess for ShellPathAccess<R, W> {
+impl<R: BufRead, W: Write> PathAccess for ShellPathAccess<R, W> {
     fn is_dir(&mut self, path: &Path) -> Result<bool> {
-        if path.iter().next().is_none() { return Ok(true); }
+        if path.iter().next().is_none() {
+            return Ok(true);
+        }
 
         remote_shell_command(
-            &mut self.input, &mut self.output,
-            &format!("test -d {} && printf 'y\\0' || printf 'n\\0'",
-                     shell_escape(path.to_str().unwrap())))
-            .map(|ref s| "y" == s)
+            &mut self.input,
+            &mut self.output,
+            &format!(
+                "test -d {} && printf 'y\\0' || printf 'n\\0'",
+                shell_escape(path.to_str().unwrap())
+            ),
+        )
+        .map(|ref s| "y" == s)
     }
 
     fn exists(&mut self, path: &Path) -> Result<bool> {
-        if path.iter().next().is_none() { return Ok(true); }
+        if path.iter().next().is_none() {
+            return Ok(true);
+        }
 
         remote_shell_command(
-            &mut self.input, &mut self.output,
-            &format!("test -e {} && printf 'y\\0' || printf 'n\\0'",
-                     shell_escape(path.to_str().unwrap())))
-            .map(|ref s| "y" == s)
+            &mut self.input,
+            &mut self.output,
+            &format!(
+                "test -e {} && printf 'y\\0' || printf 'n\\0'",
+                shell_escape(path.to_str().unwrap())
+            ),
+        )
+        .map(|ref s| "y" == s)
     }
 }
 
-fn sanity_check_remote<A : PathAccess, P : AsRef<Path>>
-    (mut access: A, remote: P) -> Result<()>
-{
+fn sanity_check_remote<A: PathAccess, P: AsRef<Path>>(
+    mut access: A,
+    remote: P,
+) -> Result<()> {
     let remote = remote.as_ref();
     if remote.iter().next().is_none() {
         return Err("Remote path is empty".into());
@@ -593,8 +710,11 @@ fn sanity_check_remote<A : PathAccess, P : AsRef<Path>>
 
     if access.exists(remote)? {
         if !access.is_dir(remote)? {
-            return Err(format!("Sync remote path '{}' is not a directory",
-                               remote.display()).into());
+            return Err(format!(
+                "Sync remote path '{}' is not a directory",
+                remote.display()
+            )
+            .into());
         } else if !access.is_dir(&remote.join("dirs"))? {
             confirm(&format!("\
                 Sync remote location '{}' already exists and does not look like an ensync
@@ -602,15 +722,18 @@ server directory.
 Really use this location as the remote? ", remote.display()))?;
         }
     } else if !remote.parent().map_or(Ok(true), |p| access.exists(p))? {
-        confirm(&format!("\
+        confirm(&format!(
+            "\
             Parent of sync remote location, '{}', does not exist;
-Should it be created too? ", remote.parent().unwrap().display()))?;
+Should it be created too? ",
+            remote.parent().unwrap().display()
+        ))?;
     }
 
     Ok(())
 }
 
-fn unix_permissions_survive<P : AsRef<Path>>(path: P) -> Result<bool> {
+fn unix_permissions_survive<P: AsRef<Path>>(path: P) -> Result<bool> {
     let f = NamedTempFile::new_in(path)?;
     // Try to set the mode to 0o111. For vfat, the execute bits are always set,
     // but so are the read bits, so we notice that way. For `noexec`, we need

@@ -22,8 +22,8 @@
 //! providing useful output for tests, while also allowing eventual rsync-style
 //! itemised output.
 
+use crate::reconcile::compute::{Conflict, Reconciliation};
 use std::ffi::OsStr;
-use crate::reconcile::compute::{Reconciliation,Conflict};
 
 use crate::defs::*;
 use crate::errors::Error;
@@ -43,12 +43,14 @@ pub const EDIT: LogLevel = 4;
 /// being made.
 pub const INFO: LogLevel = 5;
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplicaSide {
-    Client, Ancestor, Server
+    Client,
+    Ancestor,
+    Server,
 }
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorOperation<'a> {
     List,
     MarkClean,
@@ -61,11 +63,17 @@ pub enum ErrorOperation<'a> {
     Access(&'a OsStr),
 }
 
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Log<'a> {
     Inspect(&'a OsStr, &'a OsStr, Reconciliation, Conflict),
     Create(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
-    Update(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData, &'a FileData),
+    Update(
+        ReplicaSide,
+        &'a OsStr,
+        &'a OsStr,
+        &'a FileData,
+        &'a FileData,
+    ),
     Rename(ReplicaSide, &'a OsStr, &'a OsStr, &'a OsStr),
     Remove(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
     Rmdir(ReplicaSide, &'a OsStr),
@@ -97,10 +105,10 @@ mod println_logger {
             let level_str = match level {
                 FATAL => "FATAL",
                 ERROR => "ERROR",
-                WARN  => " WARN",
-                EDIT  => " EDIT",
-                INFO  => " INFO",
-                _     => "?????",
+                WARN => " WARN",
+                EDIT => " EDIT",
+                INFO => " INFO",
+                _ => "?????",
             };
             println!("[{}] {:?}", level_str, what);
         }

@@ -35,16 +35,16 @@
 //! concurrent modifications of any kind. Any tests which simulate these should
 //! simply clear the clean flag again.
 
-use std::collections::{HashMap,HashSet};
-use std::ffi::{OsStr,OsString};
-use std::sync::{Mutex,MutexGuard};
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
+use std::sync::{Mutex, MutexGuard};
 
 use crate::defs::*;
 use crate::errors::*;
-use crate::replica::{Replica,ReplicaDirectory,NullTransfer,Condemn};
+use crate::replica::{Condemn, NullTransfer, Replica, ReplicaDirectory};
 
 /// Identifies an operation for purposes of mapping to a fault.
-#[derive(Clone,Debug,Hash,PartialEq,Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum Op {
     /// Matched when `Replica::root()` is called.
     ReadRoot,
@@ -53,32 +53,32 @@ pub enum Op {
     List(OsString),
     /// Matched when `Replica::rename()` is called or when an operation
     /// performs a rename internally. The fields are: path, old name.
-    Rename(OsString,OsString),
+    Rename(OsString, OsString),
     /// Matched when `Replica::remove()` is called or when an operation
     /// performs a removal internally. The fields are: path, filename.
-    Remove(OsString,OsString),
+    Remove(OsString, OsString),
     /// Matched when `Replica::create()` is called or when an operation
     /// performs a creation internally.
-    Create(OsString,OsString),
+    Create(OsString, OsString),
     /// Matched when a directory with the given path is created implicitly due
     /// to creating a file within a synthetic directory.
     CreateSynthetic(OsString),
     /// Matched when a file is updated. Fields are: path, filename.
-    Update(OsString,OsString),
+    Update(OsString, OsString),
     /// Matched when `Replica::chdir()` is used to descend into the given full
     /// path.
     Chdir(OsString),
     /// Matched when `Replica::transfer()` is called for the given (path,file).
     /// If the fault fails, this is reflected if the transfer value is actually
     /// used.
-    Transfer(OsString,OsString),
+    Transfer(OsString, OsString),
 }
 
 /// An entry in a `MemoryReplica` directory.
 ///
 /// This is essentially the same as `FileData`, with slightly different
 /// semantics for regular files.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub enum Entry {
     /// Indicates a subdirectory. The actual contents of the directory can be
     /// found by building its full path and looking in
@@ -90,7 +90,7 @@ pub enum Entry {
 }
 
 /// The contents of a directory in a `MemoryReplica`.
-#[derive(Clone,Debug,Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Directory {
     /// The files in this directory. Defaults to empty.
     pub contents: HashMap<OsString, Entry>,
@@ -101,7 +101,7 @@ pub struct Directory {
 }
 
 /// A regular file as represented within a `MemoryReplica`.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Regular {
     pub mode: FileMode,
     pub size: FileSize,
@@ -116,10 +116,10 @@ impl<'a> From<&'a Entry> for FileData {
     fn from(entry: &'a Entry) -> FileData {
         match entry {
             &Entry::Directory(mode) => FileData::Directory(mode),
-            &Entry::Regular(reg) => FileData::Regular(
-                reg.mode, reg.size, reg.modified, reg.hash),
-            &Entry::Symlink(ref target) =>
-                FileData::Symlink(target.clone()),
+            &Entry::Regular(reg) => {
+                FileData::Regular(reg.mode, reg.size, reg.modified, reg.hash)
+            }
+            &Entry::Symlink(ref target) => FileData::Symlink(target.clone()),
             &Entry::Special => FileData::Special,
         }
     }
@@ -144,19 +144,23 @@ impl Entry {
             &FileData::Regular(mode, size, modified, _) => {
                 let hash = xfer.ok_or(ErrorKind::MissingXfer)?;
                 Ok(Entry::Regular(Regular {
-                    mode: mode, size: size, modified: modified,
-                    hash: hash, content: hash,
+                    mode: mode,
+                    size: size,
+                    modified: modified,
+                    hash: hash,
+                    content: hash,
                 }))
-            },
-            &FileData::Symlink(ref target) =>
-                Ok(Entry::Symlink(target.clone())),
+            }
+            &FileData::Symlink(ref target) => {
+                Ok(Entry::Symlink(target.clone()))
+            }
             &FileData::Special => Ok(Entry::Special),
         }
     }
 }
 
-pub trait Fault : Fn (&mut MemoryReplicaImpl) -> Result<()> + Send { }
-impl<T : Fn (&mut MemoryReplicaImpl) -> Result<()> + Send> Fault for T { }
+pub trait Fault: Fn(&mut MemoryReplicaImpl) -> Result<()> + Send {}
+impl<T: Fn(&mut MemoryReplicaImpl) -> Result<()> + Send> Fault for T {}
 
 pub struct MemoryReplicaImpl {
     /// Allows tests to inject errors or concurrent modifications into the
@@ -200,7 +204,7 @@ impl MemoryReplicaImpl {
     }
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct DirHandle {
     path: OsString,
     synthetics: Vec<(OsString, OsString, FileMode)>,
@@ -247,10 +251,13 @@ impl MemoryReplica {
         let mut h = self.next_hash;
         self.next_hash += 1;
 
-        let mut hash = [0;32];
-        hash[0] = (h & 0xFF) as u8; h >>= 8;
-        hash[1] = (h & 0xFF) as u8; h >>= 8;
-        hash[2] = (h & 0xFF) as u8; h >>= 8;
+        let mut hash = [0; 32];
+        hash[0] = (h & 0xFF) as u8;
+        h >>= 8;
+        hash[1] = (h & 0xFF) as u8;
+        h >>= 8;
+        hash[2] = (h & 0xFF) as u8;
+        h >>= 8;
         hash[3] = (h & 0xFF) as u8;
 
         hash
@@ -263,7 +270,7 @@ impl MemoryReplica {
             if let &mut Entry::Regular(Regular { ref mut hash, .. }) = val {
                 *hash = UNKNOWN_HASH;
             }
-        };
+        }
     }
 
     pub fn mark_all_dirty(&self) {
@@ -273,8 +280,7 @@ impl MemoryReplica {
         }
     }
 
-    pub fn is_condemned(&self, dir: &DirHandle, file: &OsStr)
-                        -> Result<bool> {
+    pub fn is_condemned(&self, dir: &DirHandle, file: &OsStr) -> Result<bool> {
         let d = self.data();
 
         if let Some(contents) = d.dirs.get(&dir.path) {
@@ -311,10 +317,13 @@ impl Replica for MemoryReplica {
     fn root(&self) -> Result<DirHandle> {
         let mut d = self.data();
         d.test_op(&Op::ReadRoot)?;
-        Ok(DirHandle { path: OsString::new(), synthetics: vec![] })
+        Ok(DirHandle {
+            path: OsString::new(),
+            synthetics: vec![],
+        })
     }
 
-    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
+    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString, FileData)>> {
         let mut d = self.data();
         d.test_op(&Op::List(dir.path.clone()))?;
 
@@ -332,9 +341,11 @@ impl Replica for MemoryReplica {
                 }
             }
 
-            Ok(contents.contents.iter().map(|(name,val)| {
-                (name.clone(), val.into())
-            }).collect())
+            Ok(contents
+                .contents
+                .iter()
+                .map(|(name, val)| (name.clone(), val.into()))
+                .collect())
         } else if !dir.synthetics.is_empty() {
             Ok(vec![])
         } else {
@@ -351,10 +362,10 @@ impl Replica for MemoryReplica {
                 let big = c_big.to_str().unwrap();
                 let prefix = c_prefix.to_str().unwrap();
 
-                prefix == big || (
-                    prefix.len() < big.len() &&
-                    prefix == &big[0..prefix.len()] &&
-                    "/"[..] == big[prefix.len()..prefix.len()+1])
+                prefix == big
+                    || (prefix.len() < big.len()
+                        && prefix == &big[0..prefix.len()]
+                        && "/"[..] == big[prefix.len()..prefix.len() + 1])
             }
 
             for tr in d.dirs.keys().filter(|k| is_under(k, &prefix)) {
@@ -369,8 +380,12 @@ impl Replica for MemoryReplica {
         result
     }
 
-    fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
-              -> Result<()> {
+    fn rename(
+        &self,
+        dir: &mut DirHandle,
+        old: &OsStr,
+        new: &OsStr,
+    ) -> Result<()> {
         let mut d = self.data();
         d.test_op(&Op::Rename(dir.path.clone(), old.to_owned()))?;
         let is_dir = if let Some(contents) = d.dirs.get_mut(&dir.path) {
@@ -397,18 +412,22 @@ impl Replica for MemoryReplica {
             // We also need to rename all the subdirectories.
             // In retrospect, it would probably have been better to use numeric
             // directory nodes or something.
-            let old_prefix = catpath(&catpath(&dir.path, old),
-                                     OsStr::new("")).into_string().unwrap();
-            let new_prefix = catpath(&catpath(&dir.path, new),
-                                     OsStr::new("")).into_string().unwrap();
-            let to_rename = d.dirs.keys().filter(
-                |k| k.to_str().unwrap().starts_with(&old_prefix))
-                .map(|k| k.to_owned()).collect::<Vec<_>>();
+            let old_prefix = catpath(&catpath(&dir.path, old), OsStr::new(""))
+                .into_string()
+                .unwrap();
+            let new_prefix = catpath(&catpath(&dir.path, new), OsStr::new(""))
+                .into_string()
+                .unwrap();
+            let to_rename = d
+                .dirs
+                .keys()
+                .filter(|k| k.to_str().unwrap().starts_with(&old_prefix))
+                .map(|k| k.to_owned())
+                .collect::<Vec<_>>();
             for old_name in to_rename {
                 let mut new_name = OsString::new();
                 new_name.push(&new_prefix);
-                new_name.push(&old_name.to_str().unwrap()[
-                    old_prefix.len()..]);
+                new_name.push(&old_name.to_str().unwrap()[old_prefix.len()..]);
 
                 let contents = d.dirs.remove(&old_name).unwrap();
                 d.dirs.insert(new_name, contents);
@@ -422,8 +441,10 @@ impl Replica for MemoryReplica {
         let mut d = self.data();
         d.test_op(&Op::Remove(dir.path.clone(), target.0.to_owned()))?;
         let dir_with_mode = if let Some(contents) = d.dirs.get_mut(&dir.path) {
-            if contents.contents.get(target.0).map_or(
-                false, |fd| target.1.matches(&fd.into()))
+            if contents
+                .contents
+                .get(target.0)
+                .map_or(false, |fd| target.1.matches(&fd.into()))
             {
                 let removed = contents.contents.remove(target.0).unwrap();
                 match removed {
@@ -442,8 +463,11 @@ impl Replica for MemoryReplica {
             if !dt.contents.is_empty() {
                 // Can't remove it after all
                 d.dirs.insert(catpath(&dir.path, target.0), dt);
-                d.dirs.get_mut(&dir.path).unwrap().contents.insert(
-                    target.0.to_owned(), Entry::Directory(mode));
+                d.dirs
+                    .get_mut(&dir.path)
+                    .unwrap()
+                    .contents
+                    .insert(target.0.to_owned(), Entry::Directory(mode));
                 return simple_error();
             }
         }
@@ -451,15 +475,18 @@ impl Replica for MemoryReplica {
         Ok(())
     }
 
-    fn create(&self, dir: &mut DirHandle, source: File, xfer: Option<HashId>)
-              -> Result<FileData> {
+    fn create(
+        &self,
+        dir: &mut DirHandle,
+        source: File,
+        xfer: Option<HashId>,
+    ) -> Result<FileData> {
         use std::collections::hash_map::Entry::*;
 
         let mut d = self.data();
         d.test_op(&Op::Create(dir.path.clone(), source.0.to_owned()))?;
 
-        for &(ref synth_parent, ref synth_name, synth_mode)
-        in &dir.synthetics {
+        for &(ref synth_parent, ref synth_name, synth_mode) in &dir.synthetics {
             let full = catpath(synth_parent, synth_name);
             if !d.dirs.contains_key(&full) {
                 // Doesn't exist, try to create
@@ -471,7 +498,7 @@ impl Replica for MemoryReplica {
                         Vacant(entry) => {
                             // Ok, create
                             entry.insert(Entry::Directory(synth_mode));
-                        },
+                        }
                         Occupied(_) => {
                             // Can't create, something else is there
                             return simple_error();
@@ -486,23 +513,30 @@ impl Replica for MemoryReplica {
         let res = if let Some(contents) = d.dirs.get_mut(&dir.path) {
             match contents.contents.entry(source.0.to_owned()) {
                 Occupied(_) => simple_error(),
-                Vacant(entry) => Ok(entry.insert(Entry::from_file_data(
-                    &source.1, xfer)?).into()),
+                Vacant(entry) => Ok(entry
+                    .insert(Entry::from_file_data(&source.1, xfer)?)
+                    .into()),
             }
         } else {
             simple_error()
         };
 
         if let (&Ok(_), &FileData::Directory(_)) = (&res, source.1) {
-            d.dirs.insert(catpath(&dir.path, source.0), Default::default());
+            d.dirs
+                .insert(catpath(&dir.path, source.0), Default::default());
         }
 
         res
     }
 
-    fn update(&self, dir: &mut DirHandle, name: &OsStr,
-              old: &FileData, new: &FileData,
-              xfer: Option<HashId>) -> Result<FileData> {
+    fn update(
+        &self,
+        dir: &mut DirHandle,
+        name: &OsStr,
+        old: &FileData,
+        new: &FileData,
+        xfer: Option<HashId>,
+    ) -> Result<FileData> {
         {
             let mut d = self.data();
             d.test_op(&Op::Update(dir.path.clone(), name.to_owned()))?;
@@ -513,15 +547,18 @@ impl Replica for MemoryReplica {
                         return simple_error();
                     } else {
                         match (&*entry, new) {
-                            (&Entry::Directory(_), &FileData::Directory(_)) |
-                            (&Entry::Regular(_), &FileData::Regular(_,_,_,_)) |
-                            (&Entry::Symlink(_), &FileData::Symlink(_)) |
-                            (&Entry::Special, &FileData::Special) => {
+                            (&Entry::Directory(_), &FileData::Directory(_))
+                            | (
+                                &Entry::Regular(_),
+                                &FileData::Regular(_, _, _, _),
+                            )
+                            | (&Entry::Symlink(_), &FileData::Symlink(_))
+                            | (&Entry::Special, &FileData::Special) => {
                                 // No type change, we can atomically update the
                                 // attributes.
                                 *entry = Entry::from_file_data(new, xfer)?;
                                 return Ok(entry.into());
-                            },
+                            }
                             // If the types change, we need to do
                             // rename/create/delete, so fall through
                             _ => (),
@@ -540,8 +577,7 @@ impl Replica for MemoryReplica {
 
         // Special case for old=directory (see `Replica::update()`).
         if let &FileData::Directory(mode) = old {
-            self.remove(dir, File(name,
-                                       &FileData::Directory(mode)))?;
+            self.remove(dir, File(name, &FileData::Directory(mode)))?;
             return self.create(dir, File(name, new), xfer);
         }
 
@@ -554,8 +590,7 @@ impl Replica for MemoryReplica {
         Ok(res)
     }
 
-    fn chdir(&self, dir: &DirHandle, subdir: &OsStr)
-             -> Result<DirHandle> {
+    fn chdir(&self, dir: &DirHandle, subdir: &OsStr) -> Result<DirHandle> {
         let mut d = self.data();
         let dirname = catpath(&dir.path, subdir);
         d.test_op(&Op::Chdir(dirname.clone()))?;
@@ -570,15 +605,20 @@ impl Replica for MemoryReplica {
         }
     }
 
-    fn synthdir(&self, dir: &mut DirHandle, subdir: &OsStr, mode: FileMode)
-                -> DirHandle {
+    fn synthdir(
+        &self,
+        dir: &mut DirHandle,
+        subdir: &OsStr,
+        mode: FileMode,
+    ) -> DirHandle {
         let mut sub_path = dir.path.to_owned();
         sub_path.push("/");
         sub_path.push(subdir);
 
         let mut sub = dir.clone();
         sub.path = sub_path;
-        sub.synthetics.push((dir.path.clone(), subdir.to_owned(), mode));
+        sub.synthetics
+            .push((dir.path.clone(), subdir.to_owned(), mode));
         sub
     }
 
@@ -594,20 +634,24 @@ impl Replica for MemoryReplica {
         };
         {
             let data = self.data();
-            if !data.dirs.contains_key(&dir.path) ||
-               !data.dirs.contains_key(&parent.path) {
+            if !data.dirs.contains_key(&dir.path)
+                || !data.dirs.contains_key(&parent.path)
+            {
                 return Ok(());
             }
         }
 
-        let parent_data = self.list(&mut parent)?
-            .into_iter().filter(|&(ref n, _)| n == &name)
-            .map(|(_, d)| d).next().unwrap();
+        let parent_data = self
+            .list(&mut parent)?
+            .into_iter()
+            .filter(|&(ref n, _)| n == &name)
+            .map(|(_, d)| d)
+            .next()
+            .unwrap();
         self.remove(&mut parent, File(&name, &parent_data))
     }
 
-    fn transfer(&self, dir: &DirHandle, file: File)
-                -> Result<Option<HashId>> {
+    fn transfer(&self, dir: &DirHandle, file: File) -> Result<Option<HashId>> {
         let mut d = self.data();
         d.test_op(&Op::Transfer(dir.path.clone(), file.0.to_owned()))?;
 
@@ -628,7 +672,7 @@ impl Replica for MemoryReplica {
 impl NullTransfer for MemoryReplica {
     fn null_transfer(file: &FileData) -> Option<HashId> {
         match file {
-            &FileData::Regular(_,_,_,h) => Some(h),
+            &FileData::Regular(_, _, _, h) => Some(h),
             _ => None,
         }
     }
@@ -660,11 +704,12 @@ impl Condemn for MemoryReplica {
 
 #[cfg(test)]
 mod test {
-    use crate::defs::*;
-    use crate::defs::test_helpers::*;
-    #[allow(unused_imports)] use crate::errors::*;
-    use crate::replica::*;
     use super::*;
+    use crate::defs::test_helpers::*;
+    use crate::defs::*;
+    #[allow(unused_imports)]
+    use crate::errors::*;
+    use crate::replica::*;
 
     fn init() -> (MemoryReplica, DirHandle) {
         let replica = MemoryReplica::empty();
@@ -678,11 +723,18 @@ mod test {
         assert!(replica.is_dir_dirty(&root));
         assert!(replica.list(&mut root).unwrap().is_empty());
         assert!(replica.rename(&mut root, &oss("foo"), &oss("bar")).is_err());
-        assert!(replica.remove(
-            &mut root, File(&oss("foo"), &FileData::Special)).is_err());
-        assert!(replica.update(&mut root, &oss("foo"),
-                               &FileData::Special, &FileData::Directory(0o666),
-                               Some(UNKNOWN_HASH)).is_err());
+        assert!(replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Special))
+            .is_err());
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Special,
+                &FileData::Directory(0o666),
+                Some(UNKNOWN_HASH)
+            )
+            .is_err());
     }
 
     #[test]
@@ -701,7 +753,7 @@ mod test {
             FileData::Regular(mode, _, _, hash) => {
                 assert!(UNKNOWN_HASH != hash);
                 assert_eq!(0o777, mode);
-            },
+            }
             unexpected => panic!("Unexpected file data: {:?}", unexpected),
         }
 
@@ -713,16 +765,23 @@ mod test {
             FileData::Regular(mode, _, _, hash) => {
                 assert!(UNKNOWN_HASH != hash);
                 assert_eq!(0o777, mode);
-            },
+            }
             ref unexpected => panic!("Unexpected file data: {:?}", unexpected),
         }
     }
 
-    fn mkreg(replica: &mut MemoryReplica, dir: &mut DirHandle,
-             name: &str, mode: FileMode) -> Result<FileData> {
+    fn mkreg(
+        replica: &mut MemoryReplica,
+        dir: &mut DirHandle,
+        name: &str,
+        mode: FileMode,
+    ) -> Result<FileData> {
         let hash = replica.gen_hash();
-        replica.create(dir, File(&oss(name), &FileData::Regular(
-            mode, 1, 0, UNKNOWN_HASH)), Some(hash))
+        replica.create(
+            dir,
+            File(&oss(name), &FileData::Regular(mode, 1, 0, UNKNOWN_HASH)),
+            Some(hash),
+        )
     }
 
     #[test]
@@ -744,10 +803,17 @@ mod test {
         }
     }
 
-    fn mksym(replica: &MemoryReplica, dir: &mut DirHandle,
-             name: &str, target: &str) -> Result<FileData> {
-        replica.create(dir, File(&oss(name), &FileData::Symlink(
-            oss(target))), None)
+    fn mksym(
+        replica: &MemoryReplica,
+        dir: &mut DirHandle,
+        name: &str,
+        target: &str,
+    ) -> Result<FileData> {
+        replica.create(
+            dir,
+            File(&oss(name), &FileData::Symlink(oss(target))),
+            None,
+        )
     }
 
     #[test]
@@ -769,8 +835,11 @@ mod test {
         }
     }
 
-    fn mkspec(replica: &MemoryReplica, dir: &mut DirHandle,
-              name: &str) -> Result<FileData> {
+    fn mkspec(
+        replica: &MemoryReplica,
+        dir: &mut DirHandle,
+        name: &str,
+    ) -> Result<FileData> {
         replica.create(dir, File(&oss(name), &FileData::Special), None)
     }
 
@@ -796,10 +865,13 @@ mod test {
         assert!(replica.list(&mut subdir).unwrap().is_empty());
     }
 
-    fn mkdir(replica: &MemoryReplica, dir: &mut DirHandle,
-             name: &str, mode: FileMode) -> Result<FileData> {
-        replica.create(dir, File(&oss(name), &FileData::Directory(mode)),
-                       None)
+    fn mkdir(
+        replica: &MemoryReplica,
+        dir: &mut DirHandle,
+        name: &str,
+        mode: FileMode,
+    ) -> Result<FileData> {
+        replica.create(dir, File(&oss(name), &FileData::Directory(mode)), None)
     }
 
     #[test]
@@ -819,10 +891,14 @@ mod test {
     #[test]
     fn remove_regular_file() {
         let (mut replica, mut root) = init();
-        let hash = hashof(mkreg(&mut replica, &mut root, "foo", 0o777)
-                          .unwrap());
-        replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Regular(0o777, 99, 0, hash))).unwrap();
+        let hash =
+            hashof(mkreg(&mut replica, &mut root, "foo", 0o777).unwrap());
+        replica
+            .remove(
+                &mut root,
+                File(&oss("foo"), &FileData::Regular(0o777, 99, 0, hash)),
+            )
+            .unwrap();
 
         assert!(replica.list(&mut root).unwrap().is_empty());
     }
@@ -831,17 +907,22 @@ mod test {
     fn remove_file_wrong_type() {
         let (mut replica, mut root) = init();
         mkreg(&mut replica, &mut root, "foo", 0o777).unwrap();
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Special)).is_err());
+        assert!(replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Special))
+            .is_err());
     }
 
     #[test]
     fn remove_regular_file_mode_mismatch() {
         let (mut replica, mut root) = init();
-        let hash = hashof(mkreg(&mut replica, &mut root, "foo", 0o777)
-                          .unwrap());
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Regular(0o666, 99, 99, hash))).is_err());
+        let hash =
+            hashof(mkreg(&mut replica, &mut root, "foo", 0o777).unwrap());
+        assert!(replica
+            .remove(
+                &mut root,
+                File(&oss("foo"), &FileData::Regular(0o666, 99, 99, hash))
+            )
+            .is_err());
     }
 
     #[test]
@@ -849,16 +930,24 @@ mod test {
         let (mut replica, mut root) = init();
         mkreg(&mut replica, &mut root, "foo", 0o777).unwrap();
         let hash = replica.gen_hash();
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Regular(0o777, 99, 99, hash))).is_err());
+        assert!(replica
+            .remove(
+                &mut root,
+                File(&oss("foo"), &FileData::Regular(0o777, 99, 99, hash))
+            )
+            .is_err());
     }
 
     #[test]
     fn remove_symlink() {
         let (replica, mut root) = init();
         mksym(&replica, &mut root, "foo", "bar").unwrap();
-        replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Symlink(oss("bar")))).unwrap();
+        replica
+            .remove(
+                &mut root,
+                File(&oss("foo"), &FileData::Symlink(oss("bar"))),
+            )
+            .unwrap();
         assert!(replica.list(&mut root).unwrap().is_empty());
     }
 
@@ -866,15 +955,20 @@ mod test {
     fn remove_symlink_target_mismatch() {
         let (replica, mut root) = init();
         mksym(&replica, &mut root, "foo", "xyzzy").unwrap();
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Symlink(oss("plugh")))).is_err());
+        assert!(replica
+            .remove(
+                &mut root,
+                File(&oss("foo"), &FileData::Symlink(oss("plugh")))
+            )
+            .is_err());
     }
 
     #[test]
     fn remove_special() {
         let (replica, mut root) = init();
         mkspec(&replica, &mut root, "foo").unwrap();
-        replica.remove(&mut root, File(&oss("foo"), &FileData::Special))
+        replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Special))
             .unwrap();
         assert!(replica.list(&mut root).unwrap().is_empty());
     }
@@ -887,8 +981,9 @@ mod test {
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         assert!(replica.list(&mut subdir).unwrap().is_empty());
 
-        replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Directory(0o777))).unwrap();
+        replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Directory(0o777)))
+            .unwrap();
         assert!(replica.list(&mut root).unwrap().is_empty());
 
         assert!(replica.list(&mut subdir).is_err());
@@ -903,8 +998,9 @@ mod test {
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         assert!(replica.list(&mut subdir).unwrap().is_empty());
 
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Directory(0o666))).is_err());
+        assert!(replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Directory(0o666)))
+            .is_err());
         assert_eq!(1, replica.list(&mut root).unwrap().len());
         assert!(replica.list(&mut subdir).unwrap().is_empty());
         replica.chdir(&root, &oss("foo")).unwrap();
@@ -919,8 +1015,9 @@ mod test {
         mkdir(&replica, &mut subdir, "bar", 0o777).unwrap();
         assert_eq!(1, replica.list(&mut subdir).unwrap().len());
 
-        assert!(replica.remove(&mut root, File(
-            &oss("foo"), &FileData::Directory(0o777))).is_err());
+        assert!(replica
+            .remove(&mut root, File(&oss("foo"), &FileData::Directory(0o777)))
+            .is_err());
         assert_eq!(1, replica.list(&mut root).unwrap().len());
         assert_eq!(1, replica.list(&mut subdir).unwrap().len());
         replica.chdir(&root, &oss("foo")).unwrap();
@@ -931,7 +1028,8 @@ mod test {
     fn rename_regular_file() {
         let (mut replica, mut root) = init();
         let data = mkreg(&mut replica, &mut root, "foo", 0o777)
-            .unwrap().clone();
+            .unwrap()
+            .clone();
         replica.rename(&mut root, &oss("foo"), &oss("bar")).unwrap();
 
         let list = replica.list(&mut root).unwrap();
@@ -983,31 +1081,35 @@ mod test {
         mkdir(&replica, &mut root, "foo", 0o777).unwrap();
         let mut subdir_foo = replica.chdir(&root, &oss("foo")).unwrap();
         mkdir(&replica, &mut subdir_foo, "bar", 0o777).unwrap();
-        let mut subdir_foobar = replica.chdir(&subdir_foo, &oss("bar"))
-            .unwrap();
+        let mut subdir_foobar =
+            replica.chdir(&subdir_foo, &oss("bar")).unwrap();
         mkspec(&replica, &mut subdir_foobar, "null").unwrap();
 
-        replica.rename(&mut root, &oss("foo"), &oss("plugh")).unwrap();
+        replica
+            .rename(&mut root, &oss("foo"), &oss("plugh"))
+            .unwrap();
 
         let mut subdir_plugh = replica.chdir(&root, &oss("plugh")).unwrap();
         assert_eq!(oss("bar"), replica.list(&mut subdir_plugh).unwrap()[0].0);
 
-        let mut subdir_plughbar = replica.chdir(
-            &subdir_plugh, &oss("bar")).unwrap();
-        assert_eq!(oss("null"), replica.list(&mut subdir_plughbar)
-                   .unwrap()[0].0);
+        let mut subdir_plughbar =
+            replica.chdir(&subdir_plugh, &oss("bar")).unwrap();
+        assert_eq!(
+            oss("null"),
+            replica.list(&mut subdir_plughbar).unwrap()[0].0
+        );
     }
 
     #[test]
     fn synthetic_tree_create() {
         let (replica, mut root) = init();
         let mut subdir_foo = replica.synthdir(&mut root, &oss("foo"), 0o777);
-        let mut subdir_foo_bar = replica.synthdir(
-            &mut subdir_foo, &oss("bar"), 0o666);
-        let mut subdir_foo_bar_xyzzy = replica.synthdir(
-            &mut subdir_foo_bar, &oss("xyzzy"), 0o444);
-        let mut subdir_foo_bar_plugh = replica.synthdir(
-            &mut subdir_foo_bar, &oss("plugh"), 0o333);
+        let mut subdir_foo_bar =
+            replica.synthdir(&mut subdir_foo, &oss("bar"), 0o666);
+        let mut subdir_foo_bar_xyzzy =
+            replica.synthdir(&mut subdir_foo_bar, &oss("xyzzy"), 0o444);
+        let mut subdir_foo_bar_plugh =
+            replica.synthdir(&mut subdir_foo_bar, &oss("plugh"), 0o333);
 
         mkspec(&replica, &mut subdir_foo_bar_xyzzy, "x").unwrap();
         mkspec(&replica, &mut subdir_foo_bar_plugh, "x").unwrap();
@@ -1046,10 +1148,15 @@ mod test {
     fn update_symlink_target() {
         let (replica, mut root) = init();
         mksym(&replica, &mut root, "foo", "xyzzy").unwrap();
-        replica.update(&mut root, &oss("foo"),
-                       &FileData::Symlink(oss("xyzzy")),
-                       &FileData::Symlink(oss("plugh")),
-                       None).unwrap();
+        replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Symlink(oss("xyzzy")),
+                &FileData::Symlink(oss("plugh")),
+                None,
+            )
+            .unwrap();
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1060,10 +1167,15 @@ mod test {
     fn update_symlink_target_mismatch() {
         let (replica, mut root) = init();
         mksym(&replica, &mut root, "foo", "bar").unwrap();
-        assert!(replica.update(&mut root, &oss("foo"),
-                               &FileData::Symlink(oss("xyzzy")),
-                               &FileData::Symlink(oss("plugh")),
-                               None).is_err());
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Symlink(oss("xyzzy")),
+                &FileData::Symlink(oss("plugh")),
+                None
+            )
+            .is_err());
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1077,10 +1189,15 @@ mod test {
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         mkspec(&replica, &mut subdir, "x").unwrap();
 
-        replica.update(&mut root, &oss("foo"),
-                       &FileData::Directory(0o777),
-                       &FileData::Directory(0o700),
-                       None).unwrap();
+        replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o777),
+                &FileData::Directory(0o700),
+                None,
+            )
+            .unwrap();
 
         replica.list(&mut subdir).unwrap();
 
@@ -1096,10 +1213,15 @@ mod test {
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         mkspec(&replica, &mut subdir, "x").unwrap();
 
-        assert!(replica.update(&mut root, &oss("foo"),
-                               &FileData::Directory(0o666),
-                               &FileData::Directory(0o700),
-                               None).is_err());
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o666),
+                &FileData::Directory(0o700),
+                None
+            )
+            .is_err());
 
         replica.list(&mut subdir).unwrap();
 
@@ -1114,15 +1236,25 @@ mod test {
         let old_hash = replica.gen_hash();
         let new_hash = replica.gen_hash();
 
-        replica.create(
-            &mut root, File(
-                &oss("foo"), &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH)),
-            Some(old_hash)).unwrap();
-        let returned = replica.update(
-            &mut root, &oss("foo"),
-            &FileData::Regular(0o666, 0, 0, old_hash),
-            &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
-            Some(new_hash)).unwrap();
+        replica
+            .create(
+                &mut root,
+                File(
+                    &oss("foo"),
+                    &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH),
+                ),
+                Some(old_hash),
+            )
+            .unwrap();
+        let returned = replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Regular(0o666, 0, 0, old_hash),
+                &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
+                Some(new_hash),
+            )
+            .unwrap();
 
         assert_eq!(FileData::Regular(0o777, 0, 0, new_hash), returned);
     }
@@ -1134,15 +1266,25 @@ mod test {
         let new_hash = replica.gen_hash();
         let other_hash = replica.gen_hash();
 
-        replica.create(
-            &mut root, File(
-                &oss("foo"), &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH)),
-            Some(other_hash)).unwrap();
-        assert!(replica.update(
-            &mut root, &oss("foo"),
-            &FileData::Regular(0o666, 0, 0, old_hash),
-            &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
-            Some(new_hash)).is_err());
+        replica
+            .create(
+                &mut root,
+                File(
+                    &oss("foo"),
+                    &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH),
+                ),
+                Some(other_hash),
+            )
+            .unwrap();
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Regular(0o666, 0, 0, old_hash),
+                &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
+                Some(new_hash)
+            )
+            .is_err());
     }
 
     #[test]
@@ -1151,25 +1293,40 @@ mod test {
         let old_hash = replica.gen_hash();
         let new_hash = replica.gen_hash();
 
-        replica.create(
-            &mut root, File(
-                &oss("foo"), &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH)),
-            Some(old_hash)).unwrap();
-        assert!(replica.update(
-            &mut root, &oss("foo"),
-            &FileData::Regular(0o600, 0, 0, old_hash),
-            &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
-            Some(new_hash)).is_err());
+        replica
+            .create(
+                &mut root,
+                File(
+                    &oss("foo"),
+                    &FileData::Regular(0o666, 0, 0, UNKNOWN_HASH),
+                ),
+                Some(old_hash),
+            )
+            .unwrap();
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Regular(0o600, 0, 0, old_hash),
+                &FileData::Regular(0o777, 0, 0, UNKNOWN_HASH),
+                Some(new_hash)
+            )
+            .is_err());
     }
 
     #[test]
     fn update_special_into_directory() {
         let (replica, mut root) = init();
         mkspec(&replica, &mut root, "foo").unwrap();
-        replica.update(&mut root, &oss("foo"),
-                       &FileData::Special,
-                       &FileData::Directory(0o777),
-                       None).unwrap();
+        replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Special,
+                &FileData::Directory(0o777),
+                None,
+            )
+            .unwrap();
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1184,10 +1341,15 @@ mod test {
         let (replica, mut root) = init();
         mkdir(&replica, &mut root, "foo", 0o777).unwrap();
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
-        replica.update(&mut root, &oss("foo"),
-                       &FileData::Directory(0o777),
-                       &FileData::Special,
-                       None).unwrap();
+        replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o777),
+                &FileData::Special,
+                None,
+            )
+            .unwrap();
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1204,10 +1366,15 @@ mod test {
         let mut subdir = replica.chdir(&root, &oss("foo")).unwrap();
         mkspec(&replica, &mut subdir, "bar").unwrap();
 
-        assert!(replica.update(&mut root, &oss("foo"),
-                               &FileData::Directory(0o777),
-                               &FileData::Special,
-                               None).is_err());
+        assert!(replica
+            .update(
+                &mut root,
+                &oss("foo"),
+                &FileData::Directory(0o777),
+                &FileData::Special,
+                None
+            )
+            .is_err());
 
         let list = replica.list(&mut root).unwrap();
         assert_eq!(1, list.len());
@@ -1253,7 +1420,8 @@ mod test {
 
         assert!(replica.list(&mut subdir_foo).is_err());
         assert!(replica.list(&mut subdir_bar).is_err());
-        assert!(replica.list(&mut replica.chdir(&root, &oss("fooo"))
-                             .unwrap()).is_ok());
+        assert!(replica
+            .list(&mut replica.chdir(&root, &oss("fooo")).unwrap())
+            .is_ok());
     }
 }

@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::ffi::{OsStr,OsString};
+use std::ffi::{OsStr, OsString};
 use std::sync::{Condvar, Mutex, Weak};
 
 use crate::defs::*;
@@ -41,7 +41,7 @@ pub enum PrepareType {
 }
 
 /// Trait for the `Replica::Directory` type.
-pub trait ReplicaDirectory : Send {
+pub trait ReplicaDirectory: Send {
     /// Returns the full path of this directory, suitable for display to the
     /// user.
     fn full_path(&self) -> &OsStr;
@@ -59,9 +59,9 @@ pub trait ReplicaDirectory : Send {
 /// reference. This is a consequence of there currently being no way to express
 /// something like `fn chdir<'a>(&'a self, &OsStr) -> Self::Directory<'a>` to
 /// allow the mutable state to be moved into the directory objects instead.
-pub trait Replica : Sync + Send {
+pub trait Replica: Sync + Send {
     /// Type representing an operating directory.
-    type Directory : ReplicaDirectory + 'static;
+    type Directory: ReplicaDirectory + 'static;
     /// Type which this replica uses to transfer data in from the other
     /// replica.
     type TransferIn;
@@ -69,7 +69,9 @@ pub trait Replica : Sync + Send {
     type TransferOut;
 
     /// Returns whether any fatal errors have occurred.
-    fn is_fatal(&self) -> bool { false }
+    fn is_fatal(&self) -> bool {
+        false
+    }
 
     /// Returns whether the given directory has been marked dirty for this
     /// session.
@@ -100,13 +102,20 @@ pub trait Replica : Sync + Send {
     /// On success, the full conents of the directory (excluding "." and ".."
     /// if returned by the underlying system) after transform/filtering are
     /// returned, in no particular order.
-    fn list(&self, _: &mut Self::Directory) -> Result<Vec<(OsString,FileData)>>;
+    fn list(
+        &self,
+        _: &mut Self::Directory,
+    ) -> Result<Vec<(OsString, FileData)>>;
     /// Renames a file within a directory.
     ///
     /// The file of any type named by `old` is renamed to `new`. A best effort
     /// is made to prevent renaming onto an existing file.
-    fn rename(&self, _: &mut Self::Directory, old: &OsStr, new: &OsStr)
-              -> Result<()>;
+    fn rename(
+        &self,
+        _: &mut Self::Directory,
+        old: &OsStr,
+        new: &OsStr,
+    ) -> Result<()>;
     /// Deletes the file within a directory.
     ///
     /// The file identified by `target` is removed from the directory. A best
@@ -131,8 +140,12 @@ pub trait Replica : Sync + Send {
     ///
     /// Returns the actual file version resulting from this creation. This may
     /// be different from `source` if the hash on `source` is incorrect.
-    fn create(&self, _: &mut Self::Directory, source: File,
-              xfer: Self::TransferIn) -> Result<FileData>;
+    fn create(
+        &self,
+        _: &mut Self::Directory,
+        source: File,
+        xfer: Self::TransferIn,
+    ) -> Result<FileData>;
     /// Updates a file within a directory.
     ///
     /// A file in the given directory identified by `name` is changed from
@@ -155,12 +168,20 @@ pub trait Replica : Sync + Send {
     ///
     /// Returns the actual file version resulting from this update. This may be
     /// different from `new` if the hash on `new` was incorrect.
-    fn update(&self, _: &mut Self::Directory, name: &OsStr,
-              old: &FileData, new: &FileData,
-              xfer: Self::TransferIn) -> Result<FileData>;
+    fn update(
+        &self,
+        _: &mut Self::Directory,
+        name: &OsStr,
+        old: &FileData,
+        new: &FileData,
+        xfer: Self::TransferIn,
+    ) -> Result<FileData>;
     /// Creates a new context within the subdirectory identified by `subdir`.
-    fn chdir(&self, _: &Self::Directory, subdir: &OsStr)
-             -> Result<Self::Directory>;
+    fn chdir(
+        &self,
+        _: &Self::Directory,
+        subdir: &OsStr,
+    ) -> Result<Self::Directory>;
     /// Creates a "synthetic" subdirectory and returns a context that can be
     /// used to manipulate it.
     ///
@@ -171,8 +192,12 @@ pub trait Replica : Sync + Send {
     ///
     /// `Replica::ls()` always returns the empty vector for synthetic
     /// directories that have not yet materialised.
-    fn synthdir(&self, _: &mut Self::Directory, subdir: &OsStr, mode: FileMode)
-                -> Self::Directory;
+    fn synthdir(
+        &self,
+        _: &mut Self::Directory,
+        subdir: &OsStr,
+        mode: FileMode,
+    ) -> Self::Directory;
     /// Deletes the directory identified by the given handle, if it is empty.
     ///
     /// If the directory already does not exist (regardless of whether the
@@ -185,8 +210,11 @@ pub trait Replica : Sync + Send {
 
     /// Returns an object which can be used to transfer `file` out of this
     /// replica.
-    fn transfer(&self, _: &Self::Directory, file: File)
-                -> Result<Self::TransferOut>;
+    fn transfer(
+        &self,
+        _: &Self::Directory,
+        file: File,
+    ) -> Result<Self::TransferOut>;
 
     /// Performs any initial setup of this replica.
     ///
@@ -194,7 +222,9 @@ pub trait Replica : Sync + Send {
     ///
     /// The default is a noop.
     #[allow(unused_variables)]
-    fn prepare(&self, typ: PrepareType) -> Result<()> { Ok(()) }
+    fn prepare(&self, typ: PrepareType) -> Result<()> {
+        Ok(())
+    }
 
     /// Performs any final cleanup on this replica.
     ///
@@ -203,11 +233,13 @@ pub trait Replica : Sync + Send {
     /// etc.
     ///
     /// The default is a noop.
-    fn clean_up(&self) -> Result<()> { Ok(()) }
+    fn clean_up(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A Replica which supports a "null transfer" input.
-pub trait NullTransfer : Replica {
+pub trait NullTransfer: Replica {
     /// Produces a `TransferIn` that can be used to use `Replica::create()` or
     /// `Replica::update()` with the given `FileData`.
     ///
@@ -216,7 +248,7 @@ pub trait NullTransfer : Replica {
 }
 
 /// Trait for replicas which also support the "condemn" operation.
-pub trait Condemn : Replica {
+pub trait Condemn: Replica {
     /// Marks a filename within a directory as condemned.
     ///
     /// The name given by `file` within `dir` is marked as condemned. When
@@ -253,7 +285,7 @@ impl Default for WatchStatus {
         WatchStatus {
             dirty: false,
             context_lost: false,
-         }
+        }
     }
 }
 
@@ -328,7 +360,7 @@ impl WatchHandle {
 
 /// Trait for replicas which can send notifications when clean directories have
 /// been changed.
-pub trait Watch : Replica {
+pub trait Watch: Replica {
     /// Starts watching for changes to any directories in this replica marked
     /// as clean. When such directories are changed, they are marked as dirty
     /// and the watch is notified.

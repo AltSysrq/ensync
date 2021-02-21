@@ -219,15 +219,18 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::result::Result as StdResult;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
-use fourleaf::{self, UnknownFields};
-use fourleaf::adapt::Copied;
-use tiny_keccak;
-use rand::{Rng, rngs::OsRng};
+use crate::rust_crypto::buffer::{
+    BufferResult, ReadBuffer, RefReadBuffer, RefWriteBuffer, WriteBuffer,
+};
+use crate::rust_crypto::symmetriccipher::{
+    Decryptor, Encryptor, SymmetricCipherError,
+};
 use crate::rust_crypto::{aes, blockmodes, scrypt};
-use crate::rust_crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer,
-                          RefReadBuffer, RefWriteBuffer};
-use crate::rust_crypto::symmetriccipher::{Decryptor, Encryptor, SymmetricCipherError};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use fourleaf::adapt::Copied;
+use fourleaf::{self, UnknownFields};
+use rand::{rngs::OsRng, Rng};
+use tiny_keccak;
 
 use crate::defs::{HashId, UNKNOWN_HASH};
 use crate::errors::*;
@@ -352,8 +355,9 @@ impl KeyChain {
     /// Returns the internal key with the given name, or an error if not
     /// associated to this key chain.
     pub fn key(&self, name: &str) -> Result<&InternalKey> {
-        self.keys.get(name).ok_or_else(
-            || ErrorKind::KeyNotInGroup(name.to_owned()).into())
+        self.keys
+            .get(name)
+            .ok_or_else(|| ErrorKind::KeyNotInGroup(name.to_owned()).into())
     }
 
     /// Returns the HMAC secret to use for object hashing.
@@ -378,7 +382,7 @@ impl InternalKey {
     }
 
     pub fn hmac_secret(&self) -> &[u8] {
-        &self.0[BLKSZ..BLKSZ*2]
+        &self.0[BLKSZ..BLKSZ * 2]
     }
 }
 
@@ -408,10 +412,22 @@ fn scrypt_18_14_12_8_1(passphrase: &[u8], salt: &[u8]) -> HashId {
     // For tests, we implicitly use weaker parameters because scrypt-18-8-1
     // takes forever in debug builds, and it wouldn't make sense to have
     // another algorithm option which exists only for tests to use.
-    #[cfg(not(test))] const N18: u8 = 18; #[cfg(test)] const N18: u8 = 12;
-    #[cfg(not(test))] const N14: u8 = 14; #[cfg(test)] const N14: u8 = 10;
-    #[cfg(not(test))] const N12: u8 = 12; #[cfg(test)] const N12: u8 = 8;
-    #[cfg(not(test))] const R:  u32 = 8;  #[cfg(test)] const R:  u32 = 4;
+    #[cfg(not(test))]
+    const N18: u8 = 18;
+    #[cfg(test)]
+    const N18: u8 = 12;
+    #[cfg(not(test))]
+    const N14: u8 = 14;
+    #[cfg(test)]
+    const N14: u8 = 10;
+    #[cfg(not(test))]
+    const N12: u8 = 12;
+    #[cfg(test)]
+    const N12: u8 = 8;
+    #[cfg(not(test))]
+    const R: u32 = 8;
+    #[cfg(test)]
+    const R: u32 = 4;
     let n = if passphrase.len() >= 256 {
         N12
     } else if passphrase.len() >= 64 {
@@ -461,10 +477,12 @@ fn hixor(a: &HashId, b: &HashId) -> HashId {
 ///
 /// The caller must provide the logic for determining the various date-time
 /// fields itself.
-pub fn create_key(passphrase: &[u8], chain: &mut KeyChain,
-                  created: DateTime<Utc>,
-                  updated: Option<DateTime<Utc>>)
-                  -> KdfEntry {
+pub fn create_key(
+    passphrase: &[u8],
+    chain: &mut KeyChain,
+    created: DateTime<Utc>,
+    updated: Option<DateTime<Utc>>,
+) -> KdfEntry {
     let mut salt = HashId::default();
     rand(&mut salt);
 
@@ -491,25 +509,32 @@ pub fn create_key(passphrase: &[u8], chain: &mut KeyChain,
 pub fn reassoc_keys(entry: &mut KdfEntry, chain: &KeyChain) {
     entry.groups.clear();
     for (name, internal_key) in &chain.keys {
-        entry.groups.insert(name.to_owned(),
-                            hixor(&hmac(name.as_bytes(), &chain.derived.0),
-                                  &internal_key.0));
+        entry.groups.insert(
+            name.to_owned(),
+            hixor(&hmac(name.as_bytes(), &chain.derived.0), &internal_key.0),
+        );
     }
 }
 
-
 /// Attempts to derive the internal keys from the given single KDF entry.
-pub fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
-                             -> Option<KeyChain> {
+pub fn try_derive_key_single(
+    passphrase: &[u8],
+    entry: &KdfEntry,
+) -> Option<KeyChain> {
     match entry.algorithm.as_str() {
-        SCRYPT_18_14_12_8_1 => Some(scrypt_18_14_12_8_1(passphrase, &entry.salt)),
+        SCRYPT_18_14_12_8_1 => {
+            Some(scrypt_18_14_12_8_1(passphrase, &entry.salt))
+        }
         _ => None,
-    }.and_then(|derived| {
+    }
+    .and_then(|derived| {
         if sha3(&derived) == entry.hash {
             let mut keys = BTreeMap::new();
             for (name, diff) in &entry.groups {
-                keys.insert(name.to_owned(), InternalKey(
-                    hixor(&hmac(name.as_bytes(), &derived), diff)));
+                keys.insert(
+                    name.to_owned(),
+                    InternalKey(hixor(&hmac(name.as_bytes(), &derived), diff)),
+                );
             }
 
             Some(KeyChain {
@@ -526,8 +551,10 @@ pub fn try_derive_key_single(passphrase: &[u8], entry: &KdfEntry)
 /// list.
 ///
 /// If successful, returns the derived key chain. Otherwise, returns `None`.
-pub fn try_derive_key(passphrase: &[u8], keys: &BTreeMap<String, KdfEntry>)
-                      -> Option<KeyChain> {
+pub fn try_derive_key(
+    passphrase: &[u8],
+    keys: &BTreeMap<String, KdfEntry>,
+) -> Option<KeyChain> {
     keys.iter()
         .filter_map(|(_, k)| try_derive_key_single(passphrase, k))
         .next()
@@ -536,20 +563,34 @@ pub fn try_derive_key(passphrase: &[u8], keys: &BTreeMap<String, KdfEntry>)
 // Since rust-crypto uses two traits which are identical except for method
 // names, for some reason, which are also incompatible with std::io
 trait Cryptor {
-    fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
-             eof: bool) -> StdResult<BufferResult, SymmetricCipherError>;
+    fn crypt(
+        &mut self,
+        output: &mut RefWriteBuffer,
+        input: &mut RefReadBuffer,
+        eof: bool,
+    ) -> StdResult<BufferResult, SymmetricCipherError>;
 }
 struct WEncryptor(Box<dyn Encryptor>);
 impl Cryptor for WEncryptor {
-    fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
-             eof: bool) -> StdResult<BufferResult, SymmetricCipherError>
-    { self.0.encrypt(input, output, eof) }
+    fn crypt(
+        &mut self,
+        output: &mut RefWriteBuffer,
+        input: &mut RefReadBuffer,
+        eof: bool,
+    ) -> StdResult<BufferResult, SymmetricCipherError> {
+        self.0.encrypt(input, output, eof)
+    }
 }
 struct WDecryptor(Box<dyn Decryptor>);
 impl Cryptor for WDecryptor {
-    fn crypt(&mut self, output: &mut RefWriteBuffer, input: &mut RefReadBuffer,
-             eof: bool) -> StdResult<BufferResult, SymmetricCipherError>
-    { self.0.decrypt(input, output, eof) }
+    fn crypt(
+        &mut self,
+        output: &mut RefWriteBuffer,
+        input: &mut RefReadBuffer,
+        eof: bool,
+    ) -> StdResult<BufferResult, SymmetricCipherError> {
+        self.0.decrypt(input, output, eof)
+    }
 }
 
 /// Copy `src` into `dst` after passing input bytes through `crypt`.
@@ -576,12 +617,14 @@ impl Cryptor for WDecryptor {
 /// attack is infeasible since it is necessarily at least as difficult as
 /// forging SHA-3 HMAC. (Also note again that directories do not use PKCS
 /// padding.)
-fn crypt_stream<W : Write, R : Read, C : Cryptor>(
-    mut dst: W, mut src: R, crypt: &mut C,
-    panic_on_crypt_err: bool) -> Result<()>
-{
-    let mut src_buf = [0u8;4096];
-    let mut dst_buf = [0u8;4112]; // Extra space for final padding block
+fn crypt_stream<W: Write, R: Read, C: Cryptor>(
+    mut dst: W,
+    mut src: R,
+    crypt: &mut C,
+    panic_on_crypt_err: bool,
+) -> Result<()> {
+    let mut src_buf = [0u8; 4096];
+    let mut dst_buf = [0u8; 4112]; // Extra space for final padding block
     let mut eof = false;
     while !eof {
         let mut nread = 0;
@@ -600,7 +643,7 @@ fn crypt_stream<W : Write, R : Read, C : Cryptor>(
             match crypt.crypt(&mut dstrbuf, &mut srcrbuf, eof) {
                 Ok(_) => {
                     assert!(srcrbuf.is_empty());
-                },
+                }
                 Err(e) => {
                     if panic_on_crypt_err {
                         panic!("Crypt error: {:?}", e);
@@ -609,7 +652,7 @@ fn crypt_stream<W : Write, R : Read, C : Cryptor>(
                     for d in dstrbuf.take_next(srcrbuf.remaining()) {
                         *d = 0;
                     }
-                },
+                }
             };
             dstrbuf.position()
         };
@@ -620,10 +663,10 @@ fn crypt_stream<W : Write, R : Read, C : Cryptor>(
     Ok(())
 }
 
-fn split_key_and_iv(key_and_iv: &[u8;32]) -> ([u8;BLKSZ],[u8;BLKSZ]) {
-    let mut key = [0u8;BLKSZ];
+fn split_key_and_iv(key_and_iv: &[u8; 32]) -> ([u8; BLKSZ], [u8; BLKSZ]) {
+    let mut key = [0u8; BLKSZ];
     key.copy_from_slice(&key_and_iv[0..BLKSZ]);
-    let mut iv = [0u8;BLKSZ];
+    let mut iv = [0u8; BLKSZ];
     iv.copy_from_slice(&key_and_iv[BLKSZ..32]);
     (key, iv)
 }
@@ -631,60 +674,88 @@ fn split_key_and_iv(key_and_iv: &[u8;32]) -> ([u8;BLKSZ],[u8;BLKSZ]) {
 /// Generates and writes the CBC encryption prefix to `dst`.
 ///
 /// `master` is the portion of the master key used to encrypt this prefix.
-fn write_cbc_prefix<W : Write>(dst: W, master: &[u8])
-                               -> Result<([u8;BLKSZ],[u8;BLKSZ])> {
-    let mut key_and_iv = [0u8;32];
+fn write_cbc_prefix<W: Write>(
+    dst: W,
+    master: &[u8],
+) -> Result<([u8; BLKSZ], [u8; BLKSZ])> {
+    let mut key_and_iv = [0u8; 32];
     rand(&mut key_and_iv);
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
-        aes::KeySize::KeySize128, master, &[0u8;BLKSZ],
-        blockmodes::NoPadding));
-    crypt_stream(dst, &mut&key_and_iv[..], &mut cryptor, true)?;
+        aes::KeySize::KeySize128,
+        master,
+        &[0u8; BLKSZ],
+        blockmodes::NoPadding,
+    ));
+    crypt_stream(dst, &mut &key_and_iv[..], &mut cryptor, true)?;
 
     Ok(split_key_and_iv(&key_and_iv))
 }
 
 /// Reads out the data written by `write_cbc_prefix()`.
-fn read_cbc_prefix<R : Read>(mut src: R, master: &[u8])
-                             -> Result<([u8;BLKSZ],[u8;BLKSZ])> {
-    let mut cipher_head = [0u8;32];
+fn read_cbc_prefix<R: Read>(
+    mut src: R,
+    master: &[u8],
+) -> Result<([u8; BLKSZ], [u8; BLKSZ])> {
+    let mut cipher_head = [0u8; 32];
     src.read_exact(&mut cipher_head)?;
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
-        aes::KeySize::KeySize128, master, &[0u8;BLKSZ],
-        blockmodes::NoPadding));
+        aes::KeySize::KeySize128,
+        master,
+        &[0u8; BLKSZ],
+        blockmodes::NoPadding,
+    ));
 
-    let mut key_and_iv = [0u8;32];
-    crypt_stream(&mut&mut key_and_iv[..], &mut&cipher_head[..],
-                      &mut cryptor, false)?;
+    let mut key_and_iv = [0u8; 32];
+    crypt_stream(
+        &mut &mut key_and_iv[..],
+        &mut &cipher_head[..],
+        &mut cryptor,
+        false,
+    )?;
 
     Ok(split_key_and_iv(&key_and_iv))
 }
 
 /// Encrypts the object data in `src` using the key from the object's id,
 /// writing the encrypted result to `dst`.
-pub fn encrypt_obj<W : Write, R : Read>(dst: W, src: R, id: &HashId)
-                                        -> Result<()> {
-    let mut key = [0u8;BLKSZ];
-    let mut iv = [0u8;BLKSZ];
+pub fn encrypt_obj<W: Write, R: Read>(
+    dst: W,
+    src: R,
+    id: &HashId,
+) -> Result<()> {
+    let mut key = [0u8; BLKSZ];
+    let mut iv = [0u8; BLKSZ];
     key.copy_from_slice(&id[..BLKSZ]);
     iv.copy_from_slice(&id[BLKSZ..]);
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
-        aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
+        aes::KeySize::KeySize128,
+        &key,
+        &iv,
+        blockmodes::PkcsPadding,
+    ));
     crypt_stream(dst, src, &mut cryptor, true)?;
     Ok(())
 }
 
 /// Reverses `encrypt_obj()`.
-pub fn decrypt_obj<W : Write, R : Read>(dst: W, src: R, id: &HashId)
-                                        -> Result<()> {
-    let mut key = [0u8;BLKSZ];
-    let mut iv = [0u8;BLKSZ];
+pub fn decrypt_obj<W: Write, R: Read>(
+    dst: W,
+    src: R,
+    id: &HashId,
+) -> Result<()> {
+    let mut key = [0u8; BLKSZ];
+    let mut iv = [0u8; BLKSZ];
     key.copy_from_slice(&id[..BLKSZ]);
     iv.copy_from_slice(&id[BLKSZ..]);
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
-        aes::KeySize::KeySize128, &key, &iv, blockmodes::PkcsPadding));
+        aes::KeySize::KeySize128,
+        &key,
+        &iv,
+        blockmodes::PkcsPadding,
+    ));
     crypt_stream(dst, src, &mut cryptor, false)?;
     Ok(())
 }
@@ -702,13 +773,19 @@ pub fn xform_obj_id(id: &HashId) -> HashId {
 /// can be used with `encrypt_append_dir()` to append more data to the file.
 ///
 /// `src` must produce data which is a multiple of BLKSZ bytes long.
-pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
-                                              key: &InternalKey)
-                                              -> Result<[u8;BLKSZ]> {
+pub fn encrypt_whole_dir<W: Write, R: Read>(
+    mut dst: W,
+    src: R,
+    key: &InternalKey,
+) -> Result<[u8; BLKSZ]> {
     let (key, iv) = write_cbc_prefix(&mut dst, key.dir_key())?;
 
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
-        aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
+        aes::KeySize::KeySize128,
+        &key,
+        &iv,
+        blockmodes::NoPadding,
+    ));
     crypt_stream(dst, src, &mut cryptor, true)?;
     Ok(key)
 }
@@ -717,24 +794,37 @@ pub fn encrypt_whole_dir<W : Write, R : Read>(mut dst: W, src: R,
 ///
 /// `key` is the session key returned by `encrypt_whole_dir()` or
 /// `decrypt_whole_dir()`. `iv` is the append-IV returned by `dir_append_iv()`.
-pub fn encrypt_append_dir<W : Write, R : Read>(dst: W, src: R,
-                                               key: &[u8;BLKSZ], iv: &[u8;BLKSZ])
-                                               -> Result<()> {
+pub fn encrypt_append_dir<W: Write, R: Read>(
+    dst: W,
+    src: R,
+    key: &[u8; BLKSZ],
+    iv: &[u8; BLKSZ],
+) -> Result<()> {
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
-        aes::KeySize::KeySize128, key, iv, blockmodes::NoPadding));
+        aes::KeySize::KeySize128,
+        key,
+        iv,
+        blockmodes::NoPadding,
+    ));
     crypt_stream(dst, src, &mut cryptor, true)?;
     Ok(())
 }
 
 /// Inverts `encrypt_whole_dir()` and any subsequent calls to
 /// `encrypt_append_dir()`.
-pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
-                                              key: &InternalKey)
-                                              -> Result<[u8;BLKSZ]> {
+pub fn decrypt_whole_dir<W: Write, R: Read>(
+    dst: W,
+    mut src: R,
+    key: &InternalKey,
+) -> Result<[u8; BLKSZ]> {
     let (key, iv) = read_cbc_prefix(&mut src, key.dir_key())?;
 
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
-        aes::KeySize::KeySize128, &key, &iv, blockmodes::NoPadding));
+        aes::KeySize::KeySize128,
+        &key,
+        &iv,
+        blockmodes::NoPadding,
+    ));
     crypt_stream(dst, src, &mut cryptor, false)?;
     Ok(key)
 }
@@ -742,25 +832,25 @@ pub fn decrypt_whole_dir<W : Write, R : Read>(dst: W, mut src: R,
 /// Given a suffix of the full ciphertext content of a directory `data`, return
 /// the IV to pass to `encrypt_append_dir` to append more data to that
 /// directory.
-pub fn dir_append_iv(data: &[u8]) -> [u8;BLKSZ] {
-    let mut iv = [0u8;BLKSZ];
+pub fn dir_append_iv(data: &[u8]) -> [u8; BLKSZ] {
+    let mut iv = [0u8; BLKSZ];
     iv.copy_from_slice(&data[data.len() - BLKSZ..]);
     iv
 }
 
-fn dir_ver_iv(dir: &HashId) -> [u8;BLKSZ] {
-    let mut iv = [0u8;BLKSZ];
+fn dir_ver_iv(dir: &HashId) -> [u8; BLKSZ] {
+    let mut iv = [0u8; BLKSZ];
     for ix in 0..8 {
-        iv[ix] = dir[ix] ^ dir[ix+BLKSZ];
+        iv[ix] = dir[ix] ^ dir[ix + BLKSZ];
     }
     iv
 }
 
 /// Encrypts the version of the given directory.
-pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, key: &KeyChain)
-                       -> HashId {
-    let key = key.key(GROUP_EVERYONE).expect(
-        "Key chain does not have `everyone` group");
+pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, key: &KeyChain) -> HashId {
+    let key = key
+        .key(GROUP_EVERYONE)
+        .expect("Key chain does not have `everyone` group");
 
     let mut cleartext = HashId::default();
     for ix in 0..8 {
@@ -770,9 +860,11 @@ pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, key: &KeyChain)
 
     let mut res = HashId::default();
     let mut cryptor = WEncryptor(aes::cbc_encryptor(
-        aes::KeySize::KeySize128, key.dir_key(),
+        aes::KeySize::KeySize128,
+        key.dir_key(),
         &dir_ver_iv(dir),
-        blockmodes::NoPadding));
+        blockmodes::NoPadding,
+    ));
     crypt_stream(&mut res[..], &cleartext[..], &mut cryptor, true)
         .expect("Directory version encryption failed");
 
@@ -782,21 +874,27 @@ pub fn encrypt_dir_ver(dir: &HashId, mut ver: u64, key: &KeyChain)
 /// Inverts `encrypt_dir_ver()`.
 ///
 /// If `ciphertext` is invalid, 0 is silently returned instead.
-pub fn decrypt_dir_ver(dir: &HashId, ciphertext: &HashId, key: &KeyChain)
-                       -> u64 {
-    let key = key.key(GROUP_EVERYONE).expect(
-        "Key chain does not have `everyone` group");
+pub fn decrypt_dir_ver(
+    dir: &HashId,
+    ciphertext: &HashId,
+    key: &KeyChain,
+) -> u64 {
+    let key = key
+        .key(GROUP_EVERYONE)
+        .expect("Key chain does not have `everyone` group");
 
     // Initialise to something that we'd reject below
-    let mut cleartext = [255u8;32];
+    let mut cleartext = [255u8; 32];
     let mut cryptor = WDecryptor(aes::cbc_decryptor(
-        aes::KeySize::KeySize128, key.dir_key(),
+        aes::KeySize::KeySize128,
+        key.dir_key(),
         &dir_ver_iv(dir),
-        blockmodes::NoPadding));
+        blockmodes::NoPadding,
+    ));
     // Ignore any errors and simply leave `cleartext` initialised to the
     // invalid value.
-    let _ = crypt_stream(&mut cleartext[..], &ciphertext[..],
-                         &mut cryptor, false);
+    let _ =
+        crypt_stream(&mut cleartext[..], &ciphertext[..], &mut cryptor, false);
 
     // If the padding is invalid, silently return 0 so it gets rejected the
     // same way as simply receding the version.
@@ -841,30 +939,37 @@ mod test {
         keys.insert("a".to_owned(), ck(b"plugh", &mut keychain));
         keys.insert("b".to_owned(), ck(b"xyzzy", &mut keychain));
 
-        assert_eq!(Some(&keychain.keys),
-                   try_derive_key(b"plugh", &keys).as_ref().map(|c| &c.keys));
-        assert_eq!(Some(&keychain.keys),
-                   try_derive_key(b"xyzzy", &keys).as_ref().map(|c| &c.keys));
+        assert_eq!(
+            Some(&keychain.keys),
+            try_derive_key(b"plugh", &keys).as_ref().map(|c| &c.keys)
+        );
+        assert_eq!(
+            Some(&keychain.keys),
+            try_derive_key(b"xyzzy", &keys).as_ref().map(|c| &c.keys)
+        );
         assert_eq!(None, try_derive_key(b"foo", &keys));
     }
 
     #[test]
     fn generate_and_derive_keys_long_passphrase() {
-        let pw_a = [b'a';1024];
-        let pw_b = [b'b';1024];
-        let pw_c = [b'c';1024];
+        let pw_a = [b'a'; 1024];
+        let pw_b = [b'b'; 1024];
+        let pw_c = [b'c'; 1024];
 
         let mut keychain = KeyChain::generate_new();
         let mut keys = BTreeMap::new();
         keys.insert("a".to_owned(), ck(&pw_a, &mut keychain));
         keys.insert("b".to_owned(), ck(&pw_b, &mut keychain));
 
-        assert_eq!(Some(&keychain.keys),
-                   try_derive_key(&pw_a, &keys).as_ref().map(|c| &c.keys));
-        assert_eq!(Some(&keychain.keys),
-                   try_derive_key(&pw_b, &keys).as_ref().map(|c| &c.keys));
+        assert_eq!(
+            Some(&keychain.keys),
+            try_derive_key(&pw_a, &keys).as_ref().map(|c| &c.keys)
+        );
+        assert_eq!(
+            Some(&keychain.keys),
+            try_derive_key(&pw_b, &keys).as_ref().map(|c| &c.keys)
+        );
         assert_eq!(None, try_derive_key(&pw_c, &keys));
-
     }
 }
 
@@ -911,21 +1016,21 @@ mod fast_test {
 
     #[test]
     fn crypt_obj_4096() {
-        let mut data = [0u8;4096];
+        let mut data = [0u8; 4096];
         rand(&mut data);
         test_crypt_obj(&data);
     }
 
     #[test]
     fn crypt_obj_4097() {
-        let mut data = [0u8;4097];
+        let mut data = [0u8; 4097];
         rand(&mut data);
         test_crypt_obj(&data);
     }
 
     #[test]
     fn crypt_obj_8191() {
-        let mut data = [0u8;8191];
+        let mut data = [0u8; 8191];
         rand(&mut data);
         test_crypt_obj(&data);
     }
@@ -939,8 +1044,8 @@ mod fast_test {
         let sk1 = encrypt_whole_dir(&mut ciphertext, &orig[..], &key).unwrap();
 
         let mut cleartext = Vec::new();
-        let sk2 = decrypt_whole_dir(&mut cleartext, &ciphertext[..],
-                                    &key).unwrap();
+        let sk2 =
+            decrypt_whole_dir(&mut cleartext, &ciphertext[..], &key).unwrap();
 
         assert_eq!(orig, &cleartext[..]);
         assert_eq!(sk1, sk2);
@@ -951,11 +1056,12 @@ mod fast_test {
         let key = InternalKey::generate_new();
 
         let mut ciphertext = Vec::new();
-        let sk = encrypt_whole_dir(
-            &mut ciphertext, &b"0123456789abcdef"[..], &key).unwrap();
+        let sk =
+            encrypt_whole_dir(&mut ciphertext, &b"0123456789abcdef"[..], &key)
+                .unwrap();
         let iv = dir_append_iv(&ciphertext);
-        encrypt_append_dir(
-            &mut ciphertext, &b"0123456789ABCDEF"[..], &sk, &iv).unwrap();
+        encrypt_append_dir(&mut ciphertext, &b"0123456789ABCDEF"[..], &sk, &iv)
+            .unwrap();
 
         let mut cleartext = Vec::new();
         decrypt_whole_dir(&mut cleartext, &ciphertext[..], &key).unwrap();
@@ -970,15 +1076,23 @@ mod fast_test {
         let mut dir = HashId::default();
         rand(&mut dir);
 
-        assert_eq!(42u64, decrypt_dir_ver(
-            &dir, &encrypt_dir_ver(&dir, 42u64, &keychain), &keychain));
+        assert_eq!(
+            42u64,
+            decrypt_dir_ver(
+                &dir,
+                &encrypt_dir_ver(&dir, 42u64, &keychain),
+                &keychain
+            )
+        );
     }
 
     #[test]
     fn corrupt_dir_version_decrypted_to_0() {
         let keychain = KeyChain::generate_new();
 
-        assert_eq!(0u64, decrypt_dir_ver(
-            &HashId::default(), &HashId::default(), &keychain));
+        assert_eq!(
+            0u64,
+            decrypt_dir_ver(&HashId::default(), &HashId::default(), &keychain)
+        );
     }
 }

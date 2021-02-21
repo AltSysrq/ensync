@@ -17,31 +17,33 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr,OsString};
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{self, Read, Seek, Write};
 use std::mem;
-use std::io::{self,Read,Seek,Write};
 use std::os::unix;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::prelude::*;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
-use std::sync::atomic::{AtomicUsize,Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
 use notify::{self, Watcher};
 use tempfile::NamedTempFile;
 
+use crate::block_xfer::{blocks_to_stream, hash_block, stream_to_blocks};
+use crate::block_xfer::{
+    BlockFetch, BlockList, ContentAddressableSource, StreamSource,
+};
 use crate::defs::*;
 use crate::errors::*;
-use crate::replica::*;
-use crate::block_xfer::{BlockList,StreamSource,ContentAddressableSource,BlockFetch};
-use crate::block_xfer::{blocks_to_stream,hash_block,stream_to_blocks};
 use crate::posix;
-use crate::posix::dao::{Dao,InodeStatus};
+use crate::posix::dao::{Dao, InodeStatus};
 use crate::posix::dir::*;
+use crate::replica::*;
 
 type Inode = (u64, u64);
 
@@ -49,7 +51,7 @@ trait MetadataExt2 {
     fn inode(&self) -> Inode;
 }
 
-impl<T : MetadataExt> MetadataExt2 for T {
+impl<T: MetadataExt> MetadataExt2 for T {
     fn inode(&self) -> Inode {
         (self.dev(), self.ino())
     }
@@ -89,30 +91,34 @@ pub struct PosixReplica {
 }
 
 fn path_metadata(path: &Path) -> Result<fs::Metadata> {
-    fs::symlink_metadata(path).chain_err(
-        || format!("Error reading metadata for '{}'", path.display()))
+    fs::symlink_metadata(path).chain_err(|| {
+        format!("Error reading metadata for '{}'", path.display())
+    })
 }
 
 trait OnDao {
-    fn on_dao<T, F : FnOnce (&Dao) -> T>(&self, f: F) -> T;
+    fn on_dao<T, F: FnOnce(&Dao) -> T>(&self, f: F) -> T;
 }
 
 impl<'a> OnDao for &'a Dao {
-    fn on_dao<T, F : FnOnce (&Dao) -> T>(&self, f: F) -> T {
+    fn on_dao<T, F: FnOnce(&Dao) -> T>(&self, f: F) -> T {
         f(*self)
     }
 }
 
 impl<'a> OnDao for &'a Mutex<Dao> {
-    fn on_dao<T, F : FnOnce (&Dao) -> T>(&self, f: F) -> T {
+    fn on_dao<T, F: FnOnce(&Dao) -> T>(&self, f: F) -> T {
         f(&*self.lock().unwrap())
     }
 }
 
-fn metadata_to_fd<D : OnDao>(path: &Path, md: &fs::Metadata,
-                             dao: D, calc_hash_if_unknown: bool,
-                             config: &Config)
-                  -> Result<FileData> {
+fn metadata_to_fd<D: OnDao>(
+    path: &Path,
+    md: &fs::Metadata,
+    dao: D,
+    calc_hash_if_unknown: bool,
+    config: &Config,
+) -> Result<FileData> {
     let typ = md.file_type();
 
     // Treat the `internal.ensync` directory as if it were a Special file so
@@ -127,7 +133,9 @@ fn metadata_to_fd<D : OnDao>(path: &Path, md: &fs::Metadata,
         Ok(FileData::Directory(md.mode() & 0o7777))
     } else if typ.is_symlink() {
         let target = fs::read_link(path)
-            .chain_err(|| format!("Failed to read symlink '{}'", path.display()))?
+            .chain_err(|| {
+                format!("Failed to read symlink '{}'", path.display())
+            })?
             .into_os_string();
         Ok(FileData::Symlink(target))
     } else if typ.is_file() {
@@ -136,27 +144,44 @@ fn metadata_to_fd<D : OnDao>(path: &Path, md: &fs::Metadata,
         let ino = md.ino();
         let size = md.size();
         let hash = get_or_compute_hash(
-            path, dao, &InodeStatus {
-                ino: ino, mtime: mtime, size: size,
-            }, calc_hash_if_unknown, config)
-            .chain_err(|| format!("Failed to compute hash of regular file '{}'",
-                                  path.display()))?;
+            path,
+            dao,
+            &InodeStatus {
+                ino: ino,
+                mtime: mtime,
+                size: size,
+            },
+            calc_hash_if_unknown,
+            config,
+        )
+        .chain_err(|| {
+            format!(
+                "Failed to compute hash of regular file '{}'",
+                path.display()
+            )
+        })?;
         Ok(FileData::Regular(mode, size, mtime, hash))
     } else {
         Ok(FileData::Special)
     }
 }
 
-fn get_or_compute_hash<D : OnDao>
-    (path: &Path, dao: D, stat: &InodeStatus,
-     calc_hash_if_unknown: bool,
-     config: &Config) -> Result<HashId>
-{
-    if let Some(cached) = dao.on_dao(|dao| dao.cached_file_hash(
-        path.as_os_str(), stat, config.cache_generation)
-        .chain_err(|| format!("Error checking for cached hash for '{}'",
-                              path.display())))?
-    {
+fn get_or_compute_hash<D: OnDao>(
+    path: &Path,
+    dao: D,
+    stat: &InodeStatus,
+    calc_hash_if_unknown: bool,
+    config: &Config,
+) -> Result<HashId> {
+    if let Some(cached) = dao.on_dao(|dao| {
+        dao.cached_file_hash(path.as_os_str(), stat, config.cache_generation)
+            .chain_err(|| {
+                format!(
+                    "Error checking for cached hash for '{}'",
+                    path.display()
+                )
+            })
+    })? {
         return Ok(cached);
     }
 
@@ -164,15 +189,25 @@ fn get_or_compute_hash<D : OnDao>
         return Ok(UNKNOWN_HASH);
     }
 
-    let file = fs::File::open(path).chain_err(
-        || format!("Unable to open '{}'", path.display()))?;
+    let file = fs::File::open(path)
+        .chain_err(|| format!("Unable to open '{}'", path.display()))?;
     let blocklist = stream_to_blocks(
-        file, config.block_size, &config.hmac_secret[..],
-        |_,_| Ok(()))
-        .chain_err(|| format!("Error reading '{}'", path.display()))?;
-    let _ = dao.on_dao(|dao| dao.cache_file_hashes(
-        path.as_os_str(), &blocklist.total, &blocklist.blocks[..],
-        config.block_size, stat, config.cache_generation));
+        file,
+        config.block_size,
+        &config.hmac_secret[..],
+        |_, _| Ok(()),
+    )
+    .chain_err(|| format!("Error reading '{}'", path.display()))?;
+    let _ = dao.on_dao(|dao| {
+        dao.cache_file_hashes(
+            path.as_os_str(),
+            &blocklist.total,
+            &blocklist.blocks[..],
+            config.block_size,
+            stat,
+            config.cache_generation,
+        )
+    });
     Ok(blocklist.total)
 }
 
@@ -205,33 +240,47 @@ impl Replica for PosixReplica {
     type TransferOut = Option<Box<dyn StreamSource>>;
 
     fn is_dir_dirty(&self, dir: &DirHandle) -> bool {
-        return !self.dao.lock().unwrap().is_dir_clean(
-            &dir.full_path_with_trailing_slash())
-            .unwrap_or(true)
+        return !self
+            .dao
+            .lock()
+            .unwrap()
+            .is_dir_clean(&dir.full_path_with_trailing_slash())
+            .unwrap_or(true);
     }
 
     fn set_dir_clean(&self, dir: &DirHandle) -> Result<bool> {
-        self.dao.lock().unwrap().set_dir_clean(
-            &dir.full_path_with_trailing_slash(), &dir.hash())
-            .chain_err(|| format!("Failed to mark '{}' clean",
-                                  dir.path().display()))?;
+        self.dao
+            .lock()
+            .unwrap()
+            .set_dir_clean(&dir.full_path_with_trailing_slash(), &dir.hash())
+            .chain_err(|| {
+                format!("Failed to mark '{}' clean", dir.path().display())
+            })?;
         if let Some(ref watcher) = self.watcher {
-            watcher.lock().unwrap().watch(
-                dir.full_path_with_trailing_slash())?;
+            watcher
+                .lock()
+                .unwrap()
+                .watch(dir.full_path_with_trailing_slash())?;
         }
         Ok(true)
     }
 
     fn root(&self) -> Result<DirHandle> {
-        Ok(DirHandle::root(self.config.root.clone(),
-                           path_metadata(&self.config.root)
-                           .chain_err(|| format!("Error getting metadata \
+        Ok(DirHandle::root(
+            self.config.root.clone(),
+            path_metadata(&self.config.root)
+                .chain_err(|| {
+                    format!(
+                        "Error getting metadata \
                                                   of '{}'",
-                                                 self.config.root.display()))?
-                           .dev()))
+                        self.config.root.display()
+                    )
+                })?
+                .dev(),
+        ))
     }
 
-    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString,FileData)>> {
+    fn list(&self, dir: &mut DirHandle) -> Result<Vec<(OsString, FileData)>> {
         let mut ret = Vec::new();
 
         dir.reset_hash();
@@ -239,36 +288,43 @@ impl Replica for PosixReplica {
         let entries = match read_result {
             Ok(entries) => entries,
             Err(err) => {
-                if io::ErrorKind::NotFound == err.kind() &&
-                    dir.is_synth()
-                {
+                if io::ErrorKind::NotFound == err.kind() && dir.is_synth() {
                     return Ok(ret);
                 } else {
                     let r: io::Result<()> = Err(err);
-                    r.chain_err(
-                        || format!("Error listing directory '{}'",
-                                   dir.path().display()))?;
+                    r.chain_err(|| {
+                        format!(
+                            "Error listing directory '{}'",
+                            dir.path().display()
+                        )
+                    })?;
                     unreachable!()
                 }
-            },
-
+            }
         };
         for entry in entries {
-            let entry = entry.chain_err(
-                || format!("Error listing directory '{}'", dir.path().display()))?;
+            let entry = entry.chain_err(|| {
+                format!("Error listing directory '{}'", dir.path().display())
+            })?;
 
             let name = entry.file_name();
-            if OsStr::new(".") == &name ||
-                OsStr::new("..") == &name
-            {
+            if OsStr::new(".") == &name || OsStr::new("..") == &name {
                 continue;
             }
 
-            let md = entry.metadata().chain_err(
-                || format!("Error reading file metadata for '{}'",
-                           entry.path().display()))?;
+            let md = entry.metadata().chain_err(|| {
+                format!(
+                    "Error reading file metadata for '{}'",
+                    entry.path().display()
+                )
+            })?;
             let fd = metadata_to_fd(
-                &entry.path(), &md, &*self.dao, true, &*self.config)?;
+                &entry.path(),
+                &md,
+                &*self.dao,
+                true,
+                &*self.config,
+            )?;
             dir.toggle_file(File(&name, &fd));
             ret.push((name, fd));
         }
@@ -276,8 +332,12 @@ impl Replica for PosixReplica {
         Ok(ret)
     }
 
-    fn rename(&self, dir: &mut DirHandle, old: &OsStr, new: &OsStr)
-              -> Result<()> {
+    fn rename(
+        &self,
+        dir: &mut DirHandle,
+        old: &OsStr,
+        new: &OsStr,
+    ) -> Result<()> {
         assert_sane_filename(old)?;
         assert_sane_filename(new)?;
 
@@ -288,10 +348,15 @@ impl Replica for PosixReplica {
 
         match fs::symlink_metadata(&new_path) {
             Ok(_) => return Err(ErrorKind::RenameDestExists.into()),
-            Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
-            err => err.chain_err(
-                || format!("Failied to check whether '{}' exists",
-                           new_path.display())).map(|_| ())?,
+            Err(ref e) if io::ErrorKind::NotFound == e.kind() => {}
+            err => err
+                .chain_err(|| {
+                    format!(
+                        "Failied to check whether '{}' exists",
+                        new_path.display()
+                    )
+                })
+                .map(|_| ())?,
         }
 
         // Get the file data representation so we can remove/add it to the sum
@@ -299,11 +364,20 @@ impl Replica for PosixReplica {
         let old_path = dir.child(old);
         let old_md = path_metadata(&old_path)?;
         let fd = metadata_to_fd(
-            &old_path, &old_md, &*self.dao, false, &*self.config)?;
+            &old_path,
+            &old_md,
+            &*self.dao,
+            false,
+            &*self.config,
+        )?;
 
-        fs::rename(&old_path, &new_path).chain_err(
-            || format!("Failed to rename '{}' to '{}'",
-                       old_path.display(), new_path.display()))?;
+        fs::rename(&old_path, &new_path).chain_err(|| {
+            format!(
+                "Failed to rename '{}' to '{}'",
+                old_path.display(),
+                new_path.display()
+            )
+        })?;
 
         // Update the directory state hash accordingly
         dir.toggle_file(File(old, &fd));
@@ -326,9 +400,12 @@ impl Replica for PosixReplica {
         Ok(())
     }
 
-    fn create(&self, dir: &mut DirHandle, source: File,
-              xfer: Option<ContentAddressableSource>)
-              -> Result<FileData> {
+    fn create(
+        &self,
+        dir: &mut DirHandle,
+        source: File,
+        xfer: Option<ContentAddressableSource>,
+    ) -> Result<FileData> {
         assert_sane_filename(source.0)?;
         dir.create_if_needed(self, None)?;
 
@@ -340,14 +417,16 @@ impl Replica for PosixReplica {
             // already exists.
             match fs::symlink_metadata(&path) {
                 Ok(_) => Err(ErrorKind::CreateExists.into()),
-                Err(ref err) if io::ErrorKind::NotFound == err.kind() =>
-                    Ok(()),
+                Err(ref err) if io::ErrorKind::NotFound == err.kind() => Ok(()),
                 err => {
-                    err.chain_err(
-                        || format!("Error checking whether '{}' exists",
-                                   path.display()))?;
+                    err.chain_err(|| {
+                        format!(
+                            "Error checking whether '{}' exists",
+                            path.display()
+                        )
+                    })?;
                     unreachable!()
-                },
+                }
             }
         })?;
 
@@ -355,10 +434,14 @@ impl Replica for PosixReplica {
         return Ok(ret);
     }
 
-    fn update(&self, dir: &mut DirHandle, name: &OsStr,
-              old: &FileData, new: &FileData,
-              xfer: Option<ContentAddressableSource>)
-              -> Result<FileData> {
+    fn update(
+        &self,
+        dir: &mut DirHandle,
+        name: &OsStr,
+        old: &FileData,
+        new: &FileData,
+        xfer: Option<ContentAddressableSource>,
+    ) -> Result<FileData> {
         assert_sane_filename(name)?;
 
         let path = dir.child(name);
@@ -366,31 +449,47 @@ impl Replica for PosixReplica {
         // If this can be translated to a simple `chmod()` and/or mtime
         // adjustment, do so.
         match (old, UNKNOWN_HASH, new, UNKNOWN_HASH) {
-            (&FileData::Directory(m1), h1, &FileData::Directory(m2), h2) |
-            (&FileData::Regular(m1,_,_,h1), _, &FileData::Regular(m2,_,_,h2), _)
-            if h1 == h2 => {
+            (&FileData::Directory(m1), h1, &FileData::Directory(m2), h2)
+            | (
+                &FileData::Regular(m1, _, _, h1),
+                _,
+                &FileData::Regular(m2, _, _, h2),
+                _,
+            ) if h1 == h2 => {
                 self.check_matches(&path, old)?;
                 if m1 != m2 {
-                    fs::set_permissions(
-                        &path, fs::Permissions::from_mode(m2)).chain_err(
-                        || format!("Error setting permissions on '{}'",
-                                   path.display()))?;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(m2))
+                        .chain_err(|| {
+                            format!(
+                                "Error setting permissions on '{}'",
+                                path.display()
+                            )
+                        })?;
                 }
-                if let (&FileData::Regular(_, _, t1, _),
-                        &FileData::Regular(_, _, t2, _))  = (old, new) {
+                if let (
+                    &FileData::Regular(_, _, t1, _),
+                    &FileData::Regular(_, _, t2, _),
+                ) = (old, new)
+                {
                     if t1 != t2 {
-                        posix::set_mtime_path(&path, t2).chain_err(
-                            || format!("Error setting mtime on '{}'",
-                                       path.display()))?;
-                        let _ = self.dao.lock().unwrap().update_cache_mtime(
-                            path.as_os_str(), t2);
+                        posix::set_mtime_path(&path, t2).chain_err(|| {
+                            format!(
+                                "Error setting mtime on '{}'",
+                                path.display()
+                            )
+                        })?;
+                        let _ = self
+                            .dao
+                            .lock()
+                            .unwrap()
+                            .update_cache_mtime(path.as_os_str(), t2);
                     }
                 }
                 dir.toggle_file(File(name, old));
                 dir.toggle_file(File(name, new));
                 return Ok(new.clone());
-            },
-            _ => { },
+            }
+            _ => {}
         }
 
         let mut shunted_name = None;
@@ -429,9 +528,9 @@ impl Replica for PosixReplica {
         })?;
 
         if let Some(shunted) = shunted_name {
-            self.remove_general(&shunted, old).chain_err(
-                || format!("Failed to remove shunted file '{}'",
-                           shunted.display()))?;
+            self.remove_general(&shunted, old).chain_err(|| {
+                format!("Failed to remove shunted file '{}'", shunted.display())
+            })?;
         }
 
         dir.toggle_file(File(name, old));
@@ -440,8 +539,7 @@ impl Replica for PosixReplica {
         Ok(ret)
     }
 
-    fn chdir(&self, dir: &DirHandle, subdir: &OsStr)
-             -> Result<DirHandle> {
+    fn chdir(&self, dir: &DirHandle, subdir: &OsStr) -> Result<DirHandle> {
         assert_sane_filename(subdir)?;
 
         let path = dir.child(subdir);
@@ -453,8 +551,12 @@ impl Replica for PosixReplica {
         }
     }
 
-    fn synthdir(&self, dir: &mut DirHandle, subdir: &OsStr, mode: FileMode)
-                -> DirHandle {
+    fn synthdir(
+        &self,
+        dir: &mut DirHandle,
+        subdir: &OsStr,
+        mode: FileMode,
+    ) -> DirHandle {
         dir.subdir(subdir, Some(mode), dir.dev())
     }
 
@@ -464,29 +566,35 @@ impl Replica for PosixReplica {
         match fs::symlink_metadata(&path) {
             Ok(md) => {
                 match fs::remove_dir(&path) {
-                    Ok(()) => { },
-                    Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
-                    err => err.chain_err(
-                        || format!("Error removing directory '{}'",
-                                   path.display()))?,
+                    Ok(()) => {}
+                    Err(ref e) if io::ErrorKind::NotFound == e.kind() => {}
+                    err => err.chain_err(|| {
+                        format!("Error removing directory '{}'", path.display())
+                    })?,
                 }
-                dir.toggle_file(File(path.file_name().unwrap(),
-                                     &FileData::Directory(
-                                         md.mode() & 0o7777)));
-            },
-            Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
-            err => err.chain_err(
-                || format!("Error reading metadata for '{}'", path.display()))
+                dir.toggle_file(File(
+                    path.file_name().unwrap(),
+                    &FileData::Directory(md.mode() & 0o7777),
+                ));
+            }
+            Err(ref e) if io::ErrorKind::NotFound == e.kind() => {}
+            err => err
+                .chain_err(|| {
+                    format!("Error reading metadata for '{}'", path.display())
+                })
                 .map(|_| ())?,
         }
         Ok(())
     }
 
-    fn transfer(&self, dir: &DirHandle, file: File)
-                -> Result<Option<Box<dyn StreamSource>>> {
+    fn transfer(
+        &self,
+        dir: &DirHandle,
+        file: File,
+    ) -> Result<Option<Box<dyn StreamSource>>> {
         Ok(match *file.1 {
-            FileData::Regular(mode, _, _, expected_hash) => Some(Box::new(
-                FileStreamSource {
+            FileData::Regular(mode, _, _, expected_hash) => {
+                Some(Box::new(FileStreamSource {
                     file: fs::File::open(dir.child(file.0))?,
                     dir: dir.clone(),
                     name: file.0.to_owned(),
@@ -494,8 +602,8 @@ impl Replica for PosixReplica {
                     expected_hash: expected_hash,
                     config: self.config.clone(),
                     dao: self.dao.clone(),
-                }
-            )),
+                }))
+            }
             _ => None,
         })
     }
@@ -508,15 +616,19 @@ impl Replica for PosixReplica {
         // which the watcher has noticed are dirty.
         let dir_filter: Option<HashSet<OsString>> =
             if let (true, Some(watcher)) =
-            (typ <= PrepareType::Watched, self.watcher.as_ref())
-        {
-            let mut watcher = watcher.lock().unwrap();
-            Some(mem::replace(&mut watcher.dirty, HashSet::new())
-                 .into_iter().filter_map(|v| watcher.watched.get(&v))
-                 .map(|s| s.to_owned()).collect())
-        } else {
-            None
-        };
+                (typ <= PrepareType::Watched, self.watcher.as_ref())
+            {
+                let mut watcher = watcher.lock().unwrap();
+                Some(
+                    mem::replace(&mut watcher.dirty, HashSet::new())
+                        .into_iter()
+                        .filter_map(|v| watcher.watched.get(&v))
+                        .map(|s| s.to_owned())
+                        .collect(),
+                )
+            } else {
+                None
+            };
 
         // Walk all directories marked clean and check whether they are still
         // clean.
@@ -542,18 +654,23 @@ impl Replica for PosixReplica {
             let error = if let Ok(mut diriter) = fs::read_dir(dir.full_path()) {
                 while let Some(Ok(entry)) = diriter.next() {
                     let name = entry.file_name();
-                    if OsStr::new(".") == &name ||
-                        OsStr::new("..") == &name
-                    {
+                    if OsStr::new(".") == &name || OsStr::new("..") == &name {
                         continue;
                     }
 
-                    let md = entry.metadata().chain_err(
-                        || format!("Error reading metadata for '{}'",
-                                   entry.path().display()))?;
+                    let md = entry.metadata().chain_err(|| {
+                        format!(
+                            "Error reading metadata for '{}'",
+                            entry.path().display()
+                        )
+                    })?;
                     let fd = metadata_to_fd(
-                        &entry.path(), &md,
-                        &*dao, false, &*self.config)?;
+                        &entry.path(),
+                        &md,
+                        &*dao,
+                        false,
+                        &*self.config,
+                    )?;
                     dir.toggle_file(File(&name, &fd));
                 }
                 false
@@ -564,8 +681,10 @@ impl Replica for PosixReplica {
             if error || expected_hash != dir.hash() {
                 dao.set_dir_dirty(&dir.full_path_with_trailing_slash())?;
             } else if let Some(ref watcher) = self.watcher {
-                watcher.lock().unwrap().watch(
-                    dir.full_path_with_trailing_slash())?;
+                watcher
+                    .lock()
+                    .unwrap()
+                    .watch(dir.full_path_with_trailing_slash())?;
             }
         }
 
@@ -576,7 +695,8 @@ impl Replica for PosixReplica {
         self.clean_scratch()?;
         let _ = self.dao.lock().unwrap().prune_hash_cache(
             &self.config.root.as_os_str(),
-            self.config.cache_generation);
+            self.config.cache_generation,
+        );
         Ok(())
     }
 }
@@ -588,19 +708,20 @@ impl PosixReplica {
     /// already-existing directory created for use by the replica.
     /// `hmac_secret` and `block_size` specify the secret and size for block
     /// hashing.
-    pub fn new<P1 : AsRef<Path>, P2 : AsRef<Path>>
-        (root: P1, private_dir: P2,
-         hmac_secret: &[u8], block_size: usize)
-         -> Result<Self>
-    {
+    pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(
+        root: P1,
+        private_dir: P2,
+        hmac_secret: &[u8],
+        block_size: usize,
+    ) -> Result<Self> {
         let root = root.as_ref();
         let private_dir = private_dir.as_ref();
 
         let dao = Dao::open(
-            &private_dir.join("db.sqlite").to_str()
-                .ok_or_else(
-                    || format!("Path '{}' is not valid UTF-8",
-                               private_dir.display()))?)?;
+            &private_dir.join("db.sqlite").to_str().ok_or_else(|| {
+                format!("Path '{}' is not valid UTF-8", private_dir.display())
+            })?,
+        )?;
         let cache_generation = dao.next_generation()?;
 
         let private_dir_dev = path_metadata(private_dir)?.dev();
@@ -649,9 +770,10 @@ impl PosixReplica {
     /// anyway, though, to reduce the probability of damage if we fail to
     /// prevent the user from running multiple ensync instances concurrently on
     /// the same private directory.
-    fn scratch_file<T, F : FnMut (&Path) -> io::Result<T>>(
-        &self, mut create: F) -> io::Result<(T,PathBuf)>
-    {
+    fn scratch_file<T, F: FnMut(&Path) -> io::Result<T>>(
+        &self,
+        mut create: F,
+    ) -> io::Result<(T, PathBuf)> {
         loop {
             let ix = self.tmpix.fetch_add(1, Ordering::SeqCst);
             let mut path: PathBuf = self.config.private_dir.clone().into();
@@ -659,8 +781,9 @@ impl PosixReplica {
 
             match create(&path) {
                 Ok(file) => return Ok((file, path)),
-                Err(ref err) if io::ErrorKind::AlreadyExists == err.kind() =>
-                    continue,
+                Err(ref err) if io::ErrorKind::AlreadyExists == err.kind() => {
+                    continue
+                }
                 Err(err) => return Err(err),
             }
         }
@@ -668,12 +791,12 @@ impl PosixReplica {
 
     /// Like `scratch_file`, but specifically creates a regular file with the
     /// given mode, returning an open read/write handle to that file.
-    fn scratch_regular(&self, mode: FileMode)
-                       -> io::Result<(fs::File,PathBuf)> {
+    fn scratch_regular(
+        &self,
+        mode: FileMode,
+    ) -> io::Result<(fs::File, PathBuf)> {
         let mut opts = fs::OpenOptions::new();
-        opts.read(true).write(true)
-            .mode(mode)
-            .create_new(true);
+        opts.read(true).write(true).mode(mode).create_new(true);
 
         self.scratch_file(|path| opts.open(path))
     }
@@ -695,11 +818,17 @@ impl PosixReplica {
 
             if let Err(err) = fs::symlink_metadata(&new_path) {
                 if io::ErrorKind::NotFound == err.kind() {
-                    fs::rename(old_path, &new_path).chain_err(
-                        || format!("Failed to shunt '{}' to '{}'",
-                                   old_path.display(), new_path.display()))?;
+                    fs::rename(old_path, &new_path).chain_err(|| {
+                        format!(
+                            "Failed to shunt '{}' to '{}'",
+                            old_path.display(),
+                            new_path.display()
+                        )
+                    })?;
                     let _ = self.dao.lock().unwrap().rename_cache(
-                        old_path.as_os_str(), &new_path.as_os_str());
+                        old_path.as_os_str(),
+                        &new_path.as_os_str(),
+                    );
                     return Ok(new_path.into());
                 } else {
                     return Err(err.into());
@@ -719,81 +848,116 @@ impl PosixReplica {
     /// or renamed into its final place. If the callback fails, the operation
     /// is aborted and this function returns an error. The callback is used for
     /// things such as moving a directory to be replaced out of the way.
-    fn put_file<F : FnOnce () -> Result<()>>(
-        &self, dir: &mut DirHandle, source: File,
+    fn put_file<F: FnOnce() -> Result<()>>(
+        &self,
+        dir: &mut DirHandle,
+        source: File,
         xfer: Option<ContentAddressableSource>,
-        before_establish: F)
-        -> Result<FileData>
-    {
+        before_establish: F,
+    ) -> Result<FileData> {
         match *source.1 {
-            FileData::Special =>
-                panic!("Attempted to create generic special file locally"),
+            FileData::Special => {
+                panic!("Attempted to create generic special file locally")
+            }
 
             FileData::Directory(mode) => {
                 before_establish()?;
                 let path = dir.child(source.0);
-                fs::DirBuilder::new()
-                    .mode(mode)
-                    .create(&path)
-                    .chain_err(|| format!(
-                        "Error creating directory at '{}'", path.display()))?;
+                fs::DirBuilder::new().mode(mode).create(&path).chain_err(
+                    || {
+                        format!(
+                            "Error creating directory at '{}'",
+                            path.display()
+                        )
+                    },
+                )?;
                 // mkdir() restricts the mode via umask, so we need to make
                 // another call to get the mode we actually want.
-                fs::set_permissions(
-                    &path, fs::Permissions::from_mode(mode)).chain_err(
-                    || format!(
-                        "Error setting permissions on directory '{}'",
-                        path.display()))?;
+                fs::set_permissions(&path, fs::Permissions::from_mode(mode))
+                    .chain_err(|| {
+                        format!(
+                            "Error setting permissions on directory '{}'",
+                            path.display()
+                        )
+                    })?;
                 Ok(source.1.clone())
-            },
+            }
 
             FileData::Symlink(ref target) => {
                 // We can't atomically create a symlink on top of anything
                 // else, but we *can* create a symlink, then atomically rename
                 // it into a non-symlink.
-                let scratch_path = self.named_temp_file(dir)
+                let scratch_path = self
+                    .named_temp_file(dir)
                     .chain_err(|| "Failed to create temporary name")?
-                    .path().to_owned();
-                unix::fs::symlink(target, &scratch_path).chain_err(
-                    || format!("Failed to create temporary symlink at '{}'",
-                               scratch_path.display()))?;
+                    .path()
+                    .to_owned();
+                unix::fs::symlink(target, &scratch_path).chain_err(|| {
+                    format!(
+                        "Failed to create temporary symlink at '{}'",
+                        scratch_path.display()
+                    )
+                })?;
                 before_establish()?;
                 fs::rename(&scratch_path, &dir.child(source.0)).chain_err(
-                    || format!("Failed to move new symlink to '{}'",
-                               dir.child(source.0).display()))?;
+                    || {
+                        format!(
+                            "Failed to move new symlink to '{}'",
+                            dir.child(source.0).display()
+                        )
+                    },
+                )?;
                 Ok(source.1.clone())
-            },
+            }
 
             FileData::Regular(mode, _, time, _) => {
-                let (mut scratch_file, scratch_path) = self.named_temp_file(dir).chain_err(
-                    || format!("Failed to create temporary file in '{}'",
-                               dir.path().display()))?
+                let (mut scratch_file, scratch_path) = self
+                    .named_temp_file(dir)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to create temporary file in '{}'",
+                            dir.path().display()
+                        )
+                    })?
                     .into_parts();
 
                 if let Some(xfer) = xfer {
                     // Copy the file to the local filesystem
                     self.xfer_file(&mut scratch_file, &xfer).chain_err(
-                        || format!("Failed to transfer content of '{}'",
-                                   dir.child(source.0).display()))?;
+                        || {
+                            format!(
+                                "Failed to transfer content of '{}'",
+                                dir.child(source.0).display()
+                            )
+                        },
+                    )?;
                     // Move anything out of the way as needed
                     before_establish()?;
                     let new_path = dir.child(source.0);
                     // Atomically put into place after setting the mode and
                     // mtime
                     fs::set_permissions(
-                        &scratch_path, fs::Permissions::from_mode(mode))
-                        .chain_err(
-                            || format!("Failed to set permissions on '{}'",
-                                       scratch_path.display()))?;
-                    posix::set_mtime(&scratch_file, time).chain_err(
-                        || format!("Failed to set mtime on '{}'",
-                                   scratch_path.display()))?;
-                    scratch_file.sync_all().chain_err(
-                        || format!("Error fsync'ing '{}'",
-                                   new_path.display()))?;
-                    scratch_path.persist(&new_path)
-                        .chain_err(|| format!("Failed to persist '{}'",
-                                              new_path.display()))?;
+                        &scratch_path,
+                        fs::Permissions::from_mode(mode),
+                    )
+                    .chain_err(|| {
+                        format!(
+                            "Failed to set permissions on '{}'",
+                            scratch_path.display()
+                        )
+                    })?;
+                    posix::set_mtime(&scratch_file, time).chain_err(|| {
+                        format!(
+                            "Failed to set mtime on '{}'",
+                            scratch_path.display()
+                        )
+                    })?;
+                    scratch_file.sync_all().chain_err(|| {
+                        format!("Error fsync'ing '{}'", new_path.display())
+                    })?;
+                    scratch_path.persist(&new_path).chain_err(|| {
+                        format!("Failed to persist '{}'", new_path.display())
+                    })?;
                     // Cache the content of the file, assuming that nobody
                     // modified it between us renaming it there and `stat()`ing
                     // it now.
@@ -801,12 +965,15 @@ impl PosixReplica {
                     // Quietly ignore errors here, since they don't affect
                     // correctness.
                     let _ = self.update_cache(
-                        &new_path, &xfer.blocks, xfer.block_size);
+                        &new_path,
+                        &xfer.blocks,
+                        xfer.block_size,
+                    );
                     Ok(source.1.clone())
                 } else {
                     Err(ErrorKind::MissingXfer.into())
                 }
-            },
+            }
         }
     }
 
@@ -814,10 +981,12 @@ impl PosixReplica {
     fn remove_general(&self, path: &Path, fd: &FileData) -> Result<()> {
         match *fd {
             FileData::Regular(..) => self.hide_file(path),
-            FileData::Directory(..) => fs::remove_dir(path).chain_err(
-                || format!("Failed to remove directory '{}'", path.display())),
-            _ => fs::remove_file(path).chain_err(
-                || format!("Failed to remove symlink '{}'", path.display())),
+            FileData::Directory(..) => fs::remove_dir(path).chain_err(|| {
+                format!("Failed to remove directory '{}'", path.display())
+            }),
+            _ => fs::remove_file(path).chain_err(|| {
+                format!("Failed to remove symlink '{}'", path.display())
+            }),
         }
     }
 
@@ -827,23 +996,32 @@ impl PosixReplica {
     ///
     /// If renaming the file fails, it is instead simply deleted.
     fn hide_file(&self, old_path: &Path) -> Result<()> {
-        let (_, new_path) = self.scratch_regular(0o600).chain_err(
-            || format!("Failed to generate path to which to move \
-                        deleted file '{}'", old_path.display()))?;
-        fs::rename(old_path, &new_path).map(|_| {
-            let _ = self.dao.lock().unwrap().rename_cache(
-                old_path.as_os_str(), new_path.as_os_str());
-        }).or_else(|_| {
-            match fs::remove_file(old_path) {
-                Ok(_) => { },
-                Err(ref e) if io::ErrorKind::NotFound == e.kind() => { },
-                Err(e) => return Err(e),
-            }
-
-            let _ = self.dao.lock().unwrap().delete_cache(
-                old_path.as_os_str());
-            Ok(())
+        let (_, new_path) = self.scratch_regular(0o600).chain_err(|| {
+            format!(
+                "Failed to generate path to which to move \
+                        deleted file '{}'",
+                old_path.display()
+            )
         })?;
+        fs::rename(old_path, &new_path)
+            .map(|_| {
+                let _ = self
+                    .dao
+                    .lock()
+                    .unwrap()
+                    .rename_cache(old_path.as_os_str(), new_path.as_os_str());
+            })
+            .or_else(|_| {
+                match fs::remove_file(old_path) {
+                    Ok(_) => {}
+                    Err(ref e) if io::ErrorKind::NotFound == e.kind() => {}
+                    Err(e) => return Err(e),
+                }
+
+                let _ =
+                    self.dao.lock().unwrap().delete_cache(old_path.as_os_str());
+                Ok(())
+            })?;
         Ok(())
     }
 
@@ -857,13 +1035,16 @@ impl PosixReplica {
     /// other replica.
     ///
     /// If this call fails, `dst` may be left in an intermediate state.
-    fn xfer_file(&self, dst: &mut fs::File, xfer: &ContentAddressableSource)
-                 -> Result<()> {
+    fn xfer_file(
+        &self,
+        dst: &mut fs::File,
+        xfer: &ContentAddressableSource,
+    ) -> Result<()> {
         // Try to copy from a known local file first. But don't bother if
         // `xfer` specifies zero blocks, since it's not worth consulting the
         // cache and "copying" another empty file.
-        if !xfer.blocks.blocks.is_empty() &&
-            self.copy_file_local(dst, &xfer.blocks.total, xfer.block_size)
+        if !xfer.blocks.blocks.is_empty()
+            && self.copy_file_local(dst, &xfer.blocks.total, xfer.block_size)
         {
             return Ok(());
         }
@@ -876,8 +1057,11 @@ impl PosixReplica {
         // Write the file a block at a time. Use local blocks when possible,
         // otherwise fetch from the transfer object.
         blocks_to_stream(
-            &xfer.blocks, dst, &self.config.hmac_secret[..],
-            |hid| self.xfer_block(hid, &*xfer.fetch))?;
+            &xfer.blocks,
+            dst,
+            &self.config.hmac_secret[..],
+            |hid| self.xfer_block(hid, &*xfer.fetch),
+        )?;
         Ok(())
     }
 
@@ -887,8 +1071,12 @@ impl PosixReplica {
     /// no file is known to have content matching `hash`; this may occur even
     /// though data was written to `dst`. Returns `true` if a file was found
     /// matching `hash`.
-    fn copy_file_local(&self, dst: &mut (impl Write + Seek), hash: &HashId,
-                       block_size: usize) -> bool {
+    fn copy_file_local(
+        &self,
+        dst: &mut (impl Write + Seek),
+        hash: &HashId,
+        block_size: usize,
+    ) -> bool {
         let srcname = self.dao.lock().unwrap().find_file_with_hash(hash);
         if let Ok(Some(srcname)) = srcname {
             // We think srcname has content equal to `hash`. Copy it to `dst`
@@ -896,12 +1084,16 @@ impl PosixReplica {
             //
             // Errors are silently mapped into `UNKNOWN_HASH` so that we clear
             // the problematic cache entry.
-            let actual_hash =
-                fs::File::open(&srcname).map_err(Error::from).and_then(
-                    |src| stream_to_blocks(
-                        src, block_size,
+            let actual_hash = fs::File::open(&srcname)
+                .map_err(Error::from)
+                .and_then(|src| {
+                    stream_to_blocks(
+                        src,
+                        block_size,
                         &self.config.hmac_secret[..],
-                        |_, data| Ok(dst.write_all(data)?)))
+                        |_, data| Ok(dst.write_all(data)?),
+                    )
+                })
                 .map(|bl| bl.total)
                 .unwrap_or(UNKNOWN_HASH);
 
@@ -925,8 +1117,11 @@ impl PosixReplica {
     /// If a block matching `hash` is available locally, it is loaded into
     /// memory and returned. Otherwise, `fetch` is used to stream the data from
     /// the other replica.
-    fn xfer_block(&self, hash: &HashId, fetch: &dyn BlockFetch)
-                  -> Result<Box<dyn io::Read>> {
+    fn xfer_block(
+        &self,
+        hash: &HashId,
+        fetch: &dyn BlockFetch,
+    ) -> Result<Box<dyn io::Read>> {
         if let Some(data) = self.fetch_block_local(hash) {
             Ok(Box::new(io::Cursor::new(data)))
         } else {
@@ -941,8 +1136,7 @@ impl PosixReplica {
     /// Otherwise, a `Vec` of the data corresponding to `hash` is returned.
     fn fetch_block_local(&self, hash: &HashId) -> Option<Vec<u8>> {
         // See if we know about any blocks with this hash
-        let pbo = self.dao.lock().unwrap()
-            .find_block_with_hash(hash);
+        let pbo = self.dao.lock().unwrap().find_block_with_hash(hash);
         if let Ok(Some((path, bs, off))) = pbo {
             // Looks like we know about one. Try to read the block in. Quietly
             // drop errors; if anything fails, the hash of `data` will not
@@ -969,17 +1163,29 @@ impl PosixReplica {
         }
     }
 
-    fn update_cache(&self, path: &Path, bl: &BlockList,
-                    block_size: usize) -> Result<()> {
+    fn update_cache(
+        &self,
+        path: &Path,
+        bl: &BlockList,
+        block_size: usize,
+    ) -> Result<()> {
         let md = path_metadata(path)?;
         let mtime = md.mtime();
         let ino = md.ino();
         let size = md.size();
 
         self.dao.lock().unwrap().cache_file_hashes(
-            path.as_os_str(), &bl.total, &bl.blocks[..], block_size,
-            &InodeStatus { mtime: mtime, ino: ino, size: size },
-            self.config.cache_generation)?;
+            path.as_os_str(),
+            &bl.total,
+            &bl.blocks[..],
+            block_size,
+            &InodeStatus {
+                mtime: mtime,
+                ino: ino,
+                size: size,
+            },
+            self.config.cache_generation,
+        )?;
         Ok(())
     }
 
@@ -987,11 +1193,14 @@ impl PosixReplica {
     ///
     /// If it matches, returns `Ok`. Otherwise, or if any error occurs, returns
     /// `Err`.
-    fn check_matches(&self, path: &Path, fd: &FileData)
-                     -> Result<()> {
+    fn check_matches(&self, path: &Path, fd: &FileData) -> Result<()> {
         let curr_fd = metadata_to_fd(
-            &path, &path_metadata(&path)?,
-            &*self.dao, false, &*self.config)?;
+            &path,
+            &path_metadata(&path)?,
+            &*self.dao,
+            false,
+            &*self.config,
+        )?;
         if !curr_fd.matches(fd) {
             Err(ErrorKind::ExpectationNotMatched.into())
         } else {
@@ -1003,13 +1212,14 @@ impl PosixReplica {
     fn clean_scratch(&self) -> Result<()> {
         for file in fs::read_dir(&self.config.private_dir)? {
             let file = file?;
-            if file.file_name().to_str().map_or(
-                false, |name| name.starts_with("scratch"))
+            if file
+                .file_name()
+                .to_str()
+                .map_or(false, |name| name.starts_with("scratch"))
             {
                 let path = file.path();
                 let _ = fs::remove_file(&path);
-                let _ = self.dao.lock().unwrap()
-                    .delete_cache(path.as_os_str());
+                let _ = self.dao.lock().unwrap().delete_cache(path.as_os_str());
             }
         }
         Ok(())
@@ -1052,19 +1262,30 @@ impl StreamSource for FileStreamSource {
         // Make a best effort to update the cache
         if let Ok(md) = fs::symlink_metadata(&path) {
             let stat = InodeStatus {
-                mtime: md.mtime(), ino: md.ino(), size: md.size(),
+                mtime: md.mtime(),
+                ino: md.ino(),
+                size: md.size(),
             };
             let _ = self.dao.lock().unwrap().cache_file_hashes(
-                path.as_os_str(), &blocks.total, &blocks.blocks[..],
-                self.config.block_size, &stat, self.config.cache_generation);
+                path.as_os_str(),
+                &blocks.total,
+                &blocks.blocks[..],
+                self.config.block_size,
+                &stat,
+                self.config.cache_generation,
+            );
         }
 
         // Update the hash of the containing directory, removing whatever
         // placeholder or possibly incorrect entry had been there before.
-        self.dir.toggle_file(File(&self.name, &FileData::Regular(
-            self.mode, 0, 0, self.expected_hash)));
-        self.dir.toggle_file(File(&self.name, &FileData::Regular(
-            self.mode, 0, 0, blocks.total)));
+        self.dir.toggle_file(File(
+            &self.name,
+            &FileData::Regular(self.mode, 0, 0, self.expected_hash),
+        ));
+        self.dir.toggle_file(File(
+            &self.name,
+            &FileData::Regular(self.mode, 0, 0, blocks.total),
+        ));
 
         Ok(())
     }
@@ -1073,8 +1294,12 @@ impl StreamSource for FileStreamSource {
 impl WatcherStatus {
     fn watch(&mut self, path: OsString) -> Result<()> {
         let inode = fs::metadata(&path)
-            .chain_err(|| format!("Error getting inode of '{}'",
-                                  Path::new(&path).display()))?
+            .chain_err(|| {
+                format!(
+                    "Error getting inode of '{}'",
+                    Path::new(&path).display()
+                )
+            })?
             .inode();
 
         self.watched.insert(inode, path);
@@ -1084,8 +1309,10 @@ impl WatcherStatus {
 
 impl Watch for PosixReplica {
     fn watch(&mut self, watch: Weak<WatchHandle>) -> Result<()> {
-        #[cfg(test)] const DEBOUNCE_SECS: u64 = 3;
-        #[cfg(not(test))] const DEBOUNCE_SECS: u64 = 30;
+        #[cfg(test)]
+        const DEBOUNCE_SECS: u64 = 3;
+        #[cfg(not(test))]
+        const DEBOUNCE_SECS: u64 = 30;
 
         if self.watcher.is_some() {
             return Err(ErrorKind::AlreadyWatching.into());
@@ -1094,9 +1321,14 @@ impl Watch for PosixReplica {
         let (tx, rx) = mpsc::channel();
         let mut notifier = notify::watcher(tx, Duration::new(DEBOUNCE_SECS, 0))
             .chain_err(|| "Error allocating filesystem notifier")?;
-        notifier.watch(&self.config.root, notify::RecursiveMode::Recursive)
-            .chain_err(|| format!("Error setting recursive watch on '{}'",
-                                  self.config.root.display()))?;
+        notifier
+            .watch(&self.config.root, notify::RecursiveMode::Recursive)
+            .chain_err(|| {
+                format!(
+                    "Error setting recursive watch on '{}'",
+                    self.config.root.display()
+                )
+            })?;
 
         let watcher = Arc::new(Mutex::new(WatcherStatus {
             _watcher: notifier,
@@ -1105,54 +1337,61 @@ impl Watch for PosixReplica {
         }));
         self.watcher = Some(watcher.clone());
 
-        thread::spawn(move || while let Ok(event) = rx.recv() {
-            use notify::DebouncedEvent::*;
+        thread::spawn(move || {
+            while let Ok(event) = rx.recv() {
+                use notify::DebouncedEvent::*;
 
-            let watch = if let Some(w) = watch.upgrade() {
-                w
-            } else {
-                return;
-            };
+                let watch = if let Some(w) = watch.upgrade() {
+                    w
+                } else {
+                    return;
+                };
 
-            fn touch(watcher: &Mutex<WatcherStatus>, mut path: PathBuf)
-                     -> bool {
-                let _ = path.pop();
+                fn touch(
+                    watcher: &Mutex<WatcherStatus>,
+                    mut path: PathBuf,
+                ) -> bool {
+                    let _ = path.pop();
 
-                if let Ok(md) = fs::metadata(&path) {
-                    let mut lock = watcher.lock().unwrap();
-                    if lock.watched.contains_key(&md.inode()) {
-                        lock.dirty.insert(md.inode());
-                        true
+                    if let Ok(md) = fs::metadata(&path) {
+                        let mut lock = watcher.lock().unwrap();
+                        if lock.watched.contains_key(&md.inode()) {
+                            lock.dirty.insert(md.inode());
+                            true
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }
-                } else {
-                    false
                 }
-            }
 
-            match event {
-                NoticeWrite(_) | NoticeRemove(_) => { },
-                Create(path) | Write(path) | Chmod(path) | Remove(path) => {
-                    if touch(&watcher, path) {
-                        watch.set_dirty();
+                match event {
+                    NoticeWrite(_) | NoticeRemove(_) => {}
+                    Create(path) | Write(path) | Chmod(path) | Remove(path) => {
+                        if touch(&watcher, path) {
+                            watch.set_dirty();
+                        }
                     }
-                },
-                Rename(from, to) => {
-                    if touch(&watcher, from) || touch(&watcher, to) {
-                        watch.set_dirty();
+                    Rename(from, to) => {
+                        if touch(&watcher, from) || touch(&watcher, to) {
+                            watch.set_dirty();
+                        }
                     }
-                },
-                Rescan => watch.set_context_lost(),
-                Error(err, path) => {
-                    let path = match path.as_ref() {
-                        Some(path) => path,
-                        None => Path::new("<unknown>"),
-                    };
+                    Rescan => watch.set_context_lost(),
+                    Error(err, path) => {
+                        let path = match path.as_ref() {
+                            Some(path) => path,
+                            None => Path::new("<unknown>"),
+                        };
 
-                    let _ = writeln!(io::stderr(),
-                                     "Error monitoring '{}' for changes: {}",
-                                     path.display(), err);
+                        let _ = writeln!(
+                            io::stderr(),
+                            "Error monitoring '{}' for changes: {}",
+                            path.display(),
+                            err
+                        );
+                    }
                 }
             }
         });
@@ -1163,34 +1402,41 @@ impl Watch for PosixReplica {
 
 #[cfg(test)]
 mod test {
+    use libc;
     use std::collections::HashMap;
     use std::ffi::CString;
     use std::fs;
-    use std::io::{self,Read,Write};
+    use std::io::{self, Read, Write};
     use std::os::unix;
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     use std::path::Path;
     use std::sync::Arc;
-    use std::time::Duration;
     use std::thread;
-    use libc;
+    use std::time::Duration;
 
     use tempfile::TempDir;
 
-    use crate::defs::*;
-    use crate::defs::test_helpers::*;
-    #[allow(unused_imports)] use crate::errors::*;
-    use crate::replica::*;
-    use crate::block_xfer;
-    use crate::posix::set_mtime_path;
     use super::*;
+    use crate::block_xfer;
+    use crate::defs::test_helpers::*;
+    use crate::defs::*;
+    #[allow(unused_imports)]
+    use crate::errors::*;
+    use crate::posix::set_mtime_path;
+    use crate::replica::*;
 
     static SECRET: &'static str = "secret";
     const BLOCK_SZ: usize = 4;
 
     fn new_dirs() -> (TempDir, TempDir) {
-        let root = tempfile::Builder::new().prefix("posix-root").tempdir().unwrap();
-        let private = tempfile::Builder::new().prefix("posix-private").tempdir().unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("posix-root")
+            .tempdir()
+            .unwrap();
+        let private = tempfile::Builder::new()
+            .prefix("posix-private")
+            .tempdir()
+            .unwrap();
         (root, private)
     }
 
@@ -1198,22 +1444,25 @@ mod test {
         PosixReplica::new(
             root.path().to_str().unwrap(),
             private.path().to_str().unwrap(),
-            SECRET.as_bytes(), BLOCK_SZ).unwrap()
+            SECRET.as_bytes(),
+            BLOCK_SZ,
+        )
+        .unwrap()
     }
 
-    fn new_simple() -> (TempDir,TempDir,PosixReplica) {
+    fn new_simple() -> (TempDir, TempDir, PosixReplica) {
         let (root, private) = new_dirs();
         let replica = new_in(&root, &private);
 
         (root, private, replica)
     }
 
-    fn spit<P : AsRef<Path>>(path: P, text: &str) {
+    fn spit<P: AsRef<Path>>(path: P, text: &str) {
         let mut out = fs::File::create(path).unwrap();
         out.write_all(text.as_bytes()).unwrap();
     }
 
-    fn slurp<P : AsRef<Path>>(path: P) -> String {
+    fn slurp<P: AsRef<Path>>(path: P) -> String {
         let mut inf = fs::File::open(path).unwrap();
         let mut ret = String::new();
         inf.read_to_string(&mut ret).unwrap();
@@ -1221,36 +1470,43 @@ mod test {
     }
 
     struct MemoryBlockFetch {
-        blocks: HashMap<HashId,Vec<u8>>,
+        blocks: HashMap<HashId, Vec<u8>>,
     }
 
     impl block_xfer::BlockFetch for MemoryBlockFetch {
         fn fetch(&self, block: &HashId) -> Result<Box<dyn Read>> {
             Ok(Box::new(io::Cursor::new(
-                self.blocks.get(block).expect("Unexpected block fetched")
-                    .clone())))
+                self.blocks
+                    .get(block)
+                    .expect("Unexpected block fetched")
+                    .clone(),
+            )))
         }
     }
 
     fn make_ca_source(text: &str) -> block_xfer::ContentAddressableSource {
         let mut blocks = HashMap::new();
-        let bl = block_xfer::stream_to_blocks(&mut text.as_bytes(), BLOCK_SZ,
-                                              SECRET.as_bytes(), |hash, data| {
-            blocks.insert(*hash, data.to_vec());
-            Ok(())
-        }).unwrap();
+        let bl = block_xfer::stream_to_blocks(
+            &mut text.as_bytes(),
+            BLOCK_SZ,
+            SECRET.as_bytes(),
+            |hash, data| {
+                blocks.insert(*hash, data.to_vec());
+                Ok(())
+            },
+        )
+        .unwrap();
 
         block_xfer::ContentAddressableSource {
             blocks: bl,
             block_size: BLOCK_SZ,
-            fetch: Arc::new(MemoryBlockFetch {
-                blocks: blocks,
-            })
+            fetch: Arc::new(MemoryBlockFetch { blocks: blocks }),
         }
     }
 
-    fn make_ca_empty_source(text: &str)
-                            -> block_xfer::ContentAddressableSource {
+    fn make_ca_empty_source(
+        text: &str,
+    ) -> block_xfer::ContentAddressableSource {
         let mut xfer = make_ca_source(text);
         xfer.fetch = Arc::new(MemoryBlockFetch {
             blocks: HashMap::new(),
@@ -1279,14 +1535,25 @@ mod test {
         if let FileData::Regular(mode, size, _, hash) = list[0].1 {
             assert_eq!(0o644, mode);
             assert_eq!("hello world".as_bytes().len() as FileSize, size);
-            assert_eq!(block_xfer::stream_to_blocks(
-                "hello world".as_bytes(), BLOCK_SZ, SECRET.as_bytes(),
-                |_, _| Ok(())).unwrap().total, hash);
+            assert_eq!(
+                block_xfer::stream_to_blocks(
+                    "hello world".as_bytes(),
+                    BLOCK_SZ,
+                    SECRET.as_bytes(),
+                    |_, _| Ok(())
+                )
+                .unwrap()
+                .total,
+                hash
+            );
 
             let mut data = Vec::new();
-            replica.transfer(&dir, File(&list[0].0, &list[0].1))
-                .unwrap().unwrap()
-                .read_to_end(&mut data).unwrap();
+            replica
+                .transfer(&dir, File(&list[0].0, &list[0].1))
+                .unwrap()
+                .unwrap()
+                .read_to_end(&mut data)
+                .unwrap();
             assert_eq!("hello world".as_bytes(), &data[..]);
         } else {
             panic!("Unexpected file returned: {:?}", list[0].1);
@@ -1296,16 +1563,20 @@ mod test {
     #[test]
     fn list_non_regular_files() {
         let (root, _private, replica) = new_simple();
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("dir")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("dir"))
+            .unwrap();
         unix::fs::symlink("target", root.path().join("sym")).unwrap();
         unsafe {
             let path = CString::new(root.path().join("fifo").to_str().unwrap())
                 .unwrap();
             assert_eq!(0, libc::mkfifo(path.as_ptr(), 0o000));
         }
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join(PRIVATE_DIR_NAME)).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join(PRIVATE_DIR_NAME))
+            .unwrap();
 
         replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
@@ -1334,15 +1605,25 @@ mod test {
         let mut dir = replica.root().unwrap();
 
         let xfer = make_ca_source("Three pounds of VAX!");
-        replica.create(&mut dir, File(
-            &oss("vax"), &FileData::Regular(
-                0o600, 0, 0, xfer.blocks.total)),
-            Some(xfer)).unwrap();
+        replica
+            .create(
+                &mut dir,
+                File(
+                    &oss("vax"),
+                    &FileData::Regular(0o600, 0, 0, xfer.blocks.total),
+                ),
+                Some(xfer),
+            )
+            .unwrap();
 
-        assert_eq!("Three pounds of VAX!",
-                   &slurp(root.path().join("vax")));
-        assert_eq!(0o600, fs::symlink_metadata(root.path().join("vax"))
-                   .unwrap().mode() & 0o7777);
+        assert_eq!("Three pounds of VAX!", &slurp(root.path().join("vax")));
+        assert_eq!(
+            0o600,
+            fs::symlink_metadata(root.path().join("vax"))
+                .unwrap()
+                .mode()
+                & 0o7777
+        );
     }
 
     #[test]
@@ -1353,15 +1634,25 @@ mod test {
         let mut dir = replica.root().unwrap();
 
         let xfer = make_ca_source("Three pounds of VAX!");
-        replica.create(&mut dir, File(
-            &oss("vax"), &FileData::Regular(
-                0o777, 0, 0, xfer.blocks.total)),
-            Some(xfer)).unwrap();
+        replica
+            .create(
+                &mut dir,
+                File(
+                    &oss("vax"),
+                    &FileData::Regular(0o777, 0, 0, xfer.blocks.total),
+                ),
+                Some(xfer),
+            )
+            .unwrap();
 
-        assert_eq!("Three pounds of VAX!",
-                   &slurp(root.path().join("vax")));
-        assert_eq!(0o777, fs::symlink_metadata(root.path().join("vax"))
-                   .unwrap().mode() & 0o7777);
+        assert_eq!("Three pounds of VAX!", &slurp(root.path().join("vax")));
+        assert_eq!(
+            0o777,
+            fs::symlink_metadata(root.path().join("vax"))
+                .unwrap()
+                .mode()
+                & 0o7777
+        );
     }
 
     #[test]
@@ -1370,8 +1661,13 @@ mod test {
 
         replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
-        replica.create(&mut dir, File(&oss("d"), &FileData::Directory(0o700)),
-                       None).unwrap();
+        replica
+            .create(
+                &mut dir,
+                File(&oss("d"), &FileData::Directory(0o700)),
+                None,
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("d")).unwrap();
         assert!(md.is_dir());
@@ -1384,14 +1680,22 @@ mod test {
 
         replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
-        replica.create(&mut dir, File(&oss("sym"),
-                                      &FileData::Symlink(oss("plugh"))),
-                       None).unwrap();
+        replica
+            .create(
+                &mut dir,
+                File(&oss("sym"), &FileData::Symlink(oss("plugh"))),
+                None,
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("sym")).unwrap();
         assert!(md.file_type().is_symlink());
-        assert_eq!(oss("plugh"), fs::read_link(root.path().join("sym"))
-                   .unwrap().into_os_string());
+        assert_eq!(
+            oss("plugh"),
+            fs::read_link(root.path().join("sym"))
+                .unwrap()
+                .into_os_string()
+        );
     }
 
     #[test]
@@ -1404,9 +1708,13 @@ mod test {
 
         spit(root.path().join("foo"), "exists");
 
-        assert!(replica.create(&mut dir, File(&oss("foo"),
-                                              &FileData::Directory(0o700)),
-                               None).is_err());
+        assert!(replica
+            .create(
+                &mut dir,
+                File(&oss("foo"), &FileData::Directory(0o700)),
+                None
+            )
+            .is_err());
     }
 
     #[test]
@@ -1421,11 +1729,15 @@ mod test {
         assert_eq!(1, list.len());
 
         let xfer = make_ca_source("Three pounds of flax");
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1,
-                       &FileData::Regular(
-                           0o611, 0, 0, xfer.blocks.total),
-                       Some(xfer)).unwrap();
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Regular(0o611, 0, 0, xfer.blocks.total),
+                Some(xfer),
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert_eq!(0o611, md.mode() & 0o7777);
@@ -1440,8 +1752,8 @@ mod test {
         let mut dir = replica.root().unwrap();
 
         spit(root.path().join("foo"), "Three pounds of VAX");
-        let old_ino = fs::symlink_metadata(root.path().join("foo"))
-            .unwrap().ino();
+        let old_ino =
+            fs::symlink_metadata(root.path().join("foo")).unwrap().ino();
 
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
@@ -1452,8 +1764,9 @@ mod test {
             panic!("Unexpected file data: {:?}", list[0].1);
         };
 
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1, &new_fd, None).unwrap();
+        replica
+            .update(&mut dir, &oss("foo"), &list[0].1, &new_fd, None)
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert_eq!(0o611, md.mode() & 0o7777);
@@ -1472,8 +1785,14 @@ mod test {
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1, &FileData::Directory(0o711), None)
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Directory(0o711),
+                None,
+            )
             .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
@@ -1492,14 +1811,24 @@ mod test {
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1, &FileData::Symlink(oss("plugh")), None)
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Symlink(oss("plugh")),
+                None,
+            )
             .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert!(md.file_type().is_symlink());
-        assert_eq!(oss("plugh"), fs::read_link(root.path().join("foo"))
-                   .unwrap().into_os_string());
+        assert_eq!(
+            oss("plugh"),
+            fs::read_link(root.path().join("foo"))
+                .unwrap()
+                .into_os_string()
+        );
     }
 
     #[test]
@@ -1509,17 +1838,23 @@ mod test {
         replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("foo")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("foo"))
+            .unwrap();
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
         let xfer = make_ca_source("Three pounds of flax");
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1,
-                       &FileData::Regular(
-                           0o611, 0, 0, xfer.blocks.total),
-                       Some(xfer)).unwrap();
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Regular(0o611, 0, 0, xfer.blocks.total),
+                Some(xfer),
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert_eq!(0o611, md.mode() & 0o7777);
@@ -1533,15 +1868,22 @@ mod test {
         replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("foo")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("foo"))
+            .unwrap();
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1,
-                       &FileData::Directory(0o711),
-                       None).unwrap();
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Directory(0o711),
+                None,
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert!(md.is_dir());
@@ -1555,20 +1897,31 @@ mod test {
         replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("foo")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("foo"))
+            .unwrap();
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1,
-                       &FileData::Symlink(oss("plugh")),
-                       None).unwrap();
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Symlink(oss("plugh")),
+                None,
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert!(md.file_type().is_symlink());
-        assert_eq!(oss("plugh"), fs::read_link(root.path().join("foo"))
-                   .unwrap().into_os_string());
+        assert_eq!(
+            oss("plugh"),
+            fs::read_link(root.path().join("foo"))
+                .unwrap()
+                .into_os_string()
+        );
     }
 
     #[test]
@@ -1583,11 +1936,15 @@ mod test {
         assert_eq!(1, list.len());
 
         let xfer = make_ca_source("Three pounds of flax");
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1,
-                       &FileData::Regular(
-                           0o611, 0, 0, xfer.blocks.total),
-                       Some(xfer)).unwrap();
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Regular(0o611, 0, 0, xfer.blocks.total),
+                Some(xfer),
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert_eq!(0o611, md.mode() & 0o7777);
@@ -1605,10 +1962,15 @@ mod test {
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1,
-                       &FileData::Directory(0o711),
-                       None).unwrap();
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Directory(0o711),
+                None,
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert!(md.is_dir());
@@ -1626,15 +1988,24 @@ mod test {
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.update(&mut dir, &oss("foo"),
-                       &list[0].1,
-                       &FileData::Symlink(oss("xyzzy")),
-                       None).unwrap();
+        replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Symlink(oss("xyzzy")),
+                None,
+            )
+            .unwrap();
 
         let md = fs::symlink_metadata(root.path().join("foo")).unwrap();
         assert!(md.file_type().is_symlink());
-        assert_eq!(oss("xyzzy"), fs::read_link(root.path().join("foo"))
-                   .unwrap().into_os_string());
+        assert_eq!(
+            oss("xyzzy"),
+            fs::read_link(root.path().join("foo"))
+                .unwrap()
+                .into_os_string()
+        );
     }
 
     #[test]
@@ -1653,11 +2024,15 @@ mod test {
         // size and inode would not change.
         spit(root.path().join("foo"), "quux");
 
-        assert!(replica.update(&mut dir, &oss("foo"),
-                               &list[0].1,
-                               &FileData::Directory(0o700),
-                               None)
-                .is_err());
+        assert!(replica
+            .update(
+                &mut dir,
+                &oss("foo"),
+                &list[0].1,
+                &FileData::Directory(0o700),
+                None
+            )
+            .is_err());
 
         assert_eq!("quux", &slurp(root.path().join("foo")));
     }
@@ -1673,11 +2048,11 @@ mod test {
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+        replica
+            .remove(&mut dir, File(&oss("foo"), &list[0].1))
             .unwrap();
 
-        assert!(fs::symlink_metadata(root.path().join("foo"))
-                .is_err());
+        assert!(fs::symlink_metadata(root.path().join("foo")).is_err());
     }
 
     #[test]
@@ -1687,16 +2062,18 @@ mod test {
         replica.prepare(PrepareType::Fast).unwrap();
         let mut dir = replica.root().unwrap();
 
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("foo")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("foo"))
+            .unwrap();
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+        replica
+            .remove(&mut dir, File(&oss("foo"), &list[0].1))
             .unwrap();
 
-        assert!(fs::symlink_metadata(root.path().join("foo"))
-                .is_err());
+        assert!(fs::symlink_metadata(root.path().join("foo")).is_err());
     }
 
     #[test]
@@ -1710,11 +2087,11 @@ mod test {
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+        replica
+            .remove(&mut dir, File(&oss("foo"), &list[0].1))
             .unwrap();
 
-        assert!(fs::symlink_metadata(root.path().join("foo"))
-                .is_err());
+        assert!(fs::symlink_metadata(root.path().join("foo")).is_err());
     }
 
     #[test]
@@ -1732,8 +2109,9 @@ mod test {
         // to how fast this test executes.
         spit(root.path().join("foo"), "new-content");
 
-        assert!(replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
-                .is_err());
+        assert!(replica
+            .remove(&mut dir, File(&oss("foo"), &list[0].1))
+            .is_err());
         assert_eq!("new-content", &slurp(root.path().join("foo")));
     }
 
@@ -1749,8 +2127,8 @@ mod test {
         assert_eq!(1, list.len());
 
         let xfer = make_ca_empty_source("Three pounds of VAX");
-        replica.create(&mut dir, File(&oss("bar"), &list[0].1),
-                       Some(xfer))
+        replica
+            .create(&mut dir, File(&oss("bar"), &list[0].1), Some(xfer))
             .unwrap();
 
         assert_eq!("Three pounds of VAX", &slurp(root.path().join("bar")));
@@ -1768,13 +2146,21 @@ mod test {
         let _ = replica.list(&mut dir).unwrap();
 
         let xfer = make_ca_empty_source("raceways");
-        replica.create(
-            &mut dir, File(
-                &oss("raceways"),
-                &FileData::Regular(
-                    0o600, 8, 0, make_ca_source("raceways")
-                        .blocks.total)),
-            Some(xfer)).unwrap();
+        replica
+            .create(
+                &mut dir,
+                File(
+                    &oss("raceways"),
+                    &FileData::Regular(
+                        0o600,
+                        8,
+                        0,
+                        make_ca_source("raceways").blocks.total,
+                    ),
+                ),
+                Some(xfer),
+            )
+            .unwrap();
 
         assert_eq!("raceways", &slurp(root.path().join("raceways")));
     }
@@ -1790,12 +2176,14 @@ mod test {
         let list = replica.list(&mut dir).unwrap();
         assert_eq!(1, list.len());
 
-        replica.remove(&mut dir, File(&oss("foo"), &list[0].1))
+        replica
+            .remove(&mut dir, File(&oss("foo"), &list[0].1))
             .unwrap();
 
         let xfer = make_ca_empty_source("Three pounds of VAX");
-        replica.create(&mut dir, File(&oss("bar"), &list[0].1),
-                       Some(xfer)).unwrap();
+        replica
+            .create(&mut dir, File(&oss("bar"), &list[0].1), Some(xfer))
+            .unwrap();
 
         assert_eq!("Three pounds of VAX", &slurp(root.path().join("bar")));
     }
@@ -1815,8 +2203,8 @@ mod test {
         spit(root.path().join("foo"), "Three kilos of flax");
 
         let xfer = make_ca_source("Three pounds of VAX");
-        replica.create(&mut dir, File(&oss("bar"), &list[0].1),
-                       Some(xfer))
+        replica
+            .create(&mut dir, File(&oss("bar"), &list[0].1), Some(xfer))
             .unwrap();
 
         assert_eq!("Three pounds of VAX", &slurp(root.path().join("bar")));
@@ -1837,13 +2225,21 @@ mod test {
         spit(root.path().join("ways"), "PATHWAYS");
 
         let xfer = make_ca_source("raceways");
-        replica.create(
-            &mut dir, File(
-                &oss("raceways"),
-                &FileData::Regular(
-                    0o600, 8, 0, make_ca_source("raceways")
-                        .blocks.total)),
-            Some(xfer)).unwrap();
+        replica
+            .create(
+                &mut dir,
+                File(
+                    &oss("raceways"),
+                    &FileData::Regular(
+                        0o600,
+                        8,
+                        0,
+                        make_ca_source("raceways").blocks.total,
+                    ),
+                ),
+                Some(xfer),
+            )
+            .unwrap();
 
         assert_eq!("raceways", &slurp(root.path().join("raceways")));
     }
@@ -1861,22 +2257,34 @@ mod test {
         // its externally observable state unchanged. We then verify that the
         // replica still thinks it has the old content hash.
         let mut dir = replica.root().unwrap();
-        let orig_fd = replica.list(&mut dir)
-            .unwrap().into_iter().next().unwrap().1;
+        let orig_fd = replica
+            .list(&mut dir)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .1;
         let new_fd = match orig_fd {
-            FileData::Regular(mode, size, _, hash) =>
-                FileData::Regular(mode, size, 0, hash),
+            FileData::Regular(mode, size, _, hash) => {
+                FileData::Regular(mode, size, 0, hash)
+            }
             _ => panic!(),
         };
 
-        replica.update(&mut dir, &oss("file"), &orig_fd, &new_fd, None)
+        replica
+            .update(&mut dir, &oss("file"), &orig_fd, &new_fd, None)
             .unwrap();
 
         spit(root.path().join("file"), "xyzzy");
         set_mtime_path(root.path().join("file"), 0).unwrap();
 
-        let final_fd = replica.list(&mut dir)
-            .unwrap().into_iter().next().unwrap().1;
+        let final_fd = replica
+            .list(&mut dir)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .1;
         assert_eq!(new_fd, final_fd);
     }
 
@@ -1887,8 +2295,7 @@ mod test {
         replica.prepare(PrepareType::Fast).unwrap();
         let dir = replica.root().unwrap();
 
-        assert!(replica.chdir(&dir, &oss("foo"))
-                .is_err());
+        assert!(replica.chdir(&dir, &oss("foo")).is_err());
     }
 
     #[test]
@@ -1898,21 +2305,25 @@ mod test {
 
         replica.prepare(PrepareType::Fast).unwrap();
         let dir = replica.root().unwrap();
-        assert!(replica.chdir(&dir, &oss("foo"))
-                .is_err());
+        assert!(replica.chdir(&dir, &oss("foo")).is_err());
     }
 
     #[test]
     fn chdir_into_subdirs() {
         let (root, _private, replica) = new_simple();
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("child")).unwrap();
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("child").join("grandchild"))
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("child"))
+            .unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("child").join("grandchild"))
             .unwrap();
         unix::fs::symlink(
-            "target", root.path().join("child")
-                .join("grandchild").join("foo")).unwrap();
+            "target",
+            root.path().join("child").join("grandchild").join("foo"),
+        )
+        .unwrap();
 
         replica.prepare(PrepareType::Fast).unwrap();
 
@@ -1928,8 +2339,7 @@ mod test {
         let ss_list = replica.list(&mut ssdir).unwrap();
         assert_eq!(1, ss_list.len());
         assert_eq!(&oss("foo"), &ss_list[0].0);
-        assert_eq!(&FileData::Symlink(oss("target")),
-                   &ss_list[0].1);
+        assert_eq!(&FileData::Symlink(oss("target")), &ss_list[0].1);
     }
 
     #[test]
@@ -1944,12 +2354,20 @@ mod test {
         assert_eq!(0, replica.list(&mut dir).unwrap().len());
         assert_eq!(0, replica.list(&mut dfoo).unwrap().len());
 
-        replica.create(&mut dbar, File(&oss("plugh"),
-                                       &FileData::Symlink(oss("xyzzy"))),
-                       None).unwrap();
-        replica.create(&mut dbaz, File(&oss("fee"),
-                                       &FileData::Symlink(oss("fum"))),
-                       None).unwrap();
+        replica
+            .create(
+                &mut dbar,
+                File(&oss("plugh"), &FileData::Symlink(oss("xyzzy"))),
+                None,
+            )
+            .unwrap();
+        replica
+            .create(
+                &mut dbaz,
+                File(&oss("fee"), &FileData::Symlink(oss("fum"))),
+                None,
+            )
+            .unwrap();
 
         let foo_list = replica.list(&mut dfoo).unwrap();
         assert_eq!(2, foo_list.len());
@@ -1967,8 +2385,10 @@ mod test {
     #[test]
     fn rmdir_success() {
         let (root, _private, replica) = new_simple();
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("child")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("child"))
+            .unwrap();
 
         replica.prepare(PrepareType::Fast).unwrap();
 
@@ -1982,8 +2402,10 @@ mod test {
     #[test]
     fn rmdir_nx() {
         let (root, _private, replica) = new_simple();
-        fs::DirBuilder::new().mode(0o700).create(
-            root.path().join("child")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("child"))
+            .unwrap();
 
         replica.prepare(PrepareType::Fast).unwrap();
 
@@ -2064,8 +2486,12 @@ mod test {
             let mut cdir = replica.chdir(&rdir, &oss("child")).unwrap();
             replica.list(&mut cdir).unwrap();
 
-            replica.create(&mut cdir, File(
-                &oss("sym"), &FileData::Symlink(oss("target"))), None)
+            replica
+                .create(
+                    &mut cdir,
+                    File(&oss("sym"), &FileData::Symlink(oss("target"))),
+                    None,
+                )
                 .unwrap();
             replica.set_dir_clean(&cdir).unwrap();
             replica.set_dir_clean(&rdir).unwrap();
@@ -2138,12 +2564,17 @@ mod test {
             // Concurrent modification
             spit(subdir.join("foo"), "plugh");
 
-            let mut ss = replica.transfer(&cdir, File(&fname, &fdata))
-                .unwrap().unwrap();
-            let bl = block_xfer::stream_to_blocks(&mut ss, BLOCK_SZ,
-                                                  SECRET.as_bytes(),
-                                                  |_, _| Ok(()))
+            let mut ss = replica
+                .transfer(&cdir, File(&fname, &fdata))
+                .unwrap()
                 .unwrap();
+            let bl = block_xfer::stream_to_blocks(
+                &mut ss,
+                BLOCK_SZ,
+                SECRET.as_bytes(),
+                |_, _| Ok(()),
+            )
+            .unwrap();
             ss.finish(&bl).unwrap();
 
             replica.set_dir_clean(&cdir).unwrap();
@@ -2168,9 +2599,14 @@ mod test {
         let root = rootdir.path();
         let fs_subdir = root.join("subdir");
 
-        fs::DirBuilder::new().mode(0o700).create(&fs_subdir).unwrap();
-        fs::DirBuilder::new().mode(0o700).create(
-            fs_subdir.join("plugh")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&fs_subdir)
+            .unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(fs_subdir.join("plugh"))
+            .unwrap();
 
         let mut dir = replica.root().unwrap();
         replica.list(&mut dir).unwrap();
@@ -2179,7 +2615,10 @@ mod test {
         replica.set_dir_clean(&dir).unwrap();
         replica.set_dir_clean(&subdir).unwrap();
 
-        fs::DirBuilder::new().mode(0o700).create(root.join("xyzzy")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.join("xyzzy"))
+            .unwrap();
         replica.prepare(PrepareType::Fast).unwrap();
 
         assert!(replica.is_dir_dirty(&dir));

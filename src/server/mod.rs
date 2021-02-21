@@ -16,19 +16,19 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-pub mod storage;
-mod local_storage;
-pub mod rpc;
 mod crypt;
 mod dir;
 mod dir_config;
-mod replica;
-mod transfer;
 pub mod keymgmt;
+mod local_storage;
+mod replica;
+pub mod rpc;
+pub mod storage;
+mod transfer;
 
-pub use self::replica::ServerReplica;
-pub use self::storage::Storage;
-pub use self::local_storage::LocalStorage;
-pub use self::rpc::RemoteStorage;
 pub use self::crypt::KeyChain;
 pub use self::dir::{DIRID_KEYS, DIRID_PROOT};
+pub use self::local_storage::LocalStorage;
+pub use self::replica::ServerReplica;
+pub use self::rpc::RemoteStorage;
+pub use self::storage::Storage;

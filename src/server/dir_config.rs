@@ -31,13 +31,13 @@ lazy_static! {
 ([^\]]*)
 
 # Suffix
-\]"#).unwrap();
-
-    static ref VALID_CONFIG_PATTERN: Regex = Regex::new(
-        r#"^([a-z]+=[^,\]]+,*)*$"#).unwrap();
-
-    static ref PAIR_PATTERN: Regex = Regex::new(
-        r#"([a-z]+)=([^,\]]+)"#).unwrap();
+\]"#
+    )
+    .unwrap();
+    static ref VALID_CONFIG_PATTERN: Regex =
+        Regex::new(r#"^([a-z]+=[^,\]]+,*)*$"#).unwrap();
+    static ref PAIR_PATTERN: Regex =
+        Regex::new(r#"([a-z]+)=([^,\]]+)"#).unwrap();
 }
 
 /// Contextual configuration for a single server-side directory.
@@ -109,8 +109,9 @@ impl DirConfig {
         for captures in NAME_PATTERN.captures_iter(name) {
             let configs = &captures[1];
             if !VALID_CONFIG_PATTERN.is_match(configs) {
-                return Err(ErrorKind::BadServerDirConfig(configs.to_owned())
-                           .into());
+                return Err(
+                    ErrorKind::BadServerDirConfig(configs.to_owned()).into()
+                );
             }
 
             for captures in PAIR_PATTERN.captures_iter(configs) {
@@ -122,9 +123,14 @@ impl DirConfig {
                     "rw" | "wr" => {
                         new.read_group = value.to_owned();
                         new.write_group = value.to_owned();
-                    },
-                    _ => return Err(ErrorKind::BadServerDirConfigKey(
-                        configs.to_owned(), key.to_owned()).into()),
+                    }
+                    _ => {
+                        return Err(ErrorKind::BadServerDirConfigKey(
+                            configs.to_owned(),
+                            key.to_owned(),
+                        )
+                        .into())
+                    }
                 }
             }
         }
@@ -180,7 +186,9 @@ mod test {
     #[test]
     fn sub_config_r_and_w_one_block() {
         let root = DirConfig::default();
-        let sub = root.sub("plugh.ensync[r=read-group,w=write-group]").unwrap();
+        let sub = root
+            .sub("plugh.ensync[r=read-group,w=write-group]")
+            .unwrap();
         assert_eq!("write-group", &sub.write_group);
         assert_eq!("read-group", &sub.read_group);
     }
@@ -188,7 +196,8 @@ mod test {
     #[test]
     fn sub_config_r_and_w_two_blocks() {
         let root = DirConfig::default();
-        let sub = root.sub("plugh.ensync[r=read-group].ensync[w=write-group]")
+        let sub = root
+            .sub("plugh.ensync[r=read-group].ensync[w=write-group]")
             .unwrap();
         assert_eq!("write-group", &sub.write_group);
         assert_eq!("read-group", &sub.read_group);

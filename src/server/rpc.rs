@@ -17,9 +17,9 @@
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
 use std::io::{self, BufRead, Read, Write};
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use fourleaf;
@@ -159,20 +159,36 @@ pub enum Request {
     /// No response.
     ///
     /// Since: 0.0
-    Mkdir { tx: Tx, id: HashId, ver: HashId, sver: HashId, data: Vec<u8>, },
+    Mkdir {
+        tx: Tx,
+        id: HashId,
+        ver: HashId,
+        sver: HashId,
+        data: Vec<u8>,
+    },
     /// `Storage::updir`
     ///
     /// No response.
     ///
     /// Since: 0.0
-    Updir { tx: Tx, id: HashId, sver: HashId, old_len: u32,
-            append: Vec<u8>, },
+    Updir {
+        tx: Tx,
+        id: HashId,
+        sver: HashId,
+        old_len: u32,
+        append: Vec<u8>,
+    },
     /// `Storage::rmdir`
     ///
     /// No response.
     ///
     /// Since: 0.0
-    Rmdir { tx: Tx, id: HashId, sver: HashId, old_len: u32, },
+    Rmdir {
+        tx: Tx,
+        id: HashId,
+        sver: HashId,
+        old_len: u32,
+    },
     /// `Storage::linkobj`
     ///
     /// Response: One `Done` | `NotFound` | `Error`
@@ -184,7 +200,12 @@ pub enum Request {
     /// No response.
     ///
     /// Since: 0.0
-    Putobj { tx: Tx, id: HashId, linkid: HashId, data: Vec<u8>, },
+    Putobj {
+        tx: Tx,
+        id: HashId,
+        linkid: HashId,
+        data: Vec<u8>,
+    },
     /// `Storage::unlinkobj`
     ///
     /// No response.
@@ -408,11 +429,17 @@ fourleaf_retrofit!(enum Response : {} {} {
     },
 });
 
-fn read_frame<R : BufRead,
-              T : fourleaf::Deserialize<R, fourleaf::de::style::Copying> + ::std::fmt::Debug>
-    (mut sin: R) -> Result<Option<T>>
-{
-    if sin.fill_buf().chain_err(|| ErrorKind::ServerProtocolError)?.is_empty() {
+fn read_frame<
+    R: BufRead,
+    T: fourleaf::Deserialize<R, fourleaf::de::style::Copying> + ::std::fmt::Debug,
+>(
+    mut sin: R,
+) -> Result<Option<T>> {
+    if sin
+        .fill_buf()
+        .chain_err(|| ErrorKind::ServerProtocolError)?
+        .is_empty()
+    {
         return Ok(None);
     }
 
@@ -423,8 +450,10 @@ fn read_frame<R : BufRead,
     Ok(Some(value))
 }
 
-fn send_frame<W : Write, T : fourleaf::Serialize>(mut out: W, obj: T)
-                                                  -> Result<()> {
+fn send_frame<W: Write, T: fourleaf::Serialize>(
+    mut out: W,
+    obj: T,
+) -> Result<()> {
     fourleaf::to_writer(&mut out, obj)
         .chain_err(|| ErrorKind::ServerProtocolError)?;
     out.flush().chain_err(|| ErrorKind::ServerProtocolError)?;
@@ -441,9 +470,11 @@ enum RequestResponse {
 ///
 /// Requests will be read from `unbuf_sin`, executed, and responses written to
 /// `unbuf_sout` until either input returns EOF or a fatal error occurs.
-pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
-    mut storage: S, unbuf_sin: R, unbuf_sout: W) -> Result<()>
-{
+pub fn run_server_rpc<S: Storage, R: Read, W: Write + Send + 'static>(
+    mut storage: S,
+    unbuf_sin: R,
+    unbuf_sout: W,
+) -> Result<()> {
     let mut sin = io::BufReader::new(unbuf_sin);
     let sout = Arc::new(Mutex::new(io::BufWriter::new(unbuf_sout)));
     let mut fatal_error = None;
@@ -452,22 +483,26 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
             Ok(Some(r)) => r,
             Ok(None) => break,
             Err(e) => {
-                let _ = send_frame(&mut*sout.lock().unwrap(),
-                                   Response::FatalError(format!("{}", e)));
+                let _ = send_frame(
+                    &mut *sout.lock().unwrap(),
+                    Response::FatalError(format!("{}", e)),
+                );
                 break;
-            },
+            }
         };
 
         match process_frame(&mut storage, request, &sout) {
-            RequestResponse::None => { },
+            RequestResponse::None => {}
             // We can't immediately send a `FatalError` when an async command
             // fails, because the client might have more async commands to
             // send, which would lead to deadlock if it blocked on the socket
             // while we were waiting for it to notice the `FatalError` message,
             // so instead save the error away.
-            RequestResponse::AsyncError(e) => if fatal_error.is_none() {
-                fatal_error = Some(e)
-            },
+            RequestResponse::AsyncError(e) => {
+                if fatal_error.is_none() {
+                    fatal_error = Some(e)
+                }
+            }
             RequestResponse::SyncResponse(response) => {
                 // Now that we know the client is paying attention and is
                 // expecting some kind of response, we can return any deferred
@@ -478,7 +513,8 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
                 // inspecting whether it produced a result and then discarding
                 // that result, but this keeps the code simpler since these
                 // conditions do not happen with high frequency.
-                let response = fatal_error.take()
+                let response = fatal_error
+                    .take()
                     .map(|e| Response::FatalError(e.to_string()))
                     .unwrap_or(response);
                 let fatal = if let Response::FatalError(_) = response {
@@ -486,64 +522,77 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
                 } else {
                     false
                 };
-                write_response(&mut*sout.lock().unwrap(), response)?;
+                write_response(&mut *sout.lock().unwrap(), response)?;
 
                 if fatal {
                     return Ok(());
                 }
-            },
+            }
         }
     }
 
-    fn process_frame<S : Storage, W : Write + Send + 'static>(
-        storage: &mut S, request: Request, sout: &Arc<Mutex<W>>)
-        -> RequestResponse
-    {
+    fn process_frame<S: Storage, W: Write + Send + 'static>(
+        storage: &mut S,
+        request: Request,
+        sout: &Arc<Mutex<W>>,
+    ) -> RequestResponse {
         macro_rules! err {
-            ($e:expr) => { RequestResponse::SyncResponse(
-                Response::Error(format!("{}", $e))) }
+            ($e:expr) => {
+                RequestResponse::SyncResponse(Response::Error(format!(
+                    "{}",
+                    $e
+                )))
+            };
         };
 
         macro_rules! none_or_fatal {
-            ($e:expr) => { match $e {
-                Ok(_) => RequestResponse::None,
-                Err(e) => RequestResponse::AsyncError(e),
-            } }
+            ($e:expr) => {
+                match $e {
+                    Ok(_) => RequestResponse::None,
+                    Err(e) => RequestResponse::AsyncError(e),
+                }
+            };
         }
 
         match request {
-            Request::ClientInfo { .. } =>
+            Request::ClientInfo { .. } => {
                 RequestResponse::SyncResponse(Response::ServerInfo {
                     implementation: ImplementationInfo::this_implementation(),
                     motd: None,
-                }),
+                })
+            }
 
             Request::GetDir(id) => match storage.getdir(&id) {
-                Ok(Some((v, data))) =>
-                    RequestResponse::SyncResponse(Response::DirData(v, data)),
+                Ok(Some((v, data))) => {
+                    RequestResponse::SyncResponse(Response::DirData(v, data))
+                }
                 Ok(None) => RequestResponse::SyncResponse(Response::NotFound),
                 Err(err) => err!(err),
             },
 
             Request::GetObj(id) => match storage.getobj(&id) {
-                Ok(Some(data)) =>
-                    RequestResponse::SyncResponse(Response::ObjData(data)),
+                Ok(Some(data)) => {
+                    RequestResponse::SyncResponse(Response::ObjData(data))
+                }
                 Ok(None) => RequestResponse::SyncResponse(Response::NotFound),
                 Err(err) => err!(err),
             },
 
-            Request::CheckDirDirty(ref id, ref ver, len) =>
-                none_or_fatal!(storage.check_dir_dirty(id, ver, len)),
+            Request::CheckDirDirty(ref id, ref ver, len) => {
+                none_or_fatal!(storage.check_dir_dirty(id, ver, len))
+            }
 
             Request::ForDirtyDir => {
                 match storage.for_dirty_dir(&mut |id| {
-                    write_response(&mut*sout.lock().unwrap(),
-                                   Response::DirtyDir(*id))
+                    write_response(
+                        &mut *sout.lock().unwrap(),
+                        Response::DirtyDir(*id),
+                    )
                 }) {
                     Ok(()) => RequestResponse::SyncResponse(Response::Done),
                     Err(err) => err!(err),
                 }
-            },
+            }
 
             Request::StartTx(tx) => none_or_fatal!(storage.start_tx(tx)),
 
@@ -558,35 +607,60 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
                 Err(err) => err!(err),
             },
 
-            Request::Mkdir { tx, id, ver, sver, data } =>
-                none_or_fatal!(storage.mkdir(tx, &id, &ver, &sver, &data[..])),
+            Request::Mkdir {
+                tx,
+                id,
+                ver,
+                sver,
+                data,
+            } => none_or_fatal!(storage.mkdir(tx, &id, &ver, &sver, &data[..])),
 
-            Request::Updir { tx, id, sver, old_len, append } =>
-                none_or_fatal!(storage.updir(tx, &id, &sver, old_len,
-                                             &append[..])),
+            Request::Updir {
+                tx,
+                id,
+                sver,
+                old_len,
+                append,
+            } => none_or_fatal!(storage.updir(
+                tx,
+                &id,
+                &sver,
+                old_len,
+                &append[..]
+            )),
 
-            Request::Rmdir { tx, id, sver, old_len } =>
-                none_or_fatal!(storage.rmdir(tx, &id, &sver, old_len)),
+            Request::Rmdir {
+                tx,
+                id,
+                sver,
+                old_len,
+            } => none_or_fatal!(storage.rmdir(tx, &id, &sver, old_len)),
 
             Request::Linkobj { tx, id, linkid } => {
                 match storage.linkobj(tx, &id, &linkid) {
                     Ok(true) => RequestResponse::SyncResponse(Response::Done),
-                    Ok(false) =>
-                        RequestResponse::SyncResponse(Response::NotFound),
+                    Ok(false) => {
+                        RequestResponse::SyncResponse(Response::NotFound)
+                    }
                     Err(err) => err!(err),
                 }
-            },
+            }
 
-            Request::Putobj { tx, id, linkid, data } =>
-                none_or_fatal!(storage.putobj(tx, &id, &linkid, &data[..])),
+            Request::Putobj {
+                tx,
+                id,
+                linkid,
+                data,
+            } => none_or_fatal!(storage.putobj(tx, &id, &linkid, &data[..])),
 
-            Request::Unlinkobj { tx, id, linkid } =>
-                none_or_fatal!(storage.unlinkobj(tx, &id, &linkid)),
+            Request::Unlinkobj { tx, id, linkid } => {
+                none_or_fatal!(storage.unlinkobj(tx, &id, &linkid))
+            }
 
             Request::CleanUp => {
                 storage.clean_up();
                 RequestResponse::SyncResponse(Response::Done)
-            },
+            }
 
             Request::Watch => {
                 let sout = Arc::downgrade(sout);
@@ -599,23 +673,24 @@ pub fn run_server_rpc<S : Storage, R : Read, W : Write + Send + 'static>(
                     let response = match id {
                         Some(id) => Response::WatchNotify(*id),
                         None => Response::FatalError(
-                            "Fatal error waiting for notification".to_owned()),
+                            "Fatal error waiting for notification".to_owned(),
+                        ),
                     };
-                    let _ = write_response(&mut*sout.lock().unwrap(),
-                                           response);
+                    let _ =
+                        write_response(&mut *sout.lock().unwrap(), response);
                 })) {
                     Ok(_) => RequestResponse::SyncResponse(Response::Done),
                     Err(err) => err!(err),
                 }
-            },
+            }
 
-            Request::Watchdir { id, ver, len } =>
-                none_or_fatal!(storage.watchdir(&id, &ver, len)),
+            Request::Watchdir { id, ver, len } => {
+                none_or_fatal!(storage.watchdir(&id, &ver, len))
+            }
         }
     }
 
-    fn write_response<W : Write>(out: &mut W, response: Response)
-                                 -> Result<()> {
+    fn write_response<W: Write>(out: &mut W, response: Response) -> Result<()> {
         send_frame(out, response)
     }
 
@@ -640,7 +715,7 @@ pub struct RemoteStorage {
     fatal: AtomicBool,
     /// The protocol version negotiated by the server.
     protocol: (u32, u32),
-    watch_fun: Arc<Mutex<Option<Box<dyn FnMut (Option<&HashId>) + Send>>>>,
+    watch_fun: Arc<Mutex<Option<Box<dyn FnMut(Option<&HashId>) + Send>>>>,
 }
 
 macro_rules! handle_response {
@@ -662,37 +737,43 @@ macro_rules! handle_response {
 }
 
 macro_rules! tryf {
-    ($this:expr, $e:expr) => { match $e {
-        Ok(v) => v,
-        Err(e) => {
-            let error: Error = e.into();
-            if error.is_fatal() {
-                $this.fatal.store(true, Ordering::Relaxed);
+    ($this:expr, $e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(e) => {
+                let error: Error = e.into();
+                if error.is_fatal() {
+                    $this.fatal.store(true, Ordering::Relaxed);
+                }
+                return Err(error);
             }
-            return Err(error);
-        },
-    } }
+        }
+    };
 }
 
 fn recv<T>(r: &mpsc::Receiver<Result<T>>) -> Result<T> {
-    r.recv().chain_err(|| "Error obtaining response from worker")
+    r.recv()
+        .chain_err(|| "Error obtaining response from worker")
         .and_then(|r| r)
 }
 
 impl RemoteStorage {
-    pub fn new<R : Read + Send + 'static, W : Write + Send + 'static>
-        (sin: R, sout: W) -> Self
-    {
+    pub fn new<R: Read + Send + 'static, W: Write + Send + 'static>(
+        sin: R,
+        sout: W,
+    ) -> Self {
         let mut sin = io::BufReader::new(sin);
         let (tx, rx) = mpsc::sync_channel(0);
 
-        let watch_fun: Arc<Mutex<Option<Box<dyn FnMut (Option<&HashId>) + Send>>>> =
-            Arc::new(Mutex::new(None));
+        let watch_fun: Arc<
+            Mutex<Option<Box<dyn FnMut(Option<&HashId>) + Send>>>,
+        > = Arc::new(Mutex::new(None));
         let watch_fun2 = watch_fun.clone();
 
         thread::spawn(move || loop {
-            let resp = read_frame(&mut sin).and_then(
-                |r| r.ok_or(ErrorKind::ServerConnectionClosed.into()));
+            let resp = read_frame(&mut sin).and_then(|r| {
+                r.ok_or(ErrorKind::ServerConnectionClosed.into())
+            });
 
             if let Err(ref err) = resp {
                 if err.is_fatal() {
@@ -709,8 +790,12 @@ impl RemoteStorage {
                     if let Some(ref mut wf) = *wf {
                         wf(Some(id));
                     }
-                },
-                _ => if tx.send(resp).is_err() { break; },
+                }
+                _ => {
+                    if tx.send(resp).is_err() {
+                        break;
+                    }
+                }
             }
         });
 
@@ -726,19 +811,29 @@ impl RemoteStorage {
 
     fn send_async_request(&self, req: Request) -> Result<()> {
         let mut sout = self.sout.lock().unwrap();
-        tryf!(self, send_frame(&mut sout.0, req).chain_err(
-            || "Error writing request to server"));
+        tryf!(
+            self,
+            send_frame(&mut sout.0, req)
+                .chain_err(|| "Error writing request to server")
+        );
         Ok(())
     }
 
-    fn send_sync_request<T, F : FnOnce (&mpsc::Receiver<Result<Response>>)
-                                        -> Result<T>>(
-        &self, req: Request, read: F) -> Result<T>
-    {
+    fn send_sync_request<
+        T,
+        F: FnOnce(&mpsc::Receiver<Result<Response>>) -> Result<T>,
+    >(
+        &self,
+        req: Request,
+        read: F,
+    ) -> Result<T> {
         let ticket = {
             let mut sout = self.sout.lock().unwrap();
-            tryf!(self, send_frame(&mut sout.0, req).chain_err(
-                || "Error writing request to server"));
+            tryf!(
+                self,
+                send_frame(&mut sout.0, req)
+                    .chain_err(|| "Error writing request to server")
+            );
             let t = sout.1;
             sout.1 += 1;
             t
@@ -761,9 +856,9 @@ impl RemoteStorage {
         self.send_sync_request(req, |r| recv(r))
     }
 
-    pub fn exchange_client_info
-        (&mut self) -> Result<(ImplementationInfo, Option<String>)>
-    {
+    pub fn exchange_client_info(
+        &mut self,
+    ) -> Result<(ImplementationInfo, Option<String>)> {
         handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::ClientInfo {
                 implementation: ImplementationInfo::this_implementation()
@@ -816,13 +911,19 @@ impl Storage for RemoteStorage {
         })
     }
 
-    fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
-                       -> Result<()> {
+    fn check_dir_dirty(
+        &self,
+        id: &HashId,
+        ver: &HashId,
+        len: u32,
+    ) -> Result<()> {
         self.send_async_request(Request::CheckDirDirty(*id, *ver, len))
     }
 
-    fn for_dirty_dir(&self, f: &mut dyn FnMut (&HashId) -> Result<()>)
-                     -> Result<()> {
+    fn for_dirty_dir(
+        &self,
+        f: &mut dyn FnMut(&HashId) -> Result<()>,
+    ) -> Result<()> {
         self.send_sync_request(Request::ForDirtyDir, |sin| {
             let mut error = None;
             loop {
@@ -866,30 +967,56 @@ impl Storage for RemoteStorage {
         })
     }
 
-    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, sv: &HashId, data: &[u8])
-             -> Result<()> {
+    fn mkdir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        v: &HashId,
+        sv: &HashId,
+        data: &[u8],
+    ) -> Result<()> {
         self.send_async_request(Request::Mkdir {
-            tx: tx, id: *id, ver: *v, sver: *sv, data: data.to_owned()
+            tx: tx,
+            id: *id,
+            ver: *v,
+            sver: *sv,
+            data: data.to_owned(),
         })
     }
 
-    fn updir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32,
-             data: &[u8]) -> Result<()> {
+    fn updir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        sv: &HashId,
+        old_len: u32,
+        data: &[u8],
+    ) -> Result<()> {
         self.send_async_request(Request::Updir {
-            tx: tx, id: *id, sver: *sv, old_len: old_len,
-            append: data.to_owned()
+            tx: tx,
+            id: *id,
+            sver: *sv,
+            old_len: old_len,
+            append: data.to_owned(),
         })
     }
 
-    fn rmdir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32)
-             -> Result<()> {
+    fn rmdir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        sv: &HashId,
+        old_len: u32,
+    ) -> Result<()> {
         self.send_async_request(Request::Rmdir {
-            tx: tx, id: *id, sver: *sv, old_len: old_len
+            tx: tx,
+            id: *id,
+            sver: *sv,
+            old_len: old_len,
         })
     }
 
-    fn linkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
-               -> Result<bool> {
+    fn linkobj(&self, tx: Tx, id: &HashId, linkid: &HashId) -> Result<bool> {
         handle_response!(self, tryf!(self, self.send_single_sync_request(
             Request::Linkobj { tx: tx, id: *id, linkid: *linkid }
         )) => {
@@ -898,27 +1025,41 @@ impl Storage for RemoteStorage {
         })
     }
 
-    fn putobj(&self, tx: Tx, id: &HashId, linkid: &HashId, data: &[u8])
-              -> Result<()> {
+    fn putobj(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        linkid: &HashId,
+        data: &[u8],
+    ) -> Result<()> {
         self.send_async_request(Request::Putobj {
-            tx: tx, id: *id, linkid: *linkid,
-            data: data.to_owned()
+            tx: tx,
+            id: *id,
+            linkid: *linkid,
+            data: data.to_owned(),
         })
     }
 
-    fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
-                 -> Result<()> {
+    fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId) -> Result<()> {
         self.send_async_request(Request::Unlinkobj {
-            tx: tx, id: *id, linkid: *linkid,
+            tx: tx,
+            id: *id,
+            linkid: *linkid,
         })
     }
 
-    fn watch(&mut self, f: Box<dyn FnMut (Option<&HashId>) + Send>) -> Result<()> {
+    fn watch(
+        &mut self,
+        f: Box<dyn FnMut(Option<&HashId>) + Send>,
+    ) -> Result<()> {
         if self.protocol < (0, 1) {
-            return Err(format!("\
+            return Err(format!(
+                "\
 `--watch` requires the remote process to support protocol version 0.1 or later
 (Ensync 0.2.0 or later), but the remote process negotiated version {}.{}",
-                               self.protocol.0, self.protocol.1).into());
+                self.protocol.0, self.protocol.1
+            )
+            .into());
         }
 
         handle_response!(self, tryf!(self, self.send_single_sync_request(
@@ -934,7 +1075,9 @@ impl Storage for RemoteStorage {
     fn watchdir(&self, dir: &HashId, ver: &HashId, len: u32) -> Result<()> {
         assert!(self.protocol >= (0, 1));
         self.send_async_request(Request::Watchdir {
-            id: *dir, ver: *ver, len: len
+            id: *dir,
+            ver: *ver,
+            len: len,
         })
     }
 
@@ -949,8 +1092,8 @@ mod test {
 
     use os_pipe::{self, PipeReader, PipeWriter};
 
-    use crate::server::local_storage::LocalStorage;
     use super::*;
+    use crate::server::local_storage::LocalStorage;
 
     fn create_storage(dir: &Path) -> RemoteStorage {
         fn pipe() -> (PipeReader, PipeWriter) {
@@ -961,8 +1104,9 @@ mod test {
         let (read_from_server, write_to_client) = pipe();
         let local_storage = LocalStorage::open(dir).unwrap();
 
-        thread::spawn(move || run_server_rpc(
-            local_storage, read_from_client, write_to_client));
+        thread::spawn(move || {
+            run_server_rpc(local_storage, read_from_client, write_to_client)
+        });
 
         let mut rs = RemoteStorage::new(read_from_server, write_to_server);
         let (imp, motd) = rs.exchange_client_info().unwrap();

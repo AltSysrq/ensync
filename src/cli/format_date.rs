@@ -21,12 +21,14 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use crate::defs::FileTime;
 
 #[allow(dead_code)]
-pub const ZERO:  &'static str = "1970-01-01 00:00Z";
+pub const ZERO: &'static str = "1970-01-01 00:00Z";
 pub const EMPTY: &'static str = "                 ";
 
 pub fn format_timestamp(mtime: FileTime) -> String {
     format_date(&DateTime::<Utc>::from_utc(
-        NaiveDateTime::from_timestamp(mtime, 0), Utc))
+        NaiveDateTime::from_timestamp(mtime, 0),
+        Utc,
+    ))
 }
 
 pub fn format_date(date: &DateTime<Utc>) -> String {

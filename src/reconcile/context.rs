@@ -16,39 +16,39 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::cmp::{Ord,Ordering};
-use std::collections::{BinaryHeap,BTreeMap,HashMap};
+use std::cmp::{Ord, Ordering};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::ffi::{OsStr, OsString};
 use std::num::Wrapping;
-use std::ffi::{OsStr,OsString};
 use std::sync::Mutex;
 
 use crate::defs::*;
-use crate::replica::Replica;
-use crate::work_stack::WorkStack;
 use crate::log::Logger;
-use crate::rules::engine::{FileEngine, DirEngine};
+use crate::replica::Replica;
+use crate::rules::engine::{DirEngine, FileEngine};
+use crate::work_stack::WorkStack;
 
 // This whole thing is basically stable-man's-FnBox. We wrap an FnOnce in an
 // option and a box so we can make something approximating an FnMut (and which
 // thus can be invoked as a DST), while relegating the lifetime check to
 // runtime.
-struct TaskContainer<F : Send>(Mutex<Option<F>>);
-pub trait TaskT<T> : Send {
+struct TaskContainer<F: Send>(Mutex<Option<F>>);
+pub trait TaskT<T>: Send {
     fn invoke(&self, t: &T);
 }
-impl<T, F : FnOnce(&T) + Send> TaskT<T> for TaskContainer<F> {
+impl<T, F: FnOnce(&T) + Send> TaskT<T> for TaskContainer<F> {
     fn invoke(&self, t: &T) {
         self.0.lock().unwrap().take().unwrap()(t)
     }
 }
 pub type Task<T> = Box<dyn TaskT<T>>;
-pub fn task<T, F : FnOnce(&T) + Send + 'static>(f: F) -> Task<T> {
+pub fn task<T, F: FnOnce(&T) + Send + 'static>(f: F) -> Task<T> {
     Box::new(TaskContainer(Mutex::new(Some(f))))
 }
 
 /// Maps integer ids to unqueued tasks.
 struct UnqueuedTasksData<T> {
-    tasks: HashMap<usize,T>,
+    tasks: HashMap<usize, T>,
     next_id: Wrapping<usize>,
 }
 pub struct UnqueuedTasks<T>(Mutex<UnqueuedTasksData<T>>);
@@ -97,8 +97,9 @@ pub trait ContextExt {
     type Dir;
 }
 
-impl<CLI: Replica, ANC: Replica, SRV: Replica>
-ContextExt for Context<CLI, ANC, SRV> {
+impl<CLI: Replica, ANC: Replica, SRV: Replica> ContextExt
+    for Context<CLI, ANC, SRV>
+{
     type Dir = DirContext<CLI::Directory, ANC::Directory, SRV::Directory>;
 }
 
@@ -107,11 +108,11 @@ pub struct SingleDirContext<T> {
     /// The `Replica::Directory` object.
     pub dir: T,
     /// The files in this directory when it was listed.
-    pub files: BTreeMap<OsString,FileData>,
+    pub files: BTreeMap<OsString, FileData>,
 }
 
 /// Directory-specific context information.
-pub struct DirContext<CD,AD,SD> {
+pub struct DirContext<CD, AD, SD> {
     pub cli: SingleDirContext<CD>,
     pub anc: SingleDirContext<AD>,
     pub srv: SingleDirContext<SD>,
@@ -122,23 +123,23 @@ pub struct DirContext<CD,AD,SD> {
     pub rules: DirEngine,
 }
 
-impl<CD,AD,SD> DirContext<CD,AD,SD> {
+impl<CD, AD, SD> DirContext<CD, AD, SD> {
     pub fn name_in_use(&self, name: &OsStr) -> bool {
-        self.cli.files.contains_key(name) ||
-            self.anc.files.contains_key(name) ||
-            self.srv.files.contains_key(name)
+        self.cli.files.contains_key(name)
+            || self.anc.files.contains_key(name)
+            || self.srv.files.contains_key(name)
     }
 }
 
-#[derive(PartialEq,Eq)]
-pub struct Reversed<T : Ord + PartialEq + Eq>(pub T);
-impl<T : Ord> PartialOrd<Reversed<T>> for Reversed<T> {
+#[derive(PartialEq, Eq)]
+pub struct Reversed<T: Ord + PartialEq + Eq>(pub T);
+impl<T: Ord> PartialOrd<Reversed<T>> for Reversed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T : Ord> Ord for Reversed<T> {
+impl<T: Ord> Ord for Reversed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         other.0.cmp(&self.0)
     }

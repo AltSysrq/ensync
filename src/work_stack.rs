@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::sync::{Condvar,Mutex};
+use std::sync::{Condvar, Mutex};
 
 struct WorkStackData<T> {
     tasks: Vec<T>,
@@ -70,7 +70,7 @@ impl<T> WorkStack<T> {
     /// `f`. The function returns when the stack is empty and there are no
     /// in-flight tasks, or when the interrupt handler has recorded an
     /// interrupt.
-    pub fn run<F : FnMut (T)>(&self, mut f: F) {
+    pub fn run<F: FnMut(T)>(&self, mut f: F) {
         let mut lock = self.data.lock().unwrap();
 
         loop {

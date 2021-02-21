@@ -20,12 +20,12 @@
 //! implementations, interpretation of configuration, etc.
 
 pub mod config;
-pub mod open_server;
 pub mod format_date;
+pub mod open_server;
 pub use self::open_server::*;
 
-pub mod cmd_server;
 pub mod cmd_keymgmt;
-pub mod cmd_sync;
 pub mod cmd_manual;
+pub mod cmd_server;
 pub mod cmd_setup;
+pub mod cmd_sync;

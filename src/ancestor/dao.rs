@@ -41,15 +41,15 @@ pub struct Dao(VolatileConnection);
 pub struct FileEntry<'a> {
     pub id: i64,
     pub parent: i64,
-    pub name: Cow<'a,[u8]>,
+    pub name: Cow<'a, [u8]>,
     pub typ: i64,
     pub mode: i64,
     pub mtime: i64,
-    pub content: Cow<'a,[u8]>,
+    pub content: Cow<'a, [u8]>,
 }
 
 /// Status code returned by `Dao::rename`.
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameStatus {
     /// The rename succeeded.
     Ok,
@@ -61,7 +61,7 @@ pub enum RenameStatus {
 }
 
 /// Status code returned by `Dao::update`.
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateStatus {
     /// The update succeeded.
     Ok,
@@ -73,7 +73,7 @@ pub enum UpdateStatus {
 }
 
 /// Status code returned by `Dao::delete`.
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteStatus {
     /// The delete succeeded.
     Ok,
@@ -85,7 +85,7 @@ pub enum DeleteStatus {
     NotFound,
     /// The delete failed because, while a file with the given parent and name
     /// does exist, it does not match the expected old version.
-    NotMatched
+    NotMatched,
 }
 
 impl FileEntry<'static> {
@@ -109,12 +109,14 @@ impl Dao {
     /// open a temporary, in-memory database.
     ///
     /// The database is implicitly initialised and/or updated as needed.
-    pub fn open<P : AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         Ok(Dao(VolatileConnection::new(
-            path, include_str!("schema.sql"),
+            path,
+            include_str!("schema.sql"),
             "This sync will be much more conservative than normal, as all \
              files will be treated as new. (E.g., deleted files will be \
-             recreated, edited files will appear as conflicts, etc.)")?))
+             recreated, edited files will appear as conflicts, etc.)",
+        )?))
     }
 
     /// Retrieves a directory list.
@@ -130,43 +132,54 @@ impl Dao {
     /// On success, returns whether any file with id `dir` actually exists.
     ///
     /// This call is completely atomic.
-    pub fn list<F : FnMut (FileEntry<'static>)>(
-        &self, purge_condemned: bool, dir: i64, mut f: F) -> Result<bool>
-    {
+    pub fn list<F: FnMut(FileEntry<'static>)>(
+        &self,
+        purge_condemned: bool,
+        dir: i64,
+        mut f: F,
+    ) -> Result<bool> {
         tx(&self.0, || {
             if purge_condemned {
-                self.0.prepare(
-                    "DELETE FROM `file` \
+                self.0
+                    .prepare(
+                        "DELETE FROM `file` \
                      WHERE `parent` = ?1 \
                      AND   `name` IN ( \
                        SELECT `name` FROM `condemnation` \
-                       WHERE `parent` = ?1)")
-                     .binding(1, dir)
-                     .run()?;
+                       WHERE `parent` = ?1)",
+                    )
+                    .binding(1, dir)
+                    .run()?;
 
-                self.0.prepare(
-                    "DELETE FROM `condemnation` \
-                     WHERE `dir` = ?1")
-                     .binding(1, dir)
-                     .run()?;
+                self.0
+                    .prepare(
+                        "DELETE FROM `condemnation` \
+                     WHERE `dir` = ?1",
+                    )
+                    .binding(1, dir)
+                    .run()?;
             }
 
-            let mut stmt = self.0.prepare(
-                "SELECT `id`, `parent`, `name`, `type`, `mode`, \
+            let mut stmt = self
+                .0
+                .prepare(
+                    "SELECT `id`, `parent`, `name`, `type`, `mode`, \
                         `mtime`, `content` \
                  FROM `file` \
                  WHERE `parent` = ?1 \
                  -- Exclude the root directory from seeing itself \n\
-                 AND `id` != 0"
-            ).binding(1, dir)?;
+                 AND `id` != 0",
+                )
+                .binding(1, dir)?;
 
             while State::Done != stmt.next()? {
                 f(FileEntry::read(&stmt)?);
             }
 
-            self.0.prepare(
-                "SELECT 1 FROM `file` WHERE `id` = ?1"
-            ).binding(1, dir).exists()
+            self.0
+                .prepare("SELECT 1 FROM `file` WHERE `id` = ?1")
+                .binding(1, dir)
+                .exists()
         })
     }
 
@@ -175,73 +188,99 @@ impl Dao {
     ///
     /// The surrogate id on `e` has no effect.
     pub fn get_matching(&self, e: &FileEntry) -> Result<Option<i64>> {
-        self.0.prepare(
-            "SELECT `id` FROM `file` \
+        self.0
+            .prepare(
+                "SELECT `id` FROM `file` \
              WHERE `parent` = ?1 \
              AND   `name` = ?2 \
              AND   `type` = ?3 \
              AND   `mode` = ?4 \
              AND   `mtime` = ?5 \
-             AND   `content` = ?6"
-        ).binding(1, e.parent).binding(2, &*e.name)
-         .binding(3, e.typ).binding(4, e.mode)
-         .binding(5, e.mtime).binding(6, &*e.content)
-         .first(|s| s.read(0))
+             AND   `content` = ?6",
+            )
+            .binding(1, e.parent)
+            .binding(2, &*e.name)
+            .binding(3, e.typ)
+            .binding(4, e.mode)
+            .binding(5, e.mtime)
+            .binding(6, &*e.content)
+            .first(|s| s.read(0))
     }
 
     /// Returns whether any file in the given directory with the given name
     /// exists.
     pub fn exists(&self, parent: i64, name: &[u8]) -> Result<bool> {
-        self.0.prepare(
-            "SELECT 1 FROM `file` WHERE `parent` = ?1 AND `name` = ?2")
-            .binding(1, parent).binding(2, name).exists()
+        self.0
+            .prepare("SELECT 1 FROM `file` WHERE `parent` = ?1 AND `name` = ?2")
+            .binding(1, parent)
+            .binding(2, name)
+            .exists()
     }
 
     /// Returns the id of the file in the given directory with the given name,
     /// or None if there is no such file.
     pub fn get_id_of(&self, parent: i64, name: &[u8]) -> Result<Option<i64>> {
-        self.0.prepare("SELECT `id` FROM `file` \
-                        WHERE `parent` = ?1 AND `name` = ?2")
-            .binding(1, parent).binding(2, name)
+        self.0
+            .prepare(
+                "SELECT `id` FROM `file` \
+                        WHERE `parent` = ?1 AND `name` = ?2",
+            )
+            .binding(1, parent)
+            .binding(2, name)
             .first(|s| s.read(0))
     }
     /// Returns the entry with the given parent and name, or None if there is
     /// no such file.
-    pub fn get_by_name(&self, parent: i64, name: &[u8])
-                       -> Result<Option<FileEntry<'static>>> {
-        self.0.prepare(
-            "SELECT `id`, `parent`, `name`, `type`, `mode`, \
+    pub fn get_by_name(
+        &self,
+        parent: i64,
+        name: &[u8],
+    ) -> Result<Option<FileEntry<'static>>> {
+        self.0
+            .prepare(
+                "SELECT `id`, `parent`, `name`, `type`, `mode`, \
                     `mtime`, `content` \
              FROM `file` \
-             WHERE `parent` = ?1 AND `name` = ?2")
-            .binding(1, parent).binding(2, name)
+             WHERE `parent` = ?1 AND `name` = ?2",
+            )
+            .binding(1, parent)
+            .binding(2, name)
             .first(|s| FileEntry::read(s))
     }
 
     /// Returns whether there exist any direct children of the given directory.
     pub fn has_children(&self, parent: i64) -> Result<bool> {
-        self.0.prepare(
-            "SELECT 1 FROM `file` WHERE `parent` = ?1 LIMIT 1")
-            .binding(1, parent).exists()
+        self.0
+            .prepare("SELECT 1 FROM `file` WHERE `parent` = ?1 LIMIT 1")
+            .binding(1, parent)
+            .exists()
     }
 
     /// Atomically renames the file in `parent` identified by `old` to have the
     /// name `new`.
     ///
     /// Fails if `old` does not exist in `parent` or if `new` does.
-    pub fn rename(&self, parent: i64, old: &[u8], new: &[u8])
-                  -> Result<RenameStatus> {
+    pub fn rename(
+        &self,
+        parent: i64,
+        old: &[u8],
+        new: &[u8],
+    ) -> Result<RenameStatus> {
         tx(&self.0, || {
             if !self.exists(parent, old)? {
                 Ok(RenameStatus::SourceNotFound)
             } else if self.exists(parent, new)? {
                 Ok(RenameStatus::DestExists)
             } else {
-                self.0.prepare(
-                    "UPDATE `file` SET `name` = ?3 \
-                     WHERE `parent` = ?1 AND `name` = ?2")
-                     .binding(1, parent).binding(2, old).binding(3, new)
-                     .run()?;
+                self.0
+                    .prepare(
+                        "UPDATE `file` SET `name` = ?3 \
+                     WHERE `parent` = ?1 AND `name` = ?2",
+                    )
+                    .binding(1, parent)
+                    .binding(2, old)
+                    .binding(3, new)
+                    .run()?;
                 Ok(RenameStatus::Ok)
             }
         })
@@ -256,14 +295,19 @@ impl Dao {
             if self.exists(e.parent, &*e.name)? {
                 Ok(None)
             } else {
-                self.0.prepare(
-                    "INSERT INTO `file` ( \
+                self.0
+                    .prepare(
+                        "INSERT INTO `file` ( \
                        `parent`, `name`, `type`, `mode`, `mtime`, `content` \
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
-                     .binding(1, e.parent).binding(2, &*e.name)
-                     .binding(3, e.typ).binding(4, e.mode)
-                     .binding(5, e.mtime)
-                     .binding(6, &*e.content).run()?;
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    )
+                    .binding(1, e.parent)
+                    .binding(2, &*e.name)
+                    .binding(3, e.typ)
+                    .binding(4, e.mode)
+                    .binding(5, e.mtime)
+                    .binding(6, &*e.content)
+                    .run()?;
                 Ok(self.get_id_of(e.parent, &*e.name)?)
             }
         })
@@ -273,19 +317,26 @@ impl Dao {
     ///
     /// Iff a file matching `old` exists, its data fields are updated to match
     /// `new`. The `id`, `parent`, and `name` of `new` have no effect.
-    pub fn update(&self, old: &FileEntry, new: &FileEntry)
-                  -> Result<UpdateStatus> {
+    pub fn update(
+        &self,
+        old: &FileEntry,
+        new: &FileEntry,
+    ) -> Result<UpdateStatus> {
         tx(&self.0, || {
             if let Some(id) = self.get_matching(old)? {
-                self.0.prepare(
-                    "UPDATE `file` \
+                self.0
+                    .prepare(
+                        "UPDATE `file` \
                      SET `type` = ?2, `mode` = ?3, \
                          `mtime` = ?4, `content` = ?5 \
-                     WHERE id = ?1")
-                     .binding(1, id).binding(2, new.typ)
-                     .binding(3, new.mode).binding(4, new.mtime)
-                     .binding(5, &*new.content)
-                     .run()?;
+                     WHERE id = ?1",
+                    )
+                    .binding(1, id)
+                    .binding(2, new.typ)
+                    .binding(3, new.mode)
+                    .binding(4, new.mtime)
+                    .binding(5, &*new.content)
+                    .run()?;
                 Ok(UpdateStatus::Ok)
             } else if self.exists(old.parent, &*old.name)? {
                 Ok(UpdateStatus::NotMatched)
@@ -328,8 +379,10 @@ impl Dao {
         if self.has_children(id)? {
             Ok(DeleteStatus::DirNotEmpty)
         } else {
-            self.0.prepare("DELETE FROM `file` WHERE `id` = ?1")
-                 .binding(1, id).run()?;
+            self.0
+                .prepare("DELETE FROM `file` WHERE `id` = ?1")
+                .binding(1, id)
+                .run()?;
             Ok(DeleteStatus::Ok)
         }
     }
@@ -342,18 +395,28 @@ impl Dao {
     /// would have cleared all condemnations in `parent` when it invoked
     /// `list`).
     pub fn condemn(&self, parent: i64, name: &[u8]) -> Result<()> {
-        self.0.prepare("INSERT INTO `condemnation` (`dir`,`name`) \
-                        VALUES (?1, ?2)")
-            .binding(1, parent).binding(2, name).run()
+        self.0
+            .prepare(
+                "INSERT INTO `condemnation` (`dir`,`name`) \
+                        VALUES (?1, ?2)",
+            )
+            .binding(1, parent)
+            .binding(2, name)
+            .run()
     }
 
     /// Clears the condemnation for the name `name` in directory `parent`.
     ///
     /// If no such condemnation exists, this call quietly succeeds.
     pub fn uncondemn(&self, parent: i64, name: &[u8]) -> Result<()> {
-        self.0.prepare("DELETE FROM `condemnation`  \
-                        WHERE `dir` = ?1 AND `name` = ?2")
-            .binding(1, parent).binding(2, name).run()
+        self.0
+            .prepare(
+                "DELETE FROM `condemnation`  \
+                        WHERE `dir` = ?1 AND `name` = ?2",
+            )
+            .binding(1, parent)
+            .binding(2, name)
+            .run()
     }
 }
 
@@ -381,7 +444,8 @@ mod test {
     fn list_nx_dir() {
         let dao = mkdao();
 
-        let exists = dao.list(true, 42, |_| panic!("Element found in nx dir"))
+        let exists = dao
+            .list(true, 42, |_| panic!("Element found in nx dir"))
             .unwrap();
         assert!(!exists);
     }
@@ -390,15 +454,18 @@ mod test {
     fn create_and_list_item() {
         let dao = mkdao();
 
-        assert!(dao.create(&FileEntry {
-            id: -1,
-            parent: 0,
-            name: Cow::Borrowed(b"foo"),
-            typ: 2,
-            mode: 0o777,
-            mtime: 1234,
-            content: Cow::Borrowed(b"baz"),
-        }).unwrap().is_some());
+        assert!(dao
+            .create(&FileEntry {
+                id: -1,
+                parent: 0,
+                name: Cow::Borrowed(b"foo"),
+                typ: 2,
+                mode: 0o777,
+                mtime: 1234,
+                content: Cow::Borrowed(b"baz"),
+            })
+            .unwrap()
+            .is_some());
 
         let mut listed = Vec::new();
         assert!(dao.list(true, 0, |e| listed.push(e)).unwrap());
@@ -414,16 +481,19 @@ mod test {
         assert_eq!(b"baz", &*e.content);
 
         // Test again with a subdir so we're sure parent is stored correctly
-        assert!(dao.create(&FileEntry {
-            id: -1,
-            parent: e.id,
-            // Same name in case it somehow collides
-            name: Cow::Borrowed(b"foo"),
-            typ: 1,
-            mode: 0o666,
-            mtime: 5678,
-            content: Cow::Borrowed(b"xyzzy"),
-        }).unwrap().is_some());
+        assert!(dao
+            .create(&FileEntry {
+                id: -1,
+                parent: e.id,
+                // Same name in case it somehow collides
+                name: Cow::Borrowed(b"foo"),
+                typ: 1,
+                mode: 0o666,
+                mtime: 5678,
+                content: Cow::Borrowed(b"xyzzy"),
+            })
+            .unwrap()
+            .is_some());
 
         let mut listed = Vec::new();
         assert!(dao.list(true, e.id, |s| listed.push(s)).unwrap());
@@ -451,8 +521,12 @@ mod test {
         assert!(!dao.create(&e).unwrap().is_some());
     }
 
-    fn se(parent: i64, name: &'static [u8], mode: i64, mtime: i64)
-          -> FileEntry<'static> {
+    fn se(
+        parent: i64,
+        name: &'static [u8],
+        mode: i64,
+        mtime: i64,
+    ) -> FileEntry<'static> {
         FileEntry {
             id: -1,
             parent: parent,
@@ -474,9 +548,11 @@ mod test {
     fn update_nx_file() {
         let dao = mkdao();
 
-        assert_eq!(UpdateStatus::NotFound,
-                   dao.update(&se(0, b"foo", 0, 0),
-                              &se(0, b"foo", 0, 0)).unwrap());
+        assert_eq!(
+            UpdateStatus::NotFound,
+            dao.update(&se(0, b"foo", 0, 0), &se(0, b"foo", 0, 0))
+                .unwrap()
+        );
     }
 
     #[test]
@@ -484,9 +560,11 @@ mod test {
         let dao = mkdao();
 
         assert!(dao.create(&se(0, b"foo", 0, 0)).unwrap().is_some());
-        assert_eq!(UpdateStatus::NotMatched,
-                   dao.update(&se(0, b"foo", 1, 0),
-                              &se(0, b"foo", 2, 0)).unwrap());
+        assert_eq!(
+            UpdateStatus::NotMatched,
+            dao.update(&se(0, b"foo", 1, 0), &se(0, b"foo", 2, 0))
+                .unwrap()
+        );
 
         let listed = list(&dao, true, 0);
         assert_eq!(1, listed.len());
@@ -502,9 +580,11 @@ mod test {
         assert!(dao.create(&se(foo_id, b"foo", 0, 32)).unwrap().is_some());
         assert!(dao.create(&se(0, b"bar", 0, 0)).unwrap().is_some());
 
-        assert_eq!(UpdateStatus::Ok,
-                   dao.update(&se(0, b"foo", 0, 0),
-                              &se(0, b"foo", 1, 42)).unwrap());
+        assert_eq!(
+            UpdateStatus::Ok,
+            dao.update(&se(0, b"foo", 0, 0), &se(0, b"foo", 1, 42))
+                .unwrap()
+        );
         let root_list = list(&dao, true, 0);
         assert_eq!(2, root_list.len());
         for r in root_list {
@@ -528,8 +608,10 @@ mod test {
     fn delete_nx() {
         let dao = mkdao();
 
-        assert_eq!(DeleteStatus::NotFound,
-                   dao.delete(&se(0, b"foo", 0, 0)).unwrap());
+        assert_eq!(
+            DeleteStatus::NotFound,
+            dao.delete(&se(0, b"foo", 0, 0)).unwrap()
+        );
     }
 
     #[test]
@@ -537,8 +619,10 @@ mod test {
         let dao = mkdao();
 
         assert!(dao.create(&se(0, b"foo", 1, 0)).unwrap().is_some());
-        assert_eq!(DeleteStatus::NotMatched,
-                   dao.delete(&se(0, b"foo", 2, 0)).unwrap());
+        assert_eq!(
+            DeleteStatus::NotMatched,
+            dao.delete(&se(0, b"foo", 2, 0)).unwrap()
+        );
     }
 
     #[test]
@@ -548,20 +632,25 @@ mod test {
         let foo_id = dao.create(&se(0, b"foo", 0, 0)).unwrap().unwrap();
         assert!(dao.create(&se(foo_id, b"foo", 1, 0)).unwrap().is_some());
 
-        assert_eq!(DeleteStatus::DirNotEmpty,
-                   dao.delete(&se(0, b"foo", 0, 0)).unwrap());
-        assert_eq!(DeleteStatus::Ok,
-                   dao.delete(&se(foo_id, b"foo", 1, 0)).unwrap());
-        assert_eq!(DeleteStatus::Ok,
-                   dao.delete(&se(0, b"foo", 0, 0)).unwrap());
+        assert_eq!(
+            DeleteStatus::DirNotEmpty,
+            dao.delete(&se(0, b"foo", 0, 0)).unwrap()
+        );
+        assert_eq!(
+            DeleteStatus::Ok,
+            dao.delete(&se(foo_id, b"foo", 1, 0)).unwrap()
+        );
+        assert_eq!(DeleteStatus::Ok, dao.delete(&se(0, b"foo", 0, 0)).unwrap());
     }
 
     #[test]
     fn rename_source_nx() {
         let dao = mkdao();
 
-        assert_eq!(RenameStatus::SourceNotFound,
-                   dao.rename(0, b"foo", b"bar").unwrap());
+        assert_eq!(
+            RenameStatus::SourceNotFound,
+            dao.rename(0, b"foo", b"bar").unwrap()
+        );
     }
 
     #[test]
@@ -570,8 +659,10 @@ mod test {
 
         assert!(dao.create(&se(0, b"foo", 0, 0)).unwrap().is_some());
         assert!(dao.create(&se(0, b"bar", 0, 0)).unwrap().is_some());
-        assert_eq!(RenameStatus::DestExists,
-                   dao.rename(0, b"foo", b"bar").unwrap());
+        assert_eq!(
+            RenameStatus::DestExists,
+            dao.rename(0, b"foo", b"bar").unwrap()
+        );
     }
 
     #[test]
@@ -582,8 +673,7 @@ mod test {
         // Create child and sibling to ensure filtering is applied correctly
         assert!(dao.create(&se(foo_id, b"foo", 0, 0)).unwrap().is_some());
         assert!(dao.create(&se(0, b"quux", 0, 0)).unwrap().is_some());
-        assert_eq!(RenameStatus::Ok,
-                   dao.rename(0, b"foo", b"bar").unwrap());
+        assert_eq!(RenameStatus::Ok, dao.rename(0, b"foo", b"bar").unwrap());
 
         let l = list(&dao, true, 0);
         assert_eq!(2, l.len());

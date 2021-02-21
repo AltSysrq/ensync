@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::io::{Read, Write, stderr};
+use std::io::{stderr, Read, Write};
 use std::process;
 use std::sync::Arc;
 
@@ -28,26 +28,38 @@ use crate::server::*;
 /// from `stdin`.
 ///
 /// `command` is printed in diagnostics.
-pub fn connect_server_storage<R : Read + Send + 'static,
-                              W : Write + Send + 'static>
-    (mut child: process::Child, stdin: W, stdout: R,
-     command: &str, show_connection: bool) -> Result<RemoteStorage>
-{
+pub fn connect_server_storage<
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+>(
+    mut child: process::Child,
+    stdin: W,
+    stdout: R,
+    command: &str,
+    show_connection: bool,
+) -> Result<RemoteStorage> {
     let mut storage = RemoteStorage::new(stdout, stdin);
 
     match storage.exchange_client_info() {
         Ok((info, motd)) => {
             if show_connection {
-                let _ = writeln!(stderr(), "Connected to {} {}.{}.{} \
+                let _ = writeln!(
+                    stderr(),
+                    "Connected to {} {}.{}.{} \
                                             (proto {}.{}) via `{}`",
-                                 info.name, info.version.0, info.version.1,
-                                 info.version.2, info.protocol.0,
-                                 info.protocol.1, command);
+                    info.name,
+                    info.version.0,
+                    info.version.1,
+                    info.version.2,
+                    info.protocol.0,
+                    info.protocol.1,
+                    command
+                );
                 if let Some(motd) = motd {
                     let _ = writeln!(stderr(), "{}", motd);
                 }
             }
-        },
+        }
         Err(e) => {
             // Close the child's input and output and wait for it to
             // finish. Most likely the remote process failed to start
@@ -56,18 +68,21 @@ pub fn connect_server_storage<R : Read + Send + 'static,
             drop(storage);
             if let Ok(status) = child.wait() {
                 if !status.success() {
-                    return Err(format!("Command `{}` failed with {}",
-                                       command, status).into());
+                    return Err(format!(
+                        "Command `{}` failed with {}",
+                        command, status
+                    )
+                    .into());
                 }
             }
 
             // Either the command succeeded unexpectedly, or we failed
             // to wait for the child. All we can do is return the
             // protocol error.
-            return Err(e).chain_err(
-                || format!("Protocol error communicating with `{}`",
-                           command));
-        },
+            return Err(e).chain_err(|| {
+                format!("Protocol error communicating with `{}`", command)
+            });
+        }
     }
 
     Ok(storage)
@@ -77,12 +92,16 @@ pub fn connect_server_storage<R : Read + Send + 'static,
 ///
 /// If this spawns a process, there is no way to reap the process when it
 /// terminates.
-pub fn open_server_storage(config: &ServerConfig, show_connection: bool)
-                           -> Result<Arc<dyn Storage>> {
+pub fn open_server_storage(
+    config: &ServerConfig,
+    show_connection: bool,
+) -> Result<Arc<dyn Storage>> {
     match *config {
-        ServerConfig::Path(ref path) =>
-            Ok(Arc::new(LocalStorage::open(path).chain_err(
-                || "Failed to set up server in local filesystem")?)),
+        ServerConfig::Path(ref path) => {
+            Ok(Arc::new(LocalStorage::open(path).chain_err(|| {
+                "Failed to set up server in local filesystem"
+            })?))
+        }
 
         ServerConfig::Shell(ref command, ref workdir) => {
             // Running the process this way doesn't fully play nicely with our
@@ -109,16 +128,21 @@ pub fn open_server_storage(config: &ServerConfig, show_connection: bool)
                 process.current_dir(workdir);
             }
 
-            let mut child = process.spawn().chain_err(
-                || format!("Failed to start server command `{}`", command))?;
-            let stdout = child.stdout.take()
-                .expect("Missing stdout pipe on child");
-            let stdin = child.stdin.take()
-                .expect("Missing stdin pipe on child");
-            Ok(Arc::new(
-                connect_server_storage(child, stdin, stdout, command,
-                                       show_connection)?))
-        },
+            let mut child = process.spawn().chain_err(|| {
+                format!("Failed to start server command `{}`", command)
+            })?;
+            let stdout =
+                child.stdout.take().expect("Missing stdout pipe on child");
+            let stdin =
+                child.stdin.take().expect("Missing stdin pipe on child");
+            Ok(Arc::new(connect_server_storage(
+                child,
+                stdin,
+                stdout,
+                command,
+                show_connection,
+            )?))
+        }
     }
 }
 
@@ -128,20 +152,26 @@ pub fn open_server_storage(config: &ServerConfig, show_connection: bool)
 /// If the caller already has a key chain, it may pass it in so that the user
 /// is not prompted again. If `None`, the passphrase will be read within this
 /// call.
-pub fn open_server_replica(config: &Config, storage: Arc<dyn Storage>,
-                           key_chain: Option<Arc<KeyChain>>)
-                           -> Result<ServerReplica<dyn Storage>> {
+pub fn open_server_replica(
+    config: &Config,
+    storage: Arc<dyn Storage>,
+    key_chain: Option<Arc<KeyChain>>,
+) -> Result<ServerReplica<dyn Storage>> {
     let key_chain = if let Some(key_chain) = key_chain {
         key_chain
     } else {
-        let passphrase = config.passphrase.read_passphrase(
-            "passphrase", false)?;
+        let passphrase =
+            config.passphrase.read_passphrase("passphrase", false)?;
         Arc::new(keymgmt::derive_key_chain(&*storage, &passphrase[..])?)
     };
 
     Ok(ServerReplica::new(
         config.private_root.join("server-state.sqlite"),
-        key_chain, storage, &config.server_root, config.block_size as usize,
-        config.compression)
-       .chain_err(|| "Failed to set up server replica")?)
+        key_chain,
+        storage,
+        &config.server_root,
+        config.block_size as usize,
+        config.compression,
+    )
+    .chain_err(|| "Failed to set up server replica")?)
 }

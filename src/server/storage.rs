@@ -40,9 +40,11 @@ pub type Tx = u64;
 /// - "Objects", which hold blocks produced by `block_xfer`, identified by
 /// HMAC. The server has no way to determine itself whether a block is in use;
 /// instead, the client works with the server to maintain a reference count.
-pub trait Storage : Send + Sync {
+pub trait Storage: Send + Sync {
     /// Returns whether the storage system is in a fatal state.
-    fn is_fatal(&self) -> bool { false }
+    fn is_fatal(&self) -> bool {
+        false
+    }
 
     /// Fetches the full content of the directory with the given surrogate id.
     /// If such a directory currently exists, returns the version id and the
@@ -56,13 +58,19 @@ pub trait Storage : Send + Sync {
     ///
     /// If such a directory does exist, do nothing. If no such directory
     /// exists, place the id into an internal buffer.
-    fn check_dir_dirty(&self, id: &HashId, ver: &HashId, len: u32)
-                       -> Result<()>;
+    fn check_dir_dirty(
+        &self,
+        id: &HashId,
+        ver: &HashId,
+        len: u32,
+    ) -> Result<()>;
 
     /// For each directory id buffered by calls to `check_dir_dirty`, invoke
     /// `f`. The dirty directory buffer is then cleared.
-    fn for_dirty_dir(&self, f: &mut dyn FnMut (&HashId) -> Result<()>)
-                     -> Result<()>;
+    fn for_dirty_dir(
+        &self,
+        f: &mut dyn FnMut(&HashId) -> Result<()>,
+    ) -> Result<()>;
 
     /// Begins a write transaction private to this session.
     ///
@@ -94,8 +102,14 @@ pub trait Storage : Send + Sync {
     /// regardless of version or content. The transaction will also fail if a
     /// directory with that id and version exists anywhere globally, including
     /// outside the transaction or possibly in uncommitted transactions.
-    fn mkdir(&self, tx: Tx, id: &HashId, v: &HashId, sv: &HashId, data: &[u8])
-             -> Result<()>;
+    fn mkdir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        v: &HashId,
+        sv: &HashId,
+        data: &[u8],
+    ) -> Result<()>;
     /// Schedules `append` to be appended to the directory with id `id`,
     /// secret version `sv`, and length in bytes `old_len`.
     ///
@@ -104,9 +118,14 @@ pub trait Storage : Send + Sync {
     ///
     /// The length of the directory is increased by `append.len()` when the
     /// transaction successfully commits.
-    fn updir(&self, tx: Tx, id: &HashId, sv: &HashId,
-             old_len: u32, append: &[u8])
-             -> Result<()>;
+    fn updir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        sv: &HashId,
+        old_len: u32,
+        append: &[u8],
+    ) -> Result<()>;
     /// Schedules the directory identified by `id` to be removed if it still
     /// has secret version `sv` and length in bytes `old_len`.
     ///
@@ -115,8 +134,13 @@ pub trait Storage : Send + Sync {
     ///
     /// An `rmdir` followed by a `mkdir` of the same directory in one
     /// transaction is fully atomic.
-    fn rmdir(&self, tx: Tx, id: &HashId, sv: &HashId, old_len: u32)
-             -> Result<()>;
+    fn rmdir(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        sv: &HashId,
+        old_len: u32,
+    ) -> Result<()>;
     /// Adds a link to an object.
     ///
     /// When the transaction is committed, `linkid` will be added to the
@@ -148,12 +172,16 @@ pub trait Storage : Send + Sync {
     ///
     /// The object may become available to other readers before the transaction
     /// commits.
-    fn putobj(&self, tx: Tx, id: &HashId, linkid: &HashId,
-              data: &[u8]) -> Result<()>;
+    fn putobj(
+        &self,
+        tx: Tx,
+        id: &HashId,
+        linkid: &HashId,
+        data: &[u8],
+    ) -> Result<()>;
     /// Schedules `linkid` to be subtracted from the reference accumulator of
     /// the object identified by `id` when the transaction commits.
-    fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId)
-                 -> Result<()>;
+    fn unlinkobj(&self, tx: Tx, id: &HashId, linkid: &HashId) -> Result<()>;
 
     /// Like `Replica::watch`, starts monitoring directories within storage for
     /// changes to allow asynchronous notifications.
@@ -168,7 +196,10 @@ pub trait Storage : Send + Sync {
     ///
     /// The watch function may be called without a hashid if a fatal error
     /// occurred while waiting for changes.
-    fn watch(&mut self, f: Box<dyn FnMut (Option<&HashId>) + Send>) -> Result<()>;
+    fn watch(
+        &mut self,
+        f: Box<dyn FnMut(Option<&HashId>) + Send>,
+    ) -> Result<()>;
     /// If `watch()` has been called, add the given directory id to the watch
     /// list.
     fn watchdir(&self, dir: &HashId, ver: &HashId, len: u32) -> Result<()>;

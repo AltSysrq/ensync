@@ -27,27 +27,27 @@ use crate::errors::*;
 use crate::server::crypt::{decrypt_obj, xform_obj_id};
 use crate::server::storage::Storage;
 
-pub struct ServerTransferOut<S : Storage + ?Sized> {
+pub struct ServerTransferOut<S: Storage + ?Sized> {
     storage: Arc<S>,
 }
 
-impl<S : Storage + ?Sized> ServerTransferOut<S> {
+impl<S: Storage + ?Sized> ServerTransferOut<S> {
     pub fn new(storage: Arc<S>) -> Self {
-        ServerTransferOut {
-            storage: storage,
-        }
+        ServerTransferOut { storage: storage }
     }
 }
 
-impl<S : Storage + ?Sized> BlockFetch for ServerTransferOut<S> {
+impl<S: Storage + ?Sized> BlockFetch for ServerTransferOut<S> {
     fn fetch(&self, block: &HashId) -> Result<Box<dyn io::Read>> {
-        let ciphertext = self.storage.getobj(&xform_obj_id(block))?
+        let ciphertext = self
+            .storage
+            .getobj(&xform_obj_id(block))?
             .ok_or(ErrorKind::ServerContentDeleted)?;
-        let mut cleartext = Vec::<u8>::with_capacity(
-            ciphertext.len() * 3 / 2);
+        let mut cleartext = Vec::<u8>::with_capacity(ciphertext.len() * 3 / 2);
         decrypt_obj(&mut cleartext, &ciphertext[..], block)?;
 
-        Ok(Box::new(flate2::read::GzDecoder::new(
-            io::Cursor::new(cleartext))))
+        Ok(Box::new(flate2::read::GzDecoder::new(io::Cursor::new(
+            cleartext,
+        ))))
     }
 }

@@ -16,12 +16,12 @@
 // You should have received a copy of the GNU General Public License along with
 // Ensync. If not, see <http://www.gnu.org/licenses/>.
 
-use std::fmt;
 use std::error::Error;
+use std::fmt;
 use std::str::FromStr;
 
 /// A single field of a sync mode.
-#[derive(Clone,Copy,PartialEq,Eq,Debug,PartialOrd,Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub enum SyncModeSetting {
     /// This type of propagation shall not happen.
     Off,
@@ -62,7 +62,7 @@ impl SyncModeSetting {
 }
 
 /// The sync settings for one direction of propagation.
-#[derive(Clone,Copy,PartialEq,Eq,Debug,Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct HalfSyncMode {
     /// Whether creates should happen in this direction.
     pub create: SyncModeSetting,
@@ -74,13 +74,18 @@ pub struct HalfSyncMode {
 
 impl fmt::Display for HalfSyncMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}{}", self.create.ch('c','C'),
-               self.update.ch('u','U'), self.delete.ch('d','D'))
+        write!(
+            f,
+            "{}{}{}",
+            self.create.ch('c', 'C'),
+            self.update.ch('u', 'U'),
+            self.delete.ch('d', 'D')
+        )
     }
 }
 
 /// A full description of a sync mode.
-#[derive(Clone,Copy,PartialEq,Eq,Debug,Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SyncMode {
     /// Whether particular types of changes should propagate from server to
     /// client.
@@ -96,7 +101,7 @@ impl fmt::Display for SyncMode {
     }
 }
 
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct SyncModeParseError {
     pub message: &'static str,
     pub offset: usize,
@@ -113,7 +118,9 @@ impl Error for SyncModeParseError {
         self.message
     }
 
-    fn cause(&self) -> Option<&dyn Error> { None }
+    fn cause(&self) -> Option<&dyn Error> {
+        None
+    }
 }
 
 impl FromStr for SyncMode {
@@ -121,67 +128,75 @@ impl FromStr for SyncMode {
 
     fn from_str(s: &str) -> Result<Self, SyncModeParseError> {
         match s {
-            "mirror" | "reset-server" => return Ok(SyncMode {
-                inbound: HalfSyncMode {
-                    create: SyncModeSetting::Off,
-                    update: SyncModeSetting::Off,
-                    delete: SyncModeSetting::Off,
-                },
-                outbound: HalfSyncMode {
-                    create: SyncModeSetting::Force,
-                    update: SyncModeSetting::Force,
-                    delete: SyncModeSetting::Force,
-                }
-            }),
+            "mirror" | "reset-server" => {
+                return Ok(SyncMode {
+                    inbound: HalfSyncMode {
+                        create: SyncModeSetting::Off,
+                        update: SyncModeSetting::Off,
+                        delete: SyncModeSetting::Off,
+                    },
+                    outbound: HalfSyncMode {
+                        create: SyncModeSetting::Force,
+                        update: SyncModeSetting::Force,
+                        delete: SyncModeSetting::Force,
+                    },
+                })
+            }
 
-            "reset-client" => return Ok(SyncMode {
-                inbound: HalfSyncMode {
-                    create: SyncModeSetting::Force,
-                    update: SyncModeSetting::Force,
-                    delete: SyncModeSetting::Force,
-                },
-                outbound: HalfSyncMode {
-                    create: SyncModeSetting::Off,
-                    update: SyncModeSetting::Off,
-                    delete: SyncModeSetting::Off,
-                }
-            }),
+            "reset-client" => {
+                return Ok(SyncMode {
+                    inbound: HalfSyncMode {
+                        create: SyncModeSetting::Force,
+                        update: SyncModeSetting::Force,
+                        delete: SyncModeSetting::Force,
+                    },
+                    outbound: HalfSyncMode {
+                        create: SyncModeSetting::Off,
+                        update: SyncModeSetting::Off,
+                        delete: SyncModeSetting::Off,
+                    },
+                })
+            }
 
-            "conservative-sync" | "sync" => return Ok(SyncMode {
-                inbound: HalfSyncMode {
-                    create: SyncModeSetting::On,
-                    update: SyncModeSetting::On,
-                    delete: SyncModeSetting::On,
-                },
-                outbound: HalfSyncMode {
-                    create: SyncModeSetting::On,
-                    update: SyncModeSetting::On,
-                    delete: SyncModeSetting::On,
-                }
-            }),
+            "conservative-sync" | "sync" => {
+                return Ok(SyncMode {
+                    inbound: HalfSyncMode {
+                        create: SyncModeSetting::On,
+                        update: SyncModeSetting::On,
+                        delete: SyncModeSetting::On,
+                    },
+                    outbound: HalfSyncMode {
+                        create: SyncModeSetting::On,
+                        update: SyncModeSetting::On,
+                        delete: SyncModeSetting::On,
+                    },
+                })
+            }
 
-            "aggressive-sync" => return Ok(SyncMode {
-                inbound: HalfSyncMode {
-                    create: SyncModeSetting::Force,
-                    update: SyncModeSetting::Force,
-                    delete: SyncModeSetting::Force,
-                },
-                outbound: HalfSyncMode {
-                    create: SyncModeSetting::Force,
-                    update: SyncModeSetting::Force,
-                    delete: SyncModeSetting::Force,
-                }
-            }),
+            "aggressive-sync" => {
+                return Ok(SyncMode {
+                    inbound: HalfSyncMode {
+                        create: SyncModeSetting::Force,
+                        update: SyncModeSetting::Force,
+                        delete: SyncModeSetting::Force,
+                    },
+                    outbound: HalfSyncMode {
+                        create: SyncModeSetting::Force,
+                        update: SyncModeSetting::Force,
+                        delete: SyncModeSetting::Force,
+                    },
+                })
+            }
 
             _ => (),
         }
 
-        let chars : Vec<_> = s.chars().collect();
+        let chars: Vec<_> = s.chars().collect();
 
         if 7 != chars.len() {
             return Err(SyncModeParseError {
                 offset: 0,
-                message: "Sync mode must be 7 characters, like \"cud/cud\""
+                message: "Sync mode must be 7 characters, like \"cud/cud\"",
             });
         }
 
@@ -189,12 +204,16 @@ impl FromStr for SyncMode {
             return Err(SyncModeParseError {
                 offset: 3,
                 message: "Sync mode must have a '/' at position 3, \
-                          like in \"cud/cud\""
+                          like in \"cud/cud\"",
             });
         }
 
-        fn conv(on: char, force: char, actual: char, off: usize)
-                -> Result<SyncModeSetting, SyncModeParseError> {
+        fn conv(
+            on: char,
+            force: char,
+            actual: char,
+            off: usize,
+        ) -> Result<SyncModeSetting, SyncModeParseError> {
             if '-' == actual {
                 Ok(SyncModeSetting::Off)
             } else if on == actual {
@@ -206,7 +225,7 @@ impl FromStr for SyncMode {
                     offset: off,
                     message: "Illegal character in sync mode; must be in \
                               format like \"cud/cud\", \"---/---\", or \
-                              \"CUD/CUD\""
+                              \"CUD/CUD\"",
                 })
             }
         }
@@ -228,8 +247,8 @@ impl FromStr for SyncMode {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use super::SyncModeSetting::*;
+    use super::*;
 
     #[test]
     fn sync_setting_properties() {
@@ -313,21 +332,24 @@ mod test {
     fn parse_sync_mode_aliases() {
         assert_eq!(
             "---/CUD",
-            &"mirror".parse::<SyncMode>().unwrap().to_string());
+            &"mirror".parse::<SyncMode>().unwrap().to_string()
+        );
         assert_eq!(
             "---/CUD",
-            &"reset-server".parse::<SyncMode>().unwrap().to_string());
+            &"reset-server".parse::<SyncMode>().unwrap().to_string()
+        );
         assert_eq!(
             "CUD/---",
-            &"reset-client".parse::<SyncMode>().unwrap().to_string());
+            &"reset-client".parse::<SyncMode>().unwrap().to_string()
+        );
+        assert_eq!("cud/cud", &"sync".parse::<SyncMode>().unwrap().to_string());
         assert_eq!(
             "cud/cud",
-            &"sync".parse::<SyncMode>().unwrap().to_string());
-        assert_eq!(
-            "cud/cud",
-            &"conservative-sync".parse::<SyncMode>().unwrap().to_string());
+            &"conservative-sync".parse::<SyncMode>().unwrap().to_string()
+        );
         assert_eq!(
             "CUD/CUD",
-            &"aggressive-sync".parse::<SyncMode>().unwrap().to_string());
+            &"aggressive-sync".parse::<SyncMode>().unwrap().to_string()
+        );
     }
 }
