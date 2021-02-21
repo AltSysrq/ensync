@@ -23,6 +23,7 @@ use std::ffi::{OsStr,OsString};
 use std::sync::Mutex;
 
 use crate::defs::*;
+use crate::replica::Replica;
 use crate::work_stack::WorkStack;
 use crate::log::Logger;
 use crate::rules::engine::{FileEngine, DirEngine};
@@ -92,12 +93,14 @@ impl<CLI, ANC, SRV> Context<CLI, ANC, SRV> {
     }
 }
 
-/// Within `def_context_impl!`, expand to the corresponding `DirContext`
-/// type.
-macro_rules! dir_ctx { () => {
-    $crate::reconcile::context::DirContext<CLI::Directory, ANC::Directory,
-                                           SRV::Directory>
-} }
+pub trait ContextExt {
+    type Dir;
+}
+
+impl<CLI: Replica, ANC: Replica, SRV: Replica>
+ContextExt for Context<CLI, ANC, SRV> {
+    type Dir = DirContext<CLI::Directory, ANC::Directory, SRV::Directory>;
+}
 
 /// Directory-specific context information for a single replica.
 pub struct SingleDirContext<T> {

@@ -332,7 +332,7 @@ Context<CLI, ANC, SRV> {
 ///
 /// Errors are passed down the context's logger.
 pub fn apply_reconciliation(
-    &self, dir: &mut dir_ctx!(),
+    &self, dir: &mut <Self as ContextExt>::Dir,
     dir_name: &OsStr, name: &OsStr,
     recon: Reconciliation,
     old_cli: Option<&FileData>, old_srv: Option<&FileData>)

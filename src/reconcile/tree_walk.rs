@@ -91,7 +91,7 @@ Context<CLI, ANC, SRV> {
 /// exists.
 fn process_file(
     &self,
-    dir: &mut dir_ctx!(),
+    dir: &mut <Self as ContextExt>::Dir,
     dir_path: &OsStr, name: &OsStr,
     dirstate: &DirStateRef)
 {
@@ -180,7 +180,7 @@ Context<CLI, ANC, SRV> {
 /// This may return Err if it was unable to set the context up at all. Any
 /// errors have already been logged; this is simply an artefact of using `?`
 /// to simplify control flow.
-fn process_dir_impl<F : FnOnce(dir_ctx!(),DirStateRef) -> Task<Self>>(
+fn process_dir_impl<F : FnOnce(<Self as ContextExt>::Dir,DirStateRef) -> Task<Self>>(
     &self,
     mut cli_dir: CLI::Directory,
     mut anc_dir: ANC::Directory,
@@ -261,7 +261,7 @@ pub fn check_stop(&self) -> Result<()> {
 
 /// Wraps process_dir_impl() to return whether the result was successful or
 /// not.
-fn process_dir<F : FnOnce (dir_ctx!(), DirStateRef) -> Task<Self>>(
+fn process_dir<F : FnOnce (<Self as ContextExt>::Dir, DirStateRef) -> Task<Self>>(
     &self,
     cli_dir: CLI::Directory,
     anc_dir: ANC::Directory,
@@ -305,7 +305,7 @@ Context<CLI, ANC, SRV> {
 /// cleared.
 fn recurse_into_dir(
     &self,
-    dir: &mut dir_ctx!(),
+    dir: &mut <Self as ContextExt>::Dir,
     parent_name: &OsStr, name: &OsStr,
     file_rules: FileEngine,
     state: DirStateRef)
@@ -340,7 +340,7 @@ fn recurse_into_dir(
 /// function ANDed with the subdirectory's `success` flag. The flags of the
 /// subdirectory state are ANDed into `state`, and `state`'s completion queued
 /// if this was the last task.
-fn recurse_and_then<F : FnOnce (&Self, dir_ctx!(), &DirStateRef)
+fn recurse_and_then<F : FnOnce (&Self, <Self as ContextExt>::Dir, &DirStateRef)
                                 -> bool + Send + 'static>(
     &self, cli_dir: CLI::Directory, anc_dir: ANC::Directory, srv_dir: SRV::Directory,
     file_rules: FileEngine,
@@ -372,7 +372,7 @@ fn recurse_and_then<F : FnOnce (&Self, dir_ctx!(), &DirStateRef)
     }));
 }
 
-fn mark_both_clean(&self, dir: &dir_ctx!()) -> bool {
+fn mark_both_clean(&self, dir: &<Self as ContextExt>::Dir) -> bool {
     let dir_path = dir.cli.dir.full_path();
 
     mark_clean(&self.cli, &dir.cli.dir, &self.log,
@@ -420,7 +420,7 @@ fn finish_task_in_dir(&self, state: &DirStateRef,
 /// on all replicas are removed. Otherwise, on success, the directory is simply
 /// marked clean.
 fn recursive_delete(
-    &self, dir: &mut dir_ctx!(),
+    &self, dir: &mut <Self as ContextExt>::Dir,
     parent_name: &OsStr, name: &OsStr,
     file_rules: FileEngine,
     state: DirStateRef,
@@ -482,7 +482,7 @@ fn try_rmdir<R : Replica, LOG : Logger>(r: &R, dir: &mut R::Directory,
 impl<CLI: Replica, ANC: Replica + NullTransfer + Condemn,
      SRV: Replica<TransferIn = CLI::TransferOut, TransferOut = CLI::TransferIn>>
 Context<CLI, ANC, SRV> {
-fn delete_or_mark_clean(&self, dir: &mut dir_ctx!(),
+fn delete_or_mark_clean(&self, dir: &mut <Self as ContextExt>::Dir,
                         state: &DirStateRef) -> bool {
     let dir_path = dir.cli.dir.full_path().to_owned();
     if state.empty.load(SeqCst) {
