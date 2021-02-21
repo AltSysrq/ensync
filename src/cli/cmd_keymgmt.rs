@@ -29,12 +29,12 @@ macro_rules! root_prompt {
         "passphrase in `root` group", false) }
 }
 
-pub fn init_keys(config: &Config, storage: &dyn Storage, name: Option<&str>)
+pub fn init_keys(config: &Config, storage: &dyn Storage, name: &str)
                  -> Result<()> {
     keymgmt::init_keys(storage,
                        &config.passphrase.read_passphrase(
                            "new passphrase", true)?[..],
-                       name.unwrap_or("original"))
+                       name)
         .map(|_| ())
 }
 

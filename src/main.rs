@@ -45,7 +45,14 @@ mod posix;
 mod server;
 mod cli;
 
+use std::path::PathBuf;
+
+use structopt::StructOpt;
+use clap::AppSettings;
+
+use crate::cli::config::PassphraseConfig;
 use crate::errors::{Result, ResultExt};
+use crate::rules::SyncMode;
 
 fn main() {
     use std::io::{Write, stderr};
@@ -67,127 +74,63 @@ fn main() {
     }
 }
 
-fn main_impl() -> Result<()> {
-    use std::env;
-    use std::fs;
+/// Encrypted bidirectional file synchroniser
+#[derive(StructOpt)]
+#[structopt(
+    max_term_width = 100,
+    setting(AppSettings::DontCollapseArgsInUsage),
+    setting(AppSettings::DeriveDisplayOrder),
+    setting(AppSettings::SubcommandRequiredElseHelp),
+    setting(AppSettings::UnifiedHelpMessage),
+    setting(AppSettings::VersionlessSubcommands),
+)]
+enum Command {
+    Setup(SetupSubcommand),
+    Sync(SyncSubcommand),
+    Key(KeySubcommand),
+    #[structopt(alias = "dir")]
+    Ls(LsSubcommand),
+    #[structopt(alias = "md")]
+    Mkdir(MkdirSubcommand),
+    #[structopt(alias = "rd")]
+    Rmdir(RmdirSubcommand),
+    #[structopt(alias = "type", alias = "dump")]
+    Cat(CatSubcommand),
+    Get(GetSubcommand),
+    Put(PutSubcommand),
+    #[structopt(alias = "del")]
+    Rm(RmSubcommand),
+    Server(ServerSubcommand),
+}
 
-    use clap::*;
+/// Perform key management operations.
+#[derive(StructOpt)]
+#[structopt(setting(AppSettings::SubcommandRequiredElseHelp))]
+enum KeySubcommand {
+    Init(KeyInitSubcommand),
+    Add(KeyAddSubcommand),
+    Change(KeyChangeSubcommand),
+    #[structopt(alias = "del")]
+    Rm(KeyRmSubcommand),
+    #[structopt(alias = "list")]
+    Ls(KeyLsSubcommand),
+    Group(KeyGroupSubcommand),
+}
 
-    use crate::cli::config::PassphraseConfig;
+/// Manage key groups.
+#[derive(StructOpt)]
+#[structopt(setting(AppSettings::SubcommandRequiredElseHelp))]
+enum KeyGroupSubcommand {
+    Create(KeyGroupCreateSubcommand),
+    Assoc(KeyGroupAssocSubcommand),
+    #[structopt(alias = "dissoc")]
+    Disassoc(KeyGroupDisassocSubcommand),
+    Destroy(KeyGroupDestroySubcommand),
+}
 
-    {
-        let mut args = env::args().fuse();
-        // If invoked as the login shell, go to a special server-only
-        // code-path.
-        if args.next().map_or(false, |arg0| arg0.starts_with("-")) {
-            return cli::cmd_server::shell();
-        }
-        // If the second argument is `-c`, assume we're being run as the shell
-        // by ssh.
-        if args.next().map_or(false, |arg1| "-c" == &arg1) {
-            return cli::cmd_server::shell();
-        }
-    }
-
-    let config_arg = Arg::with_name("config")
-        .help("Path to Ensync configuration and local data")
-        .required(true);
-    let old_key_arg = Arg::with_name("old-key")
-        .required(false)
-        .takes_value(true)
-        .short("o")
-        .long("old")
-        .help("Use this value instead of `passphrase` from \
-               the config to get the old passphrase. This \
-               argument is in the same format as the config, \
-               i.e., `prompt`, `file:/some/path`, etc.");
-    let alt_key_arg = Arg::with_name("key")
-        .required(false)
-        .takes_value(true)
-        .short("k")
-        .long("key")
-        .help("Use this value instead of `passphrase` from \
-               the config to get old passphrase. This \
-               argument is in the same format as the config, \
-               i.e., `prompt`, `file:/some/path`, etc.");
-    let from_key_arg = Arg::with_name("from-key")
-        .required(false)
-        .takes_value(true)
-        .short("f")
-        .long("from")
-        .help("Use this value instead of `passphrase` from \
-               the config to get the passphrase of the key which has the \
-               groups to be granted. This \
-               argument is in the same format as the config, \
-               i.e., `prompt`, `file:/some/path`, etc.");
-    let new_key_arg = Arg::with_name("new-key")
-        .required(false)
-        .takes_value(true)
-        .short("n")
-        .long("new")
-        .help("Specify how to get the new passphrase, like \
-               with the `passphrase` line in the config")
-        .default_value("prompt");
-    let to_key_arg = Arg::with_name("to-key")
-        .required(false)
-        .takes_value(true)
-        .short("t")
-        .long("to")
-        .help("Specify how to get the passphrase of the key to which \
-               the groups are to be granted, like \
-               with the `passphrase` line in the config")
-        .default_value("prompt");
-    let root_key_arg = Arg::with_name("root-key")
-        .required(false)
-        .takes_value(true)
-        .short("r")
-        .long("root")
-        .help("Specify how to get a passphrase in the `root` group if \
-               none of the operating keys are in that group")
-        .default_value("prompt");
-    let simple_verbose_arg = Arg::with_name("verbose")
-        .required(false)
-        .takes_value(false)
-        .short("v")
-        .help("Be verbose");
-
-    let matches = App::new("ensync")
-        .author(crate_authors!("\n"))
-        .about("Encrypted bidirectional file synchroniser")
-        .version(crate_version!())
-        .max_term_width(100)
-        .setting(AppSettings::DontCollapseArgsInUsage)
-        .setting(AppSettings::DeriveDisplayOrder)
-        .setting(AppSettings::SubcommandRequiredElseHelp)
-        .setting(AppSettings::UnifiedHelpMessage)
-        .setting(AppSettings::VersionlessSubcommands)
-        .subcommand(SubCommand::with_name("setup")
-                    .about("Wizard to set up simple ensync configurations")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("key")
-                         .required(false)
-                         .takes_value(true)
-                         .short("k")
-                         .long("key")
-                         .default_value("prompt")
-                         .help("\
-How to get the passphrase. Defaults to `prompt` to read it interactively. Use \
-`string:xxx` to use a fixed value, `file:/some/path` to read it from a file, \
-or `shell:some shell command` to use the output of a shell command."))
-                    .arg(Arg::with_name("local-path")
-                         .required(true)
-                         .help("Path in the local filesystem of files to be \
-                                synced. Must be an already existing \
-                                directory."))
-                    .arg(Arg::with_name("remote-path")
-                         .required(true)
-                         .help("Where to write encrypted data. This may be \
-                                a local path (e.g., `/path/to/files`) or an \
-                                scp-style argument (e.g., \
-                                `user@host:/path/to/files`)."))
-                    .after_help("\
+/// Wizard to set up simple ensync configurations.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 `ensync setup` is an interactive process to walk you through the initial \
 setup process and to generate a simple configuration automatically. It \
 is suitable for many use-cases and is the recommended way to get started.
@@ -206,118 +149,34 @@ Similarly, to instead back up to a server have hosted in a folder named \
 <local-path> must be a directory that already exists. <config> will be \
 created as a directory during the setup process and must not already \
 exist. The path in <remote-path> will be created if it does not already \
-exist."))
-        .subcommand(SubCommand::with_name("sync")
-                    .about("Sync files according to configuration")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("verbose")
-                         .short("v")
-                         .required(false)
-                         .multiple(true)
-                         .takes_value(false)
-                         .help("Be more verbose"))
-                    .arg(Arg::with_name("quiet")
-                         .short("q")
-                         .required(false)
-                         .multiple(true)
-                         .takes_value(false)
-                         .help("Be less verbose"))
-                    .arg(Arg::with_name("itemise")
-                         .long("itemise")
-                         .alias("itemize")
-                         .short("i")
-                         .required(false)
-                         .takes_value(false)
-                         .help("Output rsync-like itemisation to stdout"))
-                    .arg(Arg::with_name("itemise-unchanged")
-                         .long("itemise-unchanged")
-                         .alias("itemize-unchanged")
-                         .required(false)
-                         .takes_value(false)
-                         .help("With --itemise, also include unchanged items"))
-                    .arg(Arg::with_name("include-ancestors")
-                         .long("include-ancestors")
-                         .required(false)
-                         .takes_value(false)
-                         .help("Log happenings in the internal ancestor \
-                                replica as well"))
-                    .arg(Arg::with_name("threads")
-                         .long("threads")
-                         .required(false)
-                         .takes_value(true)
-                         .help("Specify the number of threads to use \
-                                [default: CPUs + 2]"))
-                    .arg(Arg::with_name("colour")
-                         .long("colour")
-                         .alias("color")
-                         .required(false)
-                         .takes_value(true)
-                         .default_value("auto")
-                         .possible_values(&["auto", "always", "never"])
-                         .help("Control colourisation of stderr log"))
-                    .arg(Arg::with_name("spin")
-                         .long("spin")
-                         .alias("spinner")
-                         .required(false)
-                         .takes_value(true)
-                         .default_value("auto")
-                         .possible_values(&["auto", "always", "never"])
-                         .help("Control whether the progress spinner \
-                                is shown"))
-                    .arg(Arg::with_name("dry-run")
-                         .short("n")
-                         .long("dry-run")
-                         .required(false)
-                         .takes_value(false)
-                         .help("Don't actually make any changes"))
-                    .arg(Arg::with_name("watch")
-                         .short("w")
-                         .long("watch")
-                         .required(false)
-                         .conflicts_with("dry-run")
-                         .takes_value(false)
-                         .help("When done syncing, continue running and \
-                                monitor for file changes and sync when \
-                                detected. Note that these syncs typically \
-                                happen 30 to 60 seconds after the file \
-                                changes. This requires extra resources \
-                                both locally and on the server."))
-                    .arg(Arg::with_name("strategy")
-                         .long("strategy")
-                         .required(false)
-                         .takes_value(true)
-                         .default_value("auto")
-                         .possible_values(&["fast", "clean", "scrub", "auto"])
-                         .help("Control what is checked for syncing. \"fast\" \
-                                means to only scan directories that have \
-                                obviously changed. \"clean\" causes all \
-                                directories to be scanned. \"scrub\" \
-                                additionally causes all cached hashes to be \
-                                purged (this will make the sync very slow)."))
-                    .arg(Arg::with_name("reconnect")
-                         .long("reconnect")
-                         .required(false)
-                         .takes_value(true)
-                         .requires("watch")
-                         .help("In conjunction with --watch, if an error \
-                                occurs, back off for the given number of \
-                                seconds, then attempt to restart the server \
-                                process and resume operations. If this flag \
-                                is given, `ensync sync` should not terminate \
-                                on its own."))
-                    .arg(Arg::with_name("override-mode")
-                         .long("override-mode")
-                         .required(false)
-                         .takes_value(true)
-                         .help("Ignore all sync rules in the configuration \
-                                sync all files with the given sync mode. \
-                                This is most useful in conjunction with \
-                                the `reset-server` and `reset-client` mode \
-                                aliases. If `--strategy` is `auto`, \
-                                implies `--strategy=clean`."))
-                    .after_help("\
+exist."))]
+struct SetupSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    /// How to get the passphrase. Defaults to `prompt` to read it
+    /// interactively. Use `string:xxx` to use a fixed value, `file:/some/path`
+    /// to read it from a file, or `shell:some shell command` to use the
+    /// output of a shell command.
+    #[structopt(short, long, default_value = "prompt")]
+    key: PassphraseConfig,
+
+    /// Path in the local filesystem of files to be synced. Must be an already
+    /// existing directory.
+    #[structopt(parse(from_os_str))]
+    local_path: PathBuf,
+
+    /// Wher to write encrypted data. This may be a local path (e.g.,
+    /// `/path/to/files`) or an scp-style argument (e.g.,
+    /// `user@host:/path/to/files`). For a remote host using ensync shell, use
+    /// `user@host:`.
+    #[structopt(parse(from_os_str))]
+    remote_path: PathBuf,
+}
+
+/// Sync files according to configuration.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 As one might expect, `ensync sync` is the main subcommand. When invoked, \
 `ensync sync` will scan for file changes and automatically propagate them \
 to and from the server according to the configuration.
@@ -346,38 +205,99 @@ positive:
 
 It is safe to interrupt the syncing process with Control-C. Interrupting the \
 process less gracefully (e.g., with `kill -9`) will not result in data loss, \
-but may leave stray temporary files or corrupt the cache."))
-        .subcommand(
-            SubCommand::with_name("key")
-            .setting(AppSettings::SubcommandRequiredElseHelp)
-            .about("Perform key management operations")
-            .max_term_width(100)
-            .subcommand(SubCommand::with_name("init")
-                        .about("Initialise the key store")
-                        .max_term_width(100)
-                        .setting(AppSettings::DontCollapseArgsInUsage)
-                        .arg(&config_arg)
-                        .arg(Arg::with_name("key-name")
-                             .help("Name for the first key in the key store")
-                             .required(false))
-                        .after_help("\
+but may leave stray temporary files or corrupt the cache."))]
+struct SyncSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    verbosity: VerbosityArgs,
+
+    /// Output rsync-like itemisation to stdout.
+    #[structopt(short, long, alias = "itemize")]
+    itemise: bool,
+
+    /// With `--itemise`, also include unchanged items.
+    #[structopt(long, alias = "itemize-unchanged")]
+    itemise_unchanged: bool,
+
+    /// Log happenings in the internal ancestor replica.
+    #[structopt(long)]
+    include_ancestors: bool,
+
+    /// Specify the number of threads to use [default: CPUs + 2]
+    #[structopt(long)]
+    threads: Option<u32>,
+
+    /// Control colourisation of stderr.
+    #[structopt(long, alias = "color", default_value = "auto",
+                possible_values = &["auto", "always", "never"])]
+    colour: String,
+
+    /// Control whether the progress spinner is shown.
+    #[structopt(long, alias = "spinner", default_value = "auto",
+                possible_values = &["auto", "always", "never"])]
+    spin: String,
+
+    /// Don't actually make any changes.
+    #[structopt(short = "n", long)]
+    dry_run: bool,
+
+    /// When done syncing, continue running and monitor for file changes and
+    /// resync when detected. Syncs happen a short time after the changes occur
+    /// to give the system time to reach quiescence. This requires extra
+    /// resources both locally and on the server.
+    #[structopt(short, long, conflicts_with = "dry_run")]
+    watch: bool,
+
+    /// In conjunction with `--watch`, if an error occurs, back off for the
+    /// given number of seconds, then attempt to restart the server process and
+    /// resume operations. If this flag is given, `ensync sync` should not
+    /// terminate on its own.
+    #[structopt(long, requires = "watch")]
+    reconnect: Option<u64>,
+
+    /// Control what is checked for syncing. "fast" means to only scan
+    /// directories that have obviously changed. "clean" causes all directories
+    /// to be scanned. "scrub" additionally causes all cached hashes to be
+    /// purged, which will make syncing quite slow but can be used to recover
+    /// from a corrupted cache or changes to the local filesystem that were not
+    /// reflected in its metadata.
+    #[structopt(long, default_value = "auto",
+                possible_values = &["fast", "clean", "scrub", "auto"])]
+    strategy: String,
+
+    /// Ignore all sync rules in the configuration and sync all files with the
+    /// given sync mode. This is most useful in conjunction with the
+    /// `reset-server` and `reset-client` mode aliases. If `--strategy` is also
+    /// `auto`, implies `--strategy=clean`.
+    #[structopt(long)]
+    override_mode: Option<SyncMode>,
+}
+
+/// Initialise the key store.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 This command is used to initialise the key store in the server. It generates \
 a new internal key set and associates one user key withthem, corresponding \
 to the passphrase defined in the configuration. You should specify the key \
-name if you plan on using multiple keys.This cannot be used after the key \
-store hasbeen initialised; see `key add` for that instead."))
-            .subcommand(SubCommand::with_name("add")
-                        .about("Add a new key to the key store")
-                        .max_term_width(100)
-                        .setting(AppSettings::DontCollapseArgsInUsage)
-                        .arg(&config_arg)
-                        .arg(&old_key_arg)
-                        .arg(&new_key_arg)
-                        .arg(&root_key_arg)
-                        .arg(Arg::with_name("key-name")
-                             .required(true)
-                             .help("The name of the key to add"))
-                        .after_help("\
+name if you plan on using multiple keys. This cannot be used after the key \
+store has been initialised; see `key add` for that instead."))]
+struct KeyInitSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    /// Name for the first key in the key store.
+    #[structopt(long, default_value = "initial-key")]
+    key_name: String,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Add a new key to the key store.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 This command creates a new key / passphrase in the key store. This is used to \
 have different clients use different credentials to access the store. \
 Multiple keys can also be used in conjunction with key groups to restrict \
@@ -396,27 +316,28 @@ Since this operation modifies the key store, a key in the `root` group is \
 required. If the existing key is in the `root` group, it will be used to \
 do this implicitly. Otherwise, a separate key will need to be provided. \
 By default, this prompts the terminal, but the `--root` argument can be \
-used to use other passphrase methods."))
-            .subcommand(SubCommand::with_name("change")
-                        .about("Change a key in the key store")
-                        .max_term_width(100)
-                        .setting(AppSettings::DontCollapseArgsInUsage)
-                        .arg(&config_arg)
-                        .arg(&old_key_arg)
-                        .arg(&new_key_arg)
-                        .arg(&root_key_arg)
-                        .arg(Arg::with_name("key-name")
-                             .required(false)
-                             .help("The name of the key to edit"))
-                        .arg(Arg::with_name("force")
-                             .long("force")
-                             .short("f")
-                             .takes_value(false)
-                             .required(false)
-                             .help("Change <key-name> even if the old \
-                                    passphrase does not correspond to \
-                                    that key"))
-                        .after_help("\
+used to use other passphrase methods."))]
+struct KeyAddSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    old: OldKeyArg,
+    #[structopt(flatten)]
+    new: NewKeyArg,
+    #[structopt(flatten)]
+    root: RootKeyArg,
+
+    /// The name of the key to add.
+    key_name: String,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Change a key in the key store.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 This command changes the passphrase used to access a key in the key store.
 
 This requires an existing key and the new passphrase. By default, the \
@@ -441,18 +362,33 @@ used to use other passphrase methods.
 
 This command does *not* change the internal keys used for encryption. Doing \
 so would require rebuilding the entire server store. If doing this really is \
-desired, there is some information on how to do this in the documentation."))
-            .subcommand(SubCommand::with_name("rm")
-                        .alias("del")
-                        .about("Delete a key from the key store")
-                        .max_term_width(100)
-                        .setting(AppSettings::DontCollapseArgsInUsage)
-                        .arg(&config_arg)
-                        .arg(&root_key_arg)
-                        .arg(Arg::with_name("key-name")
-                             .required(true)
-                             .help("The name of the key to delete"))
-                        .after_help("\
+desired, there is some information on how to do this in the documentation."))]
+struct KeyChangeSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    old: OldKeyArg,
+    #[structopt(flatten)]
+    new: NewKeyArg,
+    #[structopt(flatten)]
+    root: RootKeyArg,
+
+    /// The name of the key to edit.
+    key_name: Option<String>,
+
+    /// Change `key-name` even if the old passphrase does not correspond to
+    /// that key.
+    #[structopt(short, long)]
+    force: bool,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Delete a key from the key store.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 This command deletes the named key from the key store.
 
 It is not legal to delete the last key from the key store. A key also may not \
@@ -463,31 +399,34 @@ Since this operation modifies the key store, a key in the `root` group is \
 required. By default, this prompts the terminal, but the `--root` argument \
 can be used to use other passphrase methods. Note that you cannot use the \
 passphrase of the key being deleted for this, even if that key is in the \
-`root` group."))
-            .subcommand(SubCommand::with_name("ls")
-                        .alias("list")
-                        .about("List the keys in the key store")
-                        .max_term_width(100)
-                        .setting(AppSettings::DontCollapseArgsInUsage)
-                        .arg(&config_arg))
-            .subcommand(
-                SubCommand::with_name("group")
-                .setting(AppSettings::SubcommandRequiredElseHelp)
-                .about("Manage key groups")
-                .max_term_width(100)
-                .subcommand(SubCommand::with_name("create")
-                            .max_term_width(100)
-                            .setting(AppSettings::DontCollapseArgsInUsage)
-                            .about("Create key group(s)")
-                            .arg(&config_arg)
-                            .arg(&alt_key_arg)
-                            .arg(&root_key_arg)
-                            .arg(Arg::with_name("group")
-                                 .required(true)
-                                 .multiple(true)
-                                 .help("The name(s) of the \
-                                        group(s) to create"))
-                            .after_help("\
+`root` group."))]
+struct KeyRmSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    root: RootKeyArg,
+
+    /// The name of the key to delete.
+    key_name: String,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// List the keys in the key store.
+#[derive(StructOpt)]
+struct KeyLsSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Create key group(s).
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Creates one or more key groups. All groups will initially be granted \
 to the key that was derived from the passphrase.
 
@@ -498,20 +437,27 @@ Since this operation modifies the key store, a key in the `root` group is \
 required. If the existing key is in the `root` group, it will be used to \
 do this implicitly. Otherwise, a separate key will need to be provided. \
 By default, this prompts the terminal, but the `--root` argument can be \
-used to use other passphrase methods."))
-                .subcommand(SubCommand::with_name("assoc")
-                            .max_term_width(100)
-                            .setting(AppSettings::DontCollapseArgsInUsage)
-                            .about("Associate a key with key group(s)")
-                            .arg(&config_arg)
-                            .arg(&from_key_arg)
-                            .arg(&to_key_arg)
-                            .arg(&root_key_arg)
-                            .arg(Arg::with_name("group")
-                                 .required(true)
-                                 .multiple(true)
-                                 .help("The name(s) of the group(s) to grant"))
-                            .after_help("\
+used to use other passphrase methods."))]
+struct KeyGroupCreateSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    alt: AltKeyArg,
+    #[structopt(flatten)]
+    root: RootKeyArg,
+
+    /// The name(s) of the group(s) to create.
+    #[structopt(required = true)]
+    group: Vec<String>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Associate a key with key group(s).
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Associates one or more key groups to a key, granting clients using that key \
 access to resources protected by that key group.
 
@@ -526,24 +472,29 @@ Since this operation modifies the key store, a key in the `root` group is \
 required. If either of the above keys are in the `root` group, it will be \
 used to do this implicitly. Otherwise, a separate key will need to be \
 provided. By default, this prompts the terminal, but the `--root` argument \
-can be used to use other passphrase methods."))
-                .subcommand(SubCommand::with_name("disassoc")
-                            .alias("dissoc")
-                            .max_term_width(100)
-                            .setting(AppSettings::DontCollapseArgsInUsage)
-                            .about("Disassociate a key from key group(s)")
-                            .arg(&config_arg)
-                            .arg(&root_key_arg)
-                            .arg(Arg::with_name("key")
-                                 .required(true)
-                                 .help("The key from which to remove the \
-                                        listed group(s)"))
-                            .arg(Arg::with_name("group")
-                                 .required(true)
-                                 .multiple(true)
-                                 .help("The name(s) of the group(s) to \
-                                        remove"))
-                            .after_help("\
+can be used to use other passphrase methods."))]
+struct KeyGroupAssocSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    root: RootKeyArg,
+    #[structopt(flatten)]
+    from: FromKeyArg,
+    #[structopt(flatten)]
+    to: ToKeyArg,
+
+    /// The name(s) of the group(s) to grant.
+    #[structopt(required = true)]
+    group: Vec<String>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Disassociate a key from key group(s).
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Disassociates one or more key groups from a key identified by name, \
 essentially undoing the effect of `key group assoc`.
 
@@ -561,25 +512,28 @@ Cryptographically speaking, this is not a very strong operation, since the \
 internal key behind the key group is unchanged. That is, if the key store \
 was leaked before this operation, an attacker which knows the passphrase \
 for the key can still derive the internal key of the key group and use it \
-even after this operation has been performed."))
-                .subcommand(SubCommand::with_name("destroy")
-                            .max_term_width(100)
-                            .setting(AppSettings::DontCollapseArgsInUsage)
-                            .about("Destroy key group(s)")
-                            .arg(&config_arg)
-                            .arg(&root_key_arg)
-                            .arg(Arg::with_name("yes")
-                                 .required(false)
-                                 .takes_value(false)
-                                 .short("y")
-                                 .long("yes")
-                                 .help("Don't prompt for confirmation"))
-                            .arg(Arg::with_name("group")
-                                 .required(true)
-                                 .multiple(true)
-                                 .help("The name(s) of the group(s) to \
-                                        destroy"))
-                            .after_help("\
+even after this operation has been performed."))]
+struct KeyGroupDisassocSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    root: RootKeyArg,
+
+    /// The key from which to remove the listed group(s).
+    key: String,
+
+    /// The name(s) of the group(s) to remove.
+    #[structopt(required = true)]
+    group: Vec<String>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Destroy key group(s).
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Destroys the listed groups, implicitly disassociating them from any and all \
 keys.
 
@@ -590,46 +544,53 @@ protected by the destroyed key groups irrecoverable.
 
 Since this operation modifies the key store, a key in the `root` group is \
 required. By default, this prompts the terminal, but the `--root` argument \
-can be used to use other passphrase methods."))))
-        .subcommand(SubCommand::with_name("ls")
-                    .alias("dir")
-                    .about("List directory contents on server")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("path")
-                         .multiple(true)
-                         .required(true)
-                         .help("The path(s) to list"))
-                    .arg(Arg::with_name("human-readable")
-                         .required(false)
-                         .takes_value(false)
-                         .short("h")
-                         .help("Display sizes in human-readable format"))
-                    .after_help("\
+can be used to use other passphrase methods."))]
+struct KeyGroupDestroySubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    root: RootKeyArg,
+
+    /// Don't prompt for confirmation.
+    #[structopt(short, long)]
+    yes: bool,
+
+    /// The name(s) of the group(s) to destroy.
+    #[structopt(required = true)]
+    group: Vec<String>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// List directory contents on the server.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Lists the content of each given directory (or individual file) on the server.
 
 If <path> does not start with `/`, it is relative to the `server_root` value \
 in the configuration. Otherwise, it starts from the physical root of the \
-server."))
-        .subcommand(SubCommand::with_name("mkdir")
-                    .alias("md")
-                    .about("Directly create a directory on the server")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("mode")
-                         .long("mode")
-                         .short("m")
-                         .takes_value(true)
-                         .required(false)
-                         .default_value("0700")
-                         .help("UNIX permissions for the new directory"))
-                    .arg(Arg::with_name("path")
-                         .multiple(true)
-                         .required(true)
-                         .help("The path(s) to create"))
-                    .after_help("\
+server."))]
+struct LsSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    /// Display sizes in human-readable format.
+    #[structopt(short, long)]
+    human_readable: bool,
+
+    /// The path(s) to list.
+    #[structopt(required = true, parse(from_os_str))]
+    path: Vec<PathBuf>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Directly create directories on the server.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Creates a directory entry on the server.
 
 If <path> does not start with `/`, it is relative to `server_root` value \
@@ -643,63 +604,69 @@ the below would be used to create the `myroot` logical root (i.e., \
         ensync mkdir /path/to/config /myroot
 
 The UNIX permissions do not control access to content on the server; they \
-are only used when a server directory is propagated to the local filesystem."))
-        .subcommand(SubCommand::with_name("rmdir")
-                    .alias("rd")
-                    .about("Remove an empty directory on the server")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("path")
-                         .multiple(true)
-                         .required(true)
-                         .help("The path(s) to remove"))
-                    .after_help("\
+are only used when a server directory is propagated to the local filesystem."))]
+struct MkdirSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    /// UNIX permissions for the new directory.
+    #[structopt(short, long, default_value = "0700")]
+    mode: String,
+
+    /// The path(s) to create.
+    #[structopt(required = true, parse(from_os_str))]
+    path: Vec<PathBuf>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Remove empty directories on the server.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Removes the listed directory(ies), which must be empty. To remove non-empty \
 directories, use `rm` with the `-r` flag.
 
 If <path> does not start with `/`, it is relative to `server_root` value \
 in the configuration. Otherwise, it starts from the physical root of the \
-server."))
-        .subcommand(SubCommand::with_name("cat")
-                    .alias("type")
-                    .alias("dump")
-                    .about("Dump file contents to standard output")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("path")
-                         .multiple(true)
-                         .required(true)
-                         .help("The path(s) to dump"))
-                    .after_help("\
+server."))]
+struct RmdirSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    /// The path(s) to remove.
+    #[structopt(required = true, parse(from_os_str))]
+    path: Vec<PathBuf>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Dump file contents to standard output.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Dumps the raw content of all listed files to standard output, without any \
 other information. Every path must be a regular file (symlinks are not \
 permitted).
 
 If <path> does not start with `/`, it is relative to `server_root` value \
 in the configuration. Otherwise, it starts from the physical root of the \
-server."))
-        .subcommand(SubCommand::with_name("get")
-                    .about("Directly fetch files from server")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("src")
-                         .required(true)
-                         .help("Path of the file to fetch from the server"))
-                    .arg(Arg::with_name("dst")
-                         .required(false)
-                         .default_value(".")
-                         .help("Location to which to copy the files"))
-                    .arg(Arg::with_name("force")
-                         .required(false)
-                         .takes_value(false)
-                         .short("f")
-                         .long("force")
-                         .help("Allow overwriting existing files"))
-                    .arg(&simple_verbose_arg)
-                    .after_help("\
+server."))]
+struct CatSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    /// The path(s) to dump.
+    #[structopt(required = true, parse(from_os_str))]
+    path: Vec<PathBuf>,
+
+    #[structopt(skip)]
+    verbosity: NonVerbose,
+}
+
+/// Directly fetch files from the server.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Fetches the named file or directory tree from the server, copying it to the \
 local filesystem.
 
@@ -708,29 +675,30 @@ recursively with attributes, and doesn't treat symlinks specially.
 
 If <src> does not start with `/`, it is relative to `server_root` value \
 in the configuration. Otherwise, it starts from the physical root of the \
-server."))
-        .subcommand(SubCommand::with_name("put")
-                    .about("Directly upload files to server")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("src")
-                         .required(true)
-                         .help("Path of the file to upload to the server"))
-                    .arg(Arg::with_name("dst")
-                         .required(false)
-                         .help("Path on the server to which to upload \
-                                the file. If omitted, upload to a file \
-                                of the same name in the logical root \
-                                named in the configuration."))
-                    .arg(Arg::with_name("force")
-                         .required(false)
-                         .takes_value(false)
-                         .short("f")
-                         .long("force")
-                         .help("Allow overwriting existing files"))
-                    .arg(&simple_verbose_arg)
-                    .after_help("\
+server."))]
+struct GetSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    verbosity: VerbosityArgs,
+
+    /// Allow overwriting existing files.
+    #[structopt(short, long)]
+    force: bool,
+
+    /// Path of the file or directory to fetch from the server.
+    #[structopt(parse(from_os_str))]
+    src: PathBuf,
+
+    /// Location to which to copy the files.
+    #[structopt(parse(from_os_str), default_value = ".")]
+    dst: PathBuf,
+}
+
+/// Directly upload files to the server.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Copies/uploads the named file or directory from the local filesystem to the \
 server.
 
@@ -739,26 +707,33 @@ recursively with attributes, and doesn't treat symlinks specially.
 
 If <dst> does not start with `/`, it is relative to `server_root` value \
 in the configuration. Otherwise, it starts from the physical root of the \
-server."))
-        .subcommand(SubCommand::with_name("rm")
-                    .alias("del")
-                    .about("Directly delete files or directory trees \
-                            on the server")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(&config_arg)
-                    .arg(Arg::with_name("path")
-                         .required(true)
-                         .multiple(true)
-                         .help("The path(s) to delete"))
-                    .arg(Arg::with_name("recursive")
-                         .required(false)
-                         .takes_value(false)
-                         .short("r")
-                         .long("recursive")
-                         .help("Delete directories recursively"))
-                    .arg(&simple_verbose_arg)
-                    .after_help("\
+server."))]
+struct PutSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    verbosity: VerbosityArgs,
+
+    /// Allow overwriting existing files.
+    #[structopt(short, long)]
+    force: bool,
+
+    /// Path of the file or directory to upload to the server.
+    #[structopt(parse(from_os_str))]
+    src: PathBuf,
+
+    /// Path on the server to which to upload the file.
+    ///
+    /// If omitted, upload to a file of the same name in the logical root named
+    /// in the configuration.
+    #[structopt(parse(from_os_str))]
+    dst: Option<PathBuf>,
+}
+
+/// Directly delete files or directory trees on the server.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Deletes the named file(s) from the server.
 
 Like `rm`, this does not remove directories by default. `ensync rmdir` can be \
@@ -773,15 +748,26 @@ The main use for this command is to remove unwanted logical roots. For \
 example, if you had a `myroot` logical root you no longer wanted, you could \
 remove it with
 
-        ensync rm -r /path/to/config /myroot"))
-        .subcommand(SubCommand::with_name("server")
-                    .about("Run the server-side component")
-                    .max_term_width(100)
-                    .setting(AppSettings::DontCollapseArgsInUsage)
-                    .arg(Arg::with_name("path")
-                         .help("Path to server-side storage")
-                         .required(true))
-                    .after_help("\
+        ensync rm -r /path/to/config /myroot"))]
+struct RmSubcommand {
+    #[structopt(flatten)]
+    config: ConfigArg,
+
+    #[structopt(flatten)]
+    verbosity: VerbosityArgs,
+
+    /// Delete directories recursively.
+    #[structopt(short, long)]
+    recursive: bool,
+
+    /// The path(s) to delete.
+    #[structopt(required = true, parse(from_os_str))]
+    path: Vec<PathBuf>,
+}
+
+/// Run the server-side component.
+#[derive(StructOpt)]
+#[structopt(after_help("\
 Runs the server-side component, for use in `shell:...` `server` \
 configurations.
 
@@ -798,251 +784,327 @@ communicate with the client ensync process.
 
 Also note that this is not some kind of daemon server process. It \
 handles exactly one client, the one connected on its standard input/output \
-pipe."))
-        .get_matches();
+pipe."))]
+struct ServerSubcommand {
+    /// Path to server-side storage.
+    #[structopt(parse(from_os_str))]
+    path: PathBuf,
+}
 
-    fn create_storage(matches: &ArgMatches, config: &cli::config::Config)
+#[derive(StructOpt)]
+struct ConfigArg {
+    /// Path to ensync configuration and local data.
+    #[structopt(parse(from_os_str))]
+    config: PathBuf,
+}
+
+#[derive(StructOpt)]
+struct VerbosityArgs {
+    /// Be more verbose.
+    #[structopt(short, parse(from_occurrences))]
+    verbose: i32,
+    /// Be less verbose.
+    #[structopt(short, parse(from_occurrences))]
+    quiet: i32,
+}
+
+impl VerbosityArgs {
+    fn is_verbose(&self) -> bool {
+        self.verbose > self.quiet
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct NonVerbose;
+impl NonVerbose {
+    fn is_verbose(&self) -> bool {
+        false
+    }
+}
+
+#[derive(StructOpt)]
+struct OldKeyArg {
+    /// Use this value instead of `passphrase` from the config to get the old
+    /// passphrase. This argument is in the same format as the config. e.g.,
+    /// `prompt` or `file:/some/path`.
+    #[structopt(short, long)]
+    old: Option<PassphraseConfig>,
+}
+
+#[derive(StructOpt)]
+struct NewKeyArg {
+    /// Use this value instead of `passphrase` from the config to get the new
+    /// passphrase. This argument is in the same format as the config. e.g.,
+    /// `prompt` or `file:/some/path`.
+    #[structopt(short, long, default_value = "prompt")]
+    new: PassphraseConfig,
+}
+
+#[derive(StructOpt)]
+struct AltKeyArg {
+    /// Use this value instead of `passphrase` from the config to get the
+    /// primary passphrase. This argument is in the same format as the config.
+    /// e.g., `prompt` or `file:/some/path`.
+    #[structopt(short, long)]
+    key: Option<PassphraseConfig>,
+}
+
+#[derive(StructOpt)]
+struct FromKeyArg {
+    /// Use this value instead of `passphrase` from the config to get the
+    /// passphrase of the key which has the groups to be granted. This argument
+    /// is in the same format as the config. e.g., `prompt` or
+    /// `file:/some/path`.
+    #[structopt(short, long)]
+    from: Option<PassphraseConfig>,
+}
+
+#[derive(StructOpt)]
+struct ToKeyArg {
+    /// Use this value instead of `passphrase` from the config to get the
+    /// passphrase of the key which shall receive the groups to be granted.
+    /// This argument is in the same format as the config. e.g., `prompt` or
+    /// `file:/some/path`.
+    #[structopt(short, long, default_value = "prompt")]
+    to: PassphraseConfig,
+}
+
+#[derive(StructOpt)]
+struct RootKeyArg {
+    /// Specify how to get a passphrase in the `root` group if none of the
+    /// operating keys are in that group.
+    #[structopt(short, long, default_value = "prompt")]
+    root: PassphraseConfig,
+}
+
+fn main_impl() -> Result<()> {
+    use std::env;
+    use std::fs;
+
+    {
+        let mut args = env::args().fuse();
+        // If invoked as the login shell, go to a special server-only
+        // code-path.
+        if args.next().map_or(false, |arg0| arg0.starts_with("-")) {
+            return cli::cmd_server::shell();
+        }
+        // If the second argument is `-c`, assume we're being run as the shell
+        // by ssh.
+        if args.next().map_or(false, |arg1| "-c" == &arg1) {
+            return cli::cmd_server::shell();
+        }
+    }
+
+    fn create_storage(verbose: bool, config: &cli::config::Config)
                       -> errors::Result<std::sync::Arc<dyn server::Storage>> {
         let storage = cli::open_server::open_server_storage(
-            &config.server,
-            matches.occurrences_of("quiet") <=
-                matches.occurrences_of("verbose"))?;
+            &config.server, verbose)?;
         fs::create_dir_all(&config.private_root).chain_err(
             || format!("Failed to create ensync private directory '{}'",
                        config.private_root.display()))?;
         Ok(storage)
     }
 
+    let command = Command::from_args();
+
     macro_rules! set_up {
-        ($matches:ident, $config:ident) => {
-            let $config = cli::config::Config::read(
-                $matches.value_of("config").unwrap())
+        ($sc:ident, $config:ident) => {
+            let $config = cli::config::Config::read(&$sc.config.config)
                 .chain_err(|| "Could not read configuration")?;
         };
 
-        ($matches:ident, $config:ident, $storage:ident) => {
-            set_up!($matches, $config);
-            let $storage = create_storage(&$matches, &$config)?;
+        ($sc:ident, $config:ident, $storage:ident) => {
+            set_up!($sc, $config);
+            let $storage = create_storage($sc.verbosity.is_verbose(), &$config)?;
         };
 
-        ($matches:ident, $config:ident, $storage:ident, $replica:ident) => {
-            set_up!($matches, $config, $storage);
+        ($sc:ident, $config:ident, $storage:ident, $replica:ident) => {
+            set_up!($sc, $config, $storage);
             let $replica = cli::open_server::open_server_replica(
                 &$config, $storage.clone(), None)?;
         };
     }
 
     macro_rules! passphrase_or_config {
-        ($matches:expr, $config:expr, $key:expr) => {
-            if let Some(c) = $matches.value_of($key) {
-                c.parse::<PassphraseConfig>()?
+        ($v:expr, $config:expr) => {
+            if let Some(ref c) = $v {
+                c.to_owned()
             } else {
                 $config.passphrase.clone()
             }
         };
     }
-    macro_rules! passphrase_or_prompt {
-        ($matches:expr, $key:expr) => {
-            if let Some(c) = $matches.value_of($key) {
-                c.parse::<PassphraseConfig>()?
-            } else {
-                PassphraseConfig::Prompt
-            }
-        };
-    }
 
-    if let Some(matches) = matches.subcommand_matches("server") {
-        cli::cmd_server::run(matches.value_of("path").unwrap())
-    } else if let Some(matches) = matches.subcommand_matches("key") {
-        if let Some(matches) = matches.subcommand_matches("init") {
-            set_up!(matches, config, storage);
-            cli::cmd_keymgmt::init_keys(&config, &*storage,
-                                        matches.value_of("key-name"))
-        } else if let Some(matches) = matches.subcommand_matches("add") {
-            set_up!(matches, config, storage);
-            let old = passphrase_or_config!(matches, config, "old-key");
-            let new = passphrase_or_prompt!(matches, "new-key");
-            let root = passphrase_or_prompt!(matches, "root-key");
-            cli::cmd_keymgmt::add_key(&*storage, &old, &new, &root,
-                                      matches.value_of("key-name").unwrap())
-        } else if let Some(matches) = matches.subcommand_matches("ls") {
-            set_up!(matches, config, storage);
+    match command {
+        Command::Server(sc) => cli::cmd_server::run(sc.path),
+
+        Command::Key(KeySubcommand::Init(sc)) => {
+            set_up!(sc, config, storage);
+            cli::cmd_keymgmt::init_keys(
+                &config, &*storage, &sc.key_name)
+        },
+
+        Command::Key(KeySubcommand::Add(sc)) => {
+            set_up!(sc, config, storage);
+            let old = passphrase_or_config!(sc.old.old, config);
+            cli::cmd_keymgmt::add_key(
+                &*storage, &old, &sc.new.new, &sc.root.root, &sc.key_name)
+        },
+
+        Command::Key(KeySubcommand::Ls(sc)) => {
+            set_up!(sc, config, storage);
             cli::cmd_keymgmt::list_keys(&*storage)
-        } else if let Some(matches) = matches.subcommand_matches("change") {
-            set_up!(matches, config, storage);
-            let old = passphrase_or_config!(matches, config, "old-key");
-            let new = passphrase_or_prompt!(matches, "new-key");
-            let root = passphrase_or_prompt!(matches, "root-key");
-            cli::cmd_keymgmt::change_key(&config, &*storage, &old, &new, &root,
-                                         matches.value_of("key-name"),
-                                         matches.is_present("force"))
-        } else if let Some(matches) = matches.subcommand_matches("rm") {
-            set_up!(matches, config, storage);
-            let root = passphrase_or_prompt!(matches, "root-key");
-            cli::cmd_keymgmt::del_key(
-                &*storage, matches.value_of("key-name").unwrap(), &root)
-        } else if let Some(matches) = matches.subcommand_matches("group") {
-            if let Some(matches) = matches.subcommand_matches("create") {
-                set_up!(matches, config, storage);
-                let key = passphrase_or_config!(matches, config, "key");
-                let root = passphrase_or_prompt!(matches, "root-key");
-                cli::cmd_keymgmt::create_group(
-                    &*storage, &key, &root, matches.values_of("group").unwrap())
-            } else if let Some(matches) = matches.subcommand_matches("assoc") {
-                set_up!(matches, config, storage);
-                let from = passphrase_or_config!(matches, config, "from-key");
-                let to = passphrase_or_prompt!(matches, "to-key");
-                let root = passphrase_or_prompt!(matches, "root-key");
-                cli::cmd_keymgmt::assoc_group(
-                    &*storage, &from, &to, &root,
-                    matches.values_of("group").unwrap())
-            } else if let Some(matches) = matches.subcommand_matches(
-                "disassoc")
-            {
-                set_up!(matches, config, storage);
-                let root = passphrase_or_prompt!(matches, "root-key");
+        },
+
+        Command::Key(KeySubcommand::Change(sc)) => {
+            set_up!(sc, config, storage);
+            let old = passphrase_or_config!(sc.old.old, config);
+            cli::cmd_keymgmt::change_key(
+                &config, &*storage, &old, &sc.new.new, &sc.root.root,
+                sc.key_name.as_deref(), sc.force)
+        },
+
+        Command::Key(KeySubcommand::Rm(sc)) => {
+            set_up!(sc, config, storage);
+            cli::cmd_keymgmt::del_key(&*storage, &sc.key_name, &sc.root.root)
+        },
+
+        Command::Key(KeySubcommand::Group(KeyGroupSubcommand::Create(sc))) => {
+            set_up!(sc, config, storage);
+            let key = passphrase_or_config!(sc.alt.key, config);
+            cli::cmd_keymgmt::create_group(
+                &*storage, &key, &sc.root.root, sc.group.into_iter())
+        },
+
+        Command::Key(KeySubcommand::Group(KeyGroupSubcommand::Assoc(sc))) => {
+            set_up!(sc, config, storage);
+            let from = passphrase_or_config!(sc.from.from, config);
+            cli::cmd_keymgmt::assoc_group(
+                &*storage, &from, &sc.to.to, &sc.root.root, sc.group.into_iter())
+        },
+
+        Command::Key(KeySubcommand::Group(KeyGroupSubcommand::Disassoc(sc))) => {
+                set_up!(sc, config, storage);
                 cli::cmd_keymgmt::disassoc_group(
-                    &*storage, matches.value_of("key").unwrap(), &root,
-                    matches.values_of("group").unwrap())
-            } else if let Some(matches) = matches.subcommand_matches(
-                "destroy")
-            {
-                set_up!(matches, config, storage);
-                let root = passphrase_or_prompt!(matches, "root-key");
-                cli::cmd_keymgmt::destroy_group(
-                    &*storage, matches.is_present("yes"), &root,
-                    matches.values_of("group").unwrap())
-            } else {
-                panic!("Unhandled `key group` subcommand: {}",
-                       matches.subcommand_name().unwrap());
-            }
-        } else {
-            panic!("Unhandled `key` subcommand: {}",
-                   matches.subcommand_name().unwrap());
-        }
-    } else if let Some(matches) = matches.subcommand_matches("setup") {
-        let passphrase = passphrase_or_prompt!(matches, "key");
-        cli::cmd_setup::run(&passphrase,
-                            matches.value_of("config").unwrap(),
-                            matches.value_of("local-path").unwrap(),
-                            matches.value_of("remote-path").unwrap())
-    } else if let Some(matches) = matches.subcommand_matches("sync") {
-        set_up!(matches, config);
+                    &*storage, &sc.key, &sc.root.root, sc.group.into_iter())
+        },
 
-        let num_threads = if let Some(threads) = matches.value_of("threads") {
-            let nt = threads.parse::<u32>().chain_err(
-                || format!("Value '{}' for --threads is not an integer",
-                           threads))?;
+        Command::Key(KeySubcommand::Group(KeyGroupSubcommand::Destroy(sc))) => {
+            set_up!(sc, config, storage);
+            cli::cmd_keymgmt::destroy_group(
+                &*storage, sc.yes, &sc.root.root, sc.group.into_iter())
+        },
 
-            if nt < 1 {
+        Command::Setup(sc) => {
+            cli::cmd_setup::run(
+                &sc.key,
+                sc.config.config,
+                sc.local_path,
+                sc.remote_path,
+            )
+        },
+
+        Command::Sync(sc) => {
+            set_up!(sc, config);
+
+            let num_threads = sc.threads.unwrap_or_else(
+                || num_cpus::get() as u32 + 2);
+            if 0 == num_threads {
                 return Err("Thread count must be at least 1".into());
             }
 
-            nt
-        } else {
-            num_cpus::get() as u32 + 2
-        };
+            fn do_run(sc: &SyncSubcommand, config: &cli::config::Config,
+                      num_threads: u32,
+                      key_chain: &mut Option<std::sync::Arc<server::KeyChain>>)
+                      -> errors::Result<()> {
+                let storage = create_storage(sc.verbosity.is_verbose(), config)?;
 
-        let reconnect = if let Some(reconnect) = matches.value_of("reconnect") {
-            let seconds = reconnect.parse::<u64>().chain_err(
-                || format!("Value '{}' for --reconnect is not an integer",
-                           reconnect))?;
-            Some(seconds)
-        } else {
-            None
-        };
-
-        let override_mode = {
-            if let Some(mode) = matches.value_of("override-mode") {
-                Some(mode.parse::<rules::SyncMode>().chain_err(
-                    || format!("Value '{}' for --override-mode is invalid",
-                               mode))?)
-            } else {
-                None
+                cli::cmd_sync::run(
+                    config,
+                    storage,
+                    sc.verbosity.verbose,
+                    sc.verbosity.quiet,
+                    sc.itemise,
+                    sc.itemise_unchanged,
+                    &sc.colour,
+                    &sc.spin,
+                    sc.include_ancestors,
+                    sc.dry_run,
+                    sc.watch,
+                    num_threads,
+                    &sc.strategy,
+                    sc.override_mode,
+                    key_chain,
+                )
             }
-        };
 
-        fn do_run(matches: &ArgMatches, config: &cli::config::Config,
-                  num_threads: u32, override_mode: Option<rules::SyncMode>,
-                  key_chain: &mut Option<std::sync::Arc<server::KeyChain>>)
-                  -> errors::Result<()> {
-            let storage = create_storage(matches, config)?;
+            let mut key_chain = None;
 
-            cli::cmd_sync::run(config, storage,
-                               matches.occurrences_of("verbose") as i32,
-                               matches.occurrences_of("quiet") as i32,
-                               matches.is_present("itemise"),
-                               matches.is_present("itemise-unchanged"),
-                               matches.value_of("colour").unwrap(),
-                               matches.value_of("spin").unwrap(),
-                               matches.is_present("include-ancestors"),
-                               matches.is_present("dry-run"),
-                               matches.is_present("watch"),
-                               num_threads,
-                               matches.value_of("strategy").unwrap(),
-                               override_mode,
-                               key_chain)
-        }
+            loop {
+                use std::io::{stderr, Write};
 
-        let mut key_chain = None;
+                match do_run(&sc, &config, num_threads, &mut key_chain) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => if let Some(seconds) = sc.reconnect {
+                        interrupt::clear_notify();
 
-        loop {
-            use std::io::{stderr, Write};
-
-            match do_run(&matches, &config, num_threads, override_mode,
-                         &mut key_chain) {
-                Ok(()) => return Ok(()),
-                Err(e) => if let Some(seconds) = reconnect {
-                    interrupt::clear_notify();
-
-                    let _ = writeln!(
-                        stderr(),
-                        "Connection terminated due to error: {}\n\
-                         Attempting reconnect in {} seconds...",
-                        e, seconds);
-                    ::std::thread::sleep(::std::time::Duration::new(
-                        seconds, 0));
-                    // Continue loop
-                } else {
-                    return Err(e);
+                        let _ = writeln!(
+                            stderr(),
+                            "Connection terminated due to error: {}\n\
+                             Attempting reconnect in {} seconds...",
+                            e, seconds);
+                        ::std::thread::sleep(::std::time::Duration::new(
+                            seconds, 0));
+                        // Continue loop
+                    } else {
+                        return Err(e);
+                    }
                 }
             }
-        }
-    } else if let Some(matches) = matches.subcommand_matches("ls") {
-        set_up!(matches, config, storage, replica);
-        cli::cmd_manual::ls(&replica, matches.values_of_os("path").unwrap(),
-                            matches.occurrences_of("path") > 1,
-                            matches.is_present("human-readable"))
-    } else if let Some(matches) = matches.subcommand_matches("mkdir") {
-        set_up!(matches, config, storage, replica);
-        cli::cmd_manual::mkdir(&replica, matches.values_of_os("path").unwrap(),
-                               parse_mode(matches.value_of("mode").unwrap())?)
-    } else if let Some(matches) = matches.subcommand_matches("rmdir") {
-        set_up!(matches, config, storage, replica);
-        cli::cmd_manual::rmdir(&replica, matches.values_of_os("path").unwrap())
-    } else if let Some(matches) = matches.subcommand_matches("cat") {
-        set_up!(matches, config, storage, replica);
-        cli::cmd_manual::cat(&replica, matches.values_of_os("path").unwrap())
-    } else if let Some(matches) = matches.subcommand_matches("get") {
-        set_up!(matches, config, storage, replica);
-        cli::cmd_manual::get(&replica, matches.value_of_os("src").unwrap(),
-                             matches.value_of_os("dst").unwrap(),
-                             matches.is_present("force"),
-                             matches.is_present("verbose"))
-    } else if let Some(matches) = matches.subcommand_matches("put") {
-        set_up!(matches, config, storage, replica);
-        cli::cmd_manual::put(&replica, matches.value_of_os("src").unwrap(),
-                             matches.value_of_os("dst").unwrap_or(
-                                 ::std::ffi::OsStr::new("")),
-                             matches.is_present("force"),
-                             matches.is_present("verbose"))
-    } else if let Some(matches) = matches.subcommand_matches("rm") {
-        set_up!(matches, config, storage, replica);
-        cli::cmd_manual::rm(&replica, matches.values_of_os("path").unwrap(),
-                            matches.is_present("recursive"),
-                            matches.is_present("verbose"))
-    } else {
-        panic!("Unhandled subcommand: {}", matches.subcommand_name().unwrap());
+        },
+
+        Command::Ls(sc) => {
+            set_up!(sc, config, storage, replica);
+            cli::cmd_manual::ls(&replica, sc.path.iter(),
+                                sc.path.len() > 1,
+                                sc.human_readable)
+        },
+
+        Command::Mkdir(sc) => {
+            set_up!(sc, config, storage, replica);
+            cli::cmd_manual::mkdir(&replica, sc.path.iter(), parse_mode(&sc.mode)?)
+        },
+
+        Command::Rmdir(sc) => {
+            set_up!(sc, config, storage, replica);
+            cli::cmd_manual::rmdir(&replica, sc.path.iter())
+        },
+
+        Command::Cat(sc) => {
+            set_up!(sc, config, storage, replica);
+            cli::cmd_manual::cat(&replica, sc.path.iter())
+        },
+
+        Command::Get(sc) => {
+            set_up!(sc, config, storage, replica);
+            cli::cmd_manual::get(&replica, sc.src,
+                                 sc.dst,
+                                 sc.force,
+                                 sc.verbosity.is_verbose())
+        },
+
+        Command::Put(sc) => {
+            set_up!(sc, config, storage, replica);
+            cli::cmd_manual::put(&replica, sc.src, sc.dst.unwrap_or(PathBuf::new()),
+                                 sc.force,
+                                 sc.verbosity.is_verbose())
+        },
+
+        Command::Rm(sc) => {
+            set_up!(sc, config, storage, replica);
+            cli::cmd_manual::rm(&replica, sc.path.iter(), sc.recursive,
+                                sc.verbosity.is_verbose())
+        },
     }
 }
 

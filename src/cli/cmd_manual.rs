@@ -34,12 +34,14 @@ use crate::replica::{Replica, ReplicaDirectory};
 use crate::posix;
 use crate::server::{ServerReplica, Storage};
 
-pub fn ls<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
+pub fn ls<S : Storage + ?Sized, IT : Iterator<Item = impl AsRef<Path>>>
     (replica: &ServerReplica<S>, paths: IT,
      show_headers: bool, human_readable: bool)
     -> Result<()>
 {
     for path in paths {
+        let path = path.as_ref();
+
         if show_headers {
             println!("{}:", path.to_string_lossy());
         }
@@ -143,7 +145,7 @@ fn ls_one<S : Storage + ?Sized, P : AsRef<Path>>
     Ok(())
 }
 
-pub fn mkdir<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
+pub fn mkdir<'a, S : Storage + ?Sized, IT : Iterator<Item = impl AsRef<Path>>>
     (replica: &ServerReplica<S>, paths: IT, mode: FileMode) -> Result<()>
 {
     for path in paths {
@@ -160,7 +162,7 @@ pub fn mkdir<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
     Ok(())
 }
 
-pub fn rmdir<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
+pub fn rmdir<'a, S : Storage + ?Sized, IT : Iterator<Item = impl AsRef<Path>>>
     (replica: &ServerReplica<S>, paths: IT) -> Result<()>
 {
     for path in paths {
@@ -173,7 +175,7 @@ pub fn rmdir<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
     Ok(())
 }
 
-pub fn cat<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>
+pub fn cat<'a, S : Storage + ?Sized, IT : Iterator<Item = impl AsRef<Path>>>
     (replica: &ServerReplica<S>, paths: IT) -> Result<()>
 {
     for path in paths {
@@ -486,7 +488,7 @@ pub fn put<S : Storage + ?Sized, P1 : AsRef<Path>, P2 : AsRef<Path>>
     Ok(())
 }
 
-pub fn rm<'a, S : Storage + ?Sized, IT : Iterator<Item = &'a OsStr>>(
+pub fn rm<'a, S : Storage + ?Sized, IT : Iterator<Item = impl AsRef<Path>>>(
     replica: &ServerReplica<S>, paths: IT,
     recursive: bool, verbose: bool) -> Result<()>
 {
