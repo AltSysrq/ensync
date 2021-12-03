@@ -1,6 +1,6 @@
 [package]
 name = "ensync"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Jason Lingle"]
 license = "GPL-3.0"
 repository = "https://github.com/altsysrq/ensync"
@@ -13,9 +13,6 @@ description = """
 A flexible ENcrypted file SYNChroniser suitable for uses where the central
 location is not fully trusted.
 """
-
-[badges]
-travis-ci = { repository = "AltSysrq/ensync" }
 
 [dependencies]
 # Can't upgrade to 0.3 because of rust-crypto dependency

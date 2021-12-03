@@ -1,4 +1,4 @@
-# Unreleased
+# 1.0.1
 
 - Fix `esync sync` spuriously detecting the internal state as having been
   copied from another FS.
