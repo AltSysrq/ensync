@@ -543,7 +543,7 @@ pub fn run_server_rpc<S: Storage, R: Read, W: Write + Send + 'static>(
                     $e
                 )))
             };
-        };
+        }
 
         macro_rules! none_or_fatal {
             ($e:expr) => {
