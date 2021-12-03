@@ -1119,18 +1119,25 @@ fn run_sync<
 }
 
 fn check_for_copied_private_dir(private_dir: &Path) -> Result<()> {
+    const FSID_VERSION: &str = "FSID2:";
+
     let ancestor_path = private_dir.join("ancestor.sqlite");
     let expected_content = match ancestor_path.metadata() {
         Err(_) => return Ok(()),
-        Ok(md) => format!("{}:{}", md.dev(), md.ino()),
+        // In an older version, we also included md.dev() here. This has been
+        // removed since the device IDs are not stable on all systems (i.e.
+        // different boots can result in different ids for the same files).
+        Ok(md) => format!("{}{}", FSID_VERSION, md.ino()),
     };
 
     let marker_path = private_dir.join("fsid");
-    if let Ok(marker_content) = fs::read(&marker_path) {
-        if &marker_content[..] != expected_content.as_bytes() {
-            perrln!(
-                "\
-It looks like the ensync internal state was copied from somewhere else.
+    let marker_content = fs::read(&marker_path).unwrap_or_default();
+    if marker_content.starts_with(FSID_VERSION.as_bytes())
+        && &marker_content[..] != expected_content.as_bytes()
+    {
+        perrln!(
+            "\
+            It looks like the ensync internal state was copied from somewhere else.
 Aborting syncing since this could lead to catastrophic results.
 
 You should probably delete {}
@@ -1144,13 +1151,12 @@ in the future.
 If you are sure that the internal state corresponds to the state of your local
 file system, you can instead disable this safety check by deleting
 {}",
-                private_dir.display(),
-                private_dir.parent().unwrap().display(),
-                marker_path.display()
-            );
+            private_dir.display(),
+            private_dir.parent().unwrap().display(),
+            marker_path.display()
+        );
 
-            return Err(ErrorKind::SanityCheckFailed.into());
-        }
+        return Err(ErrorKind::SanityCheckFailed.into());
     } else {
         let _ = fs::write(&marker_path, expected_content.as_bytes());
     }

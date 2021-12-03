@@ -1,3 +1,8 @@
+# Unreleased
+
+- Fix `esync sync` spuriously detecting the internal state as having been
+  copied from another FS.
+
 # 1.0.0
 
 - Fix `ensync setup` falsely identifying UNIX file systems as not supporting
