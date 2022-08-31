@@ -52,6 +52,8 @@ mod replica;
 mod rules;
 mod server;
 
+use std::fs::File;
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::PathBuf;
 
 use clap::AppSettings;
@@ -291,6 +293,11 @@ struct SyncSubcommand {
     /// `auto`, implies `--strategy=clean`.
     #[structopt(long)]
     override_mode: Option<SyncMode>,
+
+    /// Output line-delimited status messages to the given file descriptor. The output is
+    /// unaffected by the `-v` or `-q` flags.
+    #[structopt(long)]
+    json_status_fd: Option<RawFd>,
 }
 
 /// Initialise the key store.
@@ -1097,9 +1104,13 @@ fn main_impl() -> Result<()> {
                 return Err("Thread count must be at least 1".into());
             }
 
+            let json_status_out =
+                sc.json_status_fd.map(|fd| unsafe { File::from_raw_fd(fd) });
+
             fn do_run(
                 sc: &SyncSubcommand,
                 config: &cli::config::Config,
+                json_status_out: Option<File>,
                 num_threads: u32,
                 key_chain: &mut Option<std::sync::Arc<server::KeyChain>>,
             ) -> errors::Result<()> {
@@ -1113,6 +1124,7 @@ fn main_impl() -> Result<()> {
                     sc.verbosity.quiet,
                     sc.itemise,
                     sc.itemise_unchanged,
+                    json_status_out,
                     &sc.colour,
                     &sc.spin,
                     sc.include_ancestors,
@@ -1130,7 +1142,13 @@ fn main_impl() -> Result<()> {
             loop {
                 use std::io::{stderr, Write};
 
-                match do_run(&sc, &config, num_threads, &mut key_chain) {
+                match do_run(
+                    &sc,
+                    &config,
+                    json_status_out.as_ref().map(|j| j.try_clone().unwrap()),
+                    num_threads,
+                    &mut key_chain,
+                ) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         if let Some(seconds) = sc.reconnect {

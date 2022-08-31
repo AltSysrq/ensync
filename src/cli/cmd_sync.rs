@@ -104,6 +104,7 @@ struct LoggerImpl {
     created_directories: RwLock<HashSet<PathBuf>>,
     recdel_directories: RwLock<HashSet<PathBuf>>,
     spin: Option<Mutex<SpinState>>,
+    json_status_out: Option<Mutex<std::fs::File>>,
 }
 
 #[derive(Debug, Default)]
@@ -128,6 +129,12 @@ impl Logger for LoggerImpl {
         }
         if level <= self.itemise_level {
             self.write_itemised(what);
+        }
+
+        if let Some(json_status_out_mutex) = &self.json_status_out {
+            let mut json_status_out = json_status_out_mutex.lock().unwrap();
+
+            self.write_json_status(&mut json_status_out, what);
         }
     }
 }
@@ -755,6 +762,10 @@ impl LoggerImpl {
             }
         }
     }
+
+    fn write_json_status(&self, out: &mut std::fs::File, what: &Log) {
+        write!(out, "{:?}\n", what).unwrap();
+    }
 }
 
 pub fn run(
@@ -764,6 +775,7 @@ pub fn run(
     quietness: i32,
     itemise: bool,
     itemise_unchanged: bool,
+    json_status_out: Option<std::fs::File>,
     colour: &str,
     spin: &str,
     include_ancestors: bool,
@@ -882,6 +894,7 @@ pub fn run(
         } else {
             None
         },
+        json_status_out: json_status_out.map(|j| Mutex::new(j)),
     };
 
     interrupt::install_signal_handler();
