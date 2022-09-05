@@ -9,16 +9,16 @@ TEST_DIR="$(mktemp --directory --tmpdir ensync-test.XXXXXXXXX)"
 cd "${TEST_DIR}"
 trap "rm -rf '${TEST_DIR}'" exit
 
-CLIENT="${PWD}/client"
+LOCAL="${PWD}/local"
 CONFIG="${PWD}/config"
-SERVER="${PWD}/server"
+REMOTE="${PWD}/remote"
 
-mkdir "${CLIENT}" "${CONFIG}"
+mkdir "${LOCAL}" "${CONFIG}"
 
 cat > "${CONFIG}/config.toml" <<EOF
 [general]
-path = "${CLIENT}"
-server = "path:${SERVER}"
+path = "${LOCAL}"
+server = "path:${REMOTE}"
 server_root = "root"
 passphrase = "string:test"
 compression = "best"
@@ -32,8 +32,19 @@ touch "${PWD}/testfile"
 
 ${ENSYNC} key init "${CONFIG}"
 ${ENSYNC} mkdir "${CONFIG}" /root
-${ENSYNC} mkdir "${CONFIG}" server-new-dir
-${ENSYNC} put "${CONFIG}" "${PWD}/testfile" server-new-file
-mkdir "${CLIENT}/client-new-dir"
-touch "${CLIENT}/client-new-file"
-${ENSYNC} sync --json-status-fd=2 "${CONFIG}"
+${ENSYNC} mkdir "${CONFIG}" remote-new-dir
+${ENSYNC} put "${CONFIG}" "${PWD}/testfile" remote-new-file
+${ENSYNC} put "${CONFIG}" "${PWD}/testfile" edit-edit-file
+mkdir "${LOCAL}/local-new-dir"
+touch "${LOCAL}/local-new-file"
+touch "${LOCAL}/edit-edit-file"
+
+JSON_STATUS_OUT="${PWD}/json-status-out"
+
+exec 3>"${JSON_STATUS_OUT}"
+${ENSYNC} sync --json-status-fd=3 "${CONFIG}"
+
+touch "${LOCAL}/local-new-file"
+${ENSYNC} sync --json-status-fd=3 "${CONFIG}"
+
+cat "${JSON_STATUS_OUT}"
