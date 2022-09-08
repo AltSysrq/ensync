@@ -156,6 +156,9 @@ enum LogJsonContents<'a> {
         #[serde(rename = "rename-new-name")]
         new_name: String,
     },
+    SyncRemove,
+    SyncRemoveRecursively,
+    SyncRemoveDirectory,
     Unimplemented {
         contents: String,
     },
@@ -837,6 +840,10 @@ impl LoggerImpl {
             format!("{}", PathDisplay(&self.client_root, (dir, name)))
         };
 
+        let display_dir_path = |dir: &OsStr| -> String {
+            format!("{}", PathDisplay(&self.client_root, dir))
+        };
+
         fn name_side<S: Into<ReplicaSide>>(side: S) -> &'static str {
             match side.into() {
                 ReplicaSide::Client => "local",
@@ -914,6 +921,9 @@ impl LoggerImpl {
             Log::Rename(_, dir, _, new) => LogJsonContents::SyncRename {
                 new_name: display_path(dir, new),
             },
+            Log::Remove(..) => LogJsonContents::SyncRemove,
+            Log::RecursiveDelete(..) => LogJsonContents::SyncRemoveRecursively,
+            Log::Rmdir(..) => LogJsonContents::SyncRemoveDirectory,
             _ => LogJsonContents::Unimplemented {
                 contents: format!("{:?}", what),
             },
@@ -925,7 +935,8 @@ impl LoggerImpl {
                 path: display_path(dir, name),
                 info: None,
             }),
-            Log::Create(side, dir, name, state) => Some(LogJsonLocation {
+            Log::Create(side, dir, name, state)
+            | Log::Remove(side, dir, name, state) => Some(LogJsonLocation {
                 side: Some(name_side(side)),
                 path: display_path(dir, name),
                 info: Some(convert_state_to_info(state)),
@@ -936,6 +947,13 @@ impl LoggerImpl {
                 path: display_path(dir, name),
                 info: None,
             }),
+            Log::Rmdir(side, dir) | Log::RecursiveDelete(side, dir) => {
+                Some(LogJsonLocation {
+                    side: Some(name_side(side)),
+                    path: display_dir_path(dir),
+                    info: None,
+                })
+            }
             _ => None,
         };
 
