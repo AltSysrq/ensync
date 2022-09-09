@@ -1,0 +1,468 @@
+{
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_finished"
+}
+{
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_started"
+}
+{
+  "info": {
+    "mode": 448,
+    "type": "directory"
+  },
+  "path": "dir-for-read-errors",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 448,
+    "type": "directory"
+  },
+  "path": "dir-for-write-errors",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 33152,
+    "modified_time": "...",
+    "size": 10,
+    "type": "file"
+  },
+  "path": "dir-for-write-errors/file-to-attempt-removal",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 493,
+    "type": "directory"
+  },
+  "path": "dir-to-remove-recursively",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 9,
+    "type": "file"
+  },
+  "path": "dir-to-remove-recursively/testfile",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "conflict_reconciliation": "split_remote",
+  "conflict_type": "edit_edit",
+  "path": "edit-edit-file",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_conflict"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 6,
+    "type": "file"
+  },
+  "path": "edit-edit-file",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "path": "edit-edit-file",
+  "rename_new_name": "edit-edit-file~1",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_rename"
+}
+{
+  "info": {
+    "mode": 33152,
+    "modified_time": "...",
+    "size": 3,
+    "type": "file"
+  },
+  "path": "edit-edit-file~1",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 493,
+    "type": "directory"
+  },
+  "path": "local-dir-to-remove",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 5,
+    "type": "file"
+  },
+  "path": "local-file-to-remove",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 4,
+    "type": "file"
+  },
+  "path": "local-file-to-update",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 493,
+    "type": "directory"
+  },
+  "path": "local-new-dir",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "target": "target",
+    "type": "symlink"
+  },
+  "path": "local-symlink",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 448,
+    "type": "directory"
+  },
+  "path": "remote-dir-to-remove",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 33152,
+    "modified_time": "...",
+    "size": 2,
+    "type": "file"
+  },
+  "path": "remote-file-to-remove",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 33152,
+    "modified_time": "...",
+    "size": 1,
+    "type": "file"
+  },
+  "path": "remote-file-to-update",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+{
+  "info": {
+    "mode": 448,
+    "type": "directory"
+  },
+  "path": "remote-new-dir",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_create"
+}
+
+{
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_finished"
+}
+{
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_started"
+}
+{
+  "error_message": "Failed to list directory: Error listing directory '/tmp/ensync-test.N6FRoQ0bQ/local/dir-for-read-errors'\ncaused by: Permission denied (os error 13)",
+  "path": "dir-for-read-errors",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_error"
+}
+{
+  "path": "dir-for-read-errors",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_update",
+  "update_new_info": {
+    "mode": 0,
+    "type": "directory"
+  },
+  "update_old_info": {
+    "mode": 448,
+    "type": "directory"
+  }
+}
+{
+  "path": "dir-for-write-errors",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_recursively"
+}
+{
+  "error_message": "Failed to remove: Permission denied (os error 13)",
+  "path": "dir-for-write-errors/file-to-attempt-removal",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_error"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 10,
+    "type": "file"
+  },
+  "path": "dir-for-write-errors/file-to-attempt-removal",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove"
+}
+{
+  "path": "dir-to-remove-recursively",
+  "side": "ancestor",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "dir-to-remove-recursively",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "dir-to-remove-recursively",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "dir-to-remove-recursively",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_recursively"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 9,
+    "type": "file"
+  },
+  "path": "dir-to-remove-recursively/testfile",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove"
+}
+{
+  "path": "edit-edit-file~1",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_update",
+  "update_new_info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 3,
+    "type": "file"
+  },
+  "update_old_info": {
+    "mode": 33152,
+    "modified_time": "...",
+    "size": 3,
+    "type": "file"
+  }
+}
+{
+  "path": "local-dir-to-remove",
+  "side": "ancestor",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "local-dir-to-remove",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "local-dir-to-remove",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "local-dir-to-remove",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_recursively"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 5,
+    "type": "file"
+  },
+  "path": "local-file-to-remove",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove"
+}
+{
+  "path": "local-file-to-update",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_update",
+  "update_new_info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 7,
+    "type": "file"
+  },
+  "update_old_info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 4,
+    "type": "file"
+  }
+}
+{
+  "path": "remote-dir-to-remove",
+  "side": "ancestor",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "remote-dir-to-remove",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "path": "remote-dir-to-remove",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_recursively"
+}
+{
+  "path": "remote-dir-to-remove",
+  "side": "remote",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove_directory"
+}
+{
+  "info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 2,
+    "type": "file"
+  },
+  "path": "remote-file-to-remove",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_remove"
+}
+{
+  "conflict_reconciliation": "use_remote",
+  "conflict_type": "edit_edit",
+  "path": "remote-file-to-update",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_conflict"
+}
+{
+  "path": "remote-file-to-update",
+  "side": "local",
+  "status_version": 1,
+  "time": "...",
+  "type": "sync_update",
+  "update_new_info": {
+    "mode": 33152,
+    "modified_time": "...",
+    "size": 8,
+    "type": "file"
+  },
+  "update_old_info": {
+    "mode": 384,
+    "modified_time": "...",
+    "size": 1,
+    "type": "file"
+  }
+}
