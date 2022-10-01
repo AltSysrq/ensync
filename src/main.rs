@@ -1145,7 +1145,7 @@ fn main_impl() -> Result<()> {
                 match do_run(
                     &sc,
                     &config,
-                    json_status_out.as_ref().map(|j| j.try_clone().unwrap()),
+                    json_status_out.as_ref().map(|j| j.try_clone().expect("failed to clone FD")),
                     num_threads,
                     &mut key_chain,
                 ) {
