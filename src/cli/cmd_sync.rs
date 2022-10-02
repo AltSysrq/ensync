@@ -905,7 +905,7 @@ impl LoggerImpl {
                     }
                 }
                 FileData::Symlink(ref target) => LogJsonPathInfo::Symlink {
-                    target: target.to_string_lossy().clone().into_owned(),
+                    target: target.to_string_lossy().into_owned(),
                 },
                 FileData::Special => LogJsonPathInfo::Special,
             }
