@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
-use std::io::{self, stderr, stdout, Read, Write};
+use std::io::{self, stderr, stdout, BufWriter, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering::SeqCst;
@@ -30,7 +30,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
+use chrono::Utc;
 use libc::isatty;
+use serde::Serialize;
 
 use crate::ancestor::*;
 use crate::cli::config::Config;
@@ -82,6 +84,7 @@ impl<'a> fmt::Display for PathDisplay<'a, &'a OsStr> {
         )
     }
 }
+
 impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, &'a OsStr)> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let prefix = (self.1).0.as_path().strip_prefix(self.0).unwrap();
@@ -89,6 +92,16 @@ impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, &'a OsStr)> {
             write!(f, "{}/{}", prefix.display(), (self.1).1.as_path().display())
         } else {
             write!(f, "{}", (self.1).1.as_path().display())
+        }
+    }
+}
+
+impl<'a> fmt::Display for PathDisplay<'a, (&'a OsStr, Option<&'a OsStr>)> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(name) = (self.1).1 {
+            PathDisplay(self.0, ((self.1).0, name)).fmt(f)
+        } else {
+            PathDisplay(self.0, (self.1).0).fmt(f)
         }
     }
 }
@@ -104,6 +117,7 @@ struct LoggerImpl {
     created_directories: RwLock<HashSet<PathBuf>>,
     recdel_directories: RwLock<HashSet<PathBuf>>,
     spin: Option<Mutex<SpinState>>,
+    json_status_out: Option<Mutex<BufWriter<fs::File>>>,
 }
 
 #[derive(Debug, Default)]
@@ -121,6 +135,72 @@ struct ReplicaSpinState {
     transfer: u64,
 }
 
+#[derive(Serialize)]
+struct LogJson<'a> {
+    status_version: usize,
+    time: chrono::DateTime<Utc>,
+    #[serde(flatten)]
+    contents: LogJsonContents<'a>,
+    #[serde(flatten)]
+    location: Option<LogJsonLocation<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum LogJsonContents<'a> {
+    SyncStarted,
+    SyncFinished,
+    SyncConflict {
+        #[serde(rename = "conflict_type")]
+        type_: &'a str,
+        #[serde(rename = "conflict_reconciliation")]
+        reconciliation: &'a str,
+    },
+    SyncCreate,
+    SyncUpdate {
+        #[serde(rename = "update_old_info")]
+        old_info: LogJsonPathInfo,
+        #[serde(rename = "update_new_info")]
+        new_info: LogJsonPathInfo,
+    },
+    SyncRename {
+        #[serde(rename = "rename_new_name")]
+        new_name: String,
+    },
+    SyncRemove,
+    SyncRemoveRecursively,
+    SyncRemoveDirectory,
+    SyncError {
+        error_message: String,
+    },
+}
+
+#[derive(Serialize)]
+struct LogJsonLocation<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    side: Option<&'a str>,
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    info: Option<LogJsonPathInfo>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum LogJsonPathInfo {
+    Directory {
+        mode: u32,
+    },
+    File {
+        mode: u32,
+        size: u64,
+        modified_time: chrono::DateTime<Utc>,
+    },
+    Symlink {
+        target: String,
+    },
+    Special,
+}
+
 impl Logger for LoggerImpl {
     fn log(&self, level: LogLevel, what: &Log) {
         if level <= self.verbose_level {
@@ -128,6 +208,78 @@ impl Logger for LoggerImpl {
         }
         if level <= self.itemise_level {
             self.write_itemised(what);
+        }
+
+        if let Some(json_status_out_mutex) = &self.json_status_out {
+            let mut json_status_out = json_status_out_mutex.lock().unwrap();
+
+            self.write_json_status(&mut json_status_out, what);
+        }
+    }
+}
+
+/// Gets the basename of the path of the given `ErrorOperation`, if any.
+fn get_error_basename<'a>(op: &'a ErrorOperation) -> Option<&'a OsStr> {
+    match *op {
+        ErrorOperation::List => None,
+        ErrorOperation::MarkClean => None,
+        ErrorOperation::Chdir(name) => Some(name),
+        ErrorOperation::Create(name) => Some(name),
+        ErrorOperation::Update(name) => Some(name),
+        ErrorOperation::Rename(name) => Some(name),
+        ErrorOperation::Remove(name) => Some(name),
+        ErrorOperation::Rmdir => None,
+        ErrorOperation::Access(name) => Some(name),
+    }
+}
+
+/// Format the given `ErrorOperation` into a human-readable error message.
+fn format_error_log<'a>(op: &'a ErrorOperation, err: &'a Error) -> String {
+    let mut errs = err.to_string();
+
+    for e in err.iter().skip(1) {
+        errs.push_str(&format!("\ncaused by: {}", e));
+    }
+
+    if let Some(bt) = err.backtrace() {
+        errs.push_str(&format!("\n{:?}\n", bt));
+    }
+
+    match *op {
+        ErrorOperation::List => {
+            format!("Failed to list directory: {}", errs)
+        }
+
+        ErrorOperation::MarkClean => {
+            format!("Failed to mark directory clean: {}", errs)
+        }
+
+        ErrorOperation::Chdir(..) => {
+            format!("Failed to enter directory: {}", errs)
+        }
+
+        ErrorOperation::Create(..) => {
+            format!("Failed to create: {}", errs)
+        }
+
+        ErrorOperation::Update(..) => {
+            format!("Failed to update: {}", errs)
+        }
+
+        ErrorOperation::Rename(..) => {
+            format!("Failed to rename: {}", errs)
+        }
+
+        ErrorOperation::Remove(..) => {
+            format!("Failed to remove: {}", errs)
+        }
+
+        ErrorOperation::Rmdir => {
+            format!("Failed to remove: {}", errs)
+        }
+
+        ErrorOperation::Access(..) => {
+            format!("Failed to access: {}", errs)
         }
     }
 }
@@ -264,6 +416,7 @@ impl LoggerImpl {
         }
 
         match *what {
+            Log::SyncStarted | Log::SyncFinished => {}
             Log::Inspect(dir, name, reconciliation, conflict) => {
                 let recon_str = match reconciliation {
                     Reconciliation::InSync => Cow::Borrowed("in sync"),
@@ -439,59 +592,10 @@ impl LoggerImpl {
             }
 
             Log::Error(side, path, ref op, err) => {
-                let mut errs = err.to_string();
+                let name = get_error_basename(op);
+                let message = format_error_log(op, err);
 
-                for e in err.iter().skip(1) {
-                    errs.push_str(&format!("\ncaused by: {}", e));
-                }
-
-                if let Some(bt) = err.backtrace() {
-                    errs.push_str(&format!("\n{:?}\n", bt));
-                }
-
-                match *op {
-                    ErrorOperation::List => {
-                        say!(path, side, "Failed to list directory: {}", errs)
-                    }
-
-                    ErrorOperation::MarkClean => say!(
-                        path,
-                        side,
-                        "Failed to mark directory clean: {}",
-                        errs
-                    ),
-
-                    ErrorOperation::Chdir(name) => say!(
-                        (path, name),
-                        side,
-                        "Failed to enter directory: {}",
-                        errs
-                    ),
-
-                    ErrorOperation::Create(name) => {
-                        say!((path, name), side, "Failed to create: {}", errs)
-                    }
-
-                    ErrorOperation::Update(name) => {
-                        say!((path, name), side, "Failed to update: {}", errs)
-                    }
-
-                    ErrorOperation::Rename(name) => {
-                        say!((path, name), side, "Failed to rename: {}", errs)
-                    }
-
-                    ErrorOperation::Remove(name) => {
-                        say!((path, name), side, "Failed to remove: {}", errs)
-                    }
-
-                    ErrorOperation::Rmdir => {
-                        say!(path, side, "Failed to remove: {}", errs)
-                    }
-
-                    ErrorOperation::Access(name) => {
-                        say!((path, name), side, "Failed to access: {}", errs)
-                    }
-                }
+                say!((path, name), side, "{}", message);
             }
         }
 
@@ -643,6 +747,7 @@ impl LoggerImpl {
         }
 
         match *what {
+            Log::SyncStarted | Log::SyncFinished => {}
             Log::Error(..) => {}
             Log::RecursiveDelete(..) => {}
 
@@ -755,6 +860,159 @@ impl LoggerImpl {
             }
         }
     }
+
+    fn write_json_status(&self, mut out: &mut BufWriter<fs::File>, what: &Log) {
+        let now = chrono::Utc::now();
+
+        let display_path = |dir: &OsStr, name: &OsStr| -> String {
+            format!("{}", PathDisplay(&self.client_root, (dir, name)))
+        };
+
+        let display_maybe_path =
+            |dir: &OsStr, name: Option<&OsStr>| -> String {
+                format!("{}", PathDisplay(&self.client_root, (dir, name)))
+            };
+
+        let display_dir_path = |dir: &OsStr| -> String {
+            format!("{}", PathDisplay(&self.client_root, dir))
+        };
+
+        fn name_side<S: Into<ReplicaSide>>(side: S) -> &'static str {
+            match side.into() {
+                ReplicaSide::Client => "local",
+                ReplicaSide::Server => "remote",
+                ReplicaSide::Ancestor => "ancestor",
+            }
+        }
+
+        fn convert_state_to_info(state: &FileData) -> LogJsonPathInfo {
+            match *state {
+                FileData::Directory(mode) => {
+                    LogJsonPathInfo::Directory { mode }
+                }
+
+                FileData::Regular(mode, size, modified_time, ..) => {
+                    LogJsonPathInfo::File {
+                        mode,
+                        size,
+                        modified_time: chrono::DateTime::<Utc>::from_utc(
+                            chrono::NaiveDateTime::from_timestamp(
+                                modified_time,
+                                0,
+                            ),
+                            Utc,
+                        ),
+                    }
+                }
+                FileData::Symlink(ref target) => LogJsonPathInfo::Symlink {
+                    target: target.to_string_lossy().into_owned(),
+                },
+                FileData::Special => LogJsonPathInfo::Special,
+            }
+        }
+
+        let contents = match *what {
+            Log::SyncStarted => LogJsonContents::SyncStarted,
+            Log::SyncFinished => LogJsonContents::SyncFinished,
+            Log::Inspect(.., reconciliation, conflict) => {
+                LogJsonContents::SyncConflict {
+                    type_: match conflict {
+                        Conflict::NoConflict => return,
+                        Conflict::EditEdit(..) => "edit_edit",
+                        Conflict::EditDelete(deleted_side) => {
+                            match deleted_side {
+                                ReconciliationSide::Client => {
+                                    "edit_remote_delete_local"
+                                }
+                                ReconciliationSide::Server => {
+                                    "edit_local_delete_remote"
+                                }
+                            }
+                        }
+                    },
+                    reconciliation: match reconciliation {
+                        Reconciliation::InSync => return,
+                        Reconciliation::Unsync => "unsynced",
+                        Reconciliation::Irreconcilable => "irreconcilable",
+                        Reconciliation::Use(side) => match side {
+                            ReconciliationSide::Client => "use_local",
+                            ReconciliationSide::Server => "use_remote",
+                        },
+                        Reconciliation::Split(side, ..) => match side {
+                            ReconciliationSide::Client => "split_local",
+                            ReconciliationSide::Server => "split_remote",
+                        },
+                    },
+                }
+            }
+
+            Log::Create(..) => LogJsonContents::SyncCreate,
+            Log::Update(.., old, new) => LogJsonContents::SyncUpdate {
+                old_info: convert_state_to_info(old),
+                new_info: convert_state_to_info(new),
+            },
+            Log::Rename(_, dir, _, new) => LogJsonContents::SyncRename {
+                new_name: display_path(dir, new),
+            },
+            Log::Remove(..) => LogJsonContents::SyncRemove,
+            Log::RecursiveDelete(..) => LogJsonContents::SyncRemoveRecursively,
+            Log::Rmdir(..) => LogJsonContents::SyncRemoveDirectory,
+            Log::Error(.., ref op, err) => {
+                let error_message = format_error_log(op, err);
+
+                LogJsonContents::SyncError { error_message }
+            }
+        };
+
+        let location = match *what {
+            Log::Inspect(dir, name, ..) => Some(LogJsonLocation {
+                side: None,
+                path: display_path(dir, name),
+                info: None,
+            }),
+            Log::Create(side, dir, name, state)
+            | Log::Remove(side, dir, name, state) => Some(LogJsonLocation {
+                side: Some(name_side(side)),
+                path: display_path(dir, name),
+                info: Some(convert_state_to_info(state)),
+            }),
+            Log::Update(side, dir, name, ..)
+            | Log::Rename(side, dir, name, ..) => Some(LogJsonLocation {
+                side: Some(name_side(side)),
+                path: display_path(dir, name),
+                info: None,
+            }),
+            Log::Rmdir(side, dir) | Log::RecursiveDelete(side, dir) => {
+                Some(LogJsonLocation {
+                    side: Some(name_side(side)),
+                    path: display_dir_path(dir),
+                    info: None,
+                })
+            }
+            Log::Error(side, dir, ref op, ..) => {
+                let name = get_error_basename(op);
+
+                Some(LogJsonLocation {
+                    side: Some(name_side(side)),
+                    path: display_maybe_path(dir, name),
+                    info: None,
+                })
+            }
+            _ => None,
+        };
+
+        serde_json::to_writer(
+            &mut out,
+            &LogJson {
+                status_version: 1,
+                time: now,
+                contents,
+                location,
+            },
+        )
+        .expect("Failed to write to JSON status output");
+        write!(&mut out, "\n").expect("Failed to write to JSON status output");
+    }
 }
 
 pub fn run(
@@ -764,6 +1022,7 @@ pub fn run(
     quietness: i32,
     itemise: bool,
     itemise_unchanged: bool,
+    json_status_out: Option<fs::File>,
     colour: &str,
     spin: &str,
     include_ancestors: bool,
@@ -882,6 +1141,7 @@ pub fn run(
         } else {
             None
         },
+        json_status_out: json_status_out.map(|j| Mutex::new(BufWriter::new(j))),
     };
 
     interrupt::install_signal_handler();
@@ -1012,6 +1272,8 @@ fn run_sync<
         }};
     }
 
+    context.log.log(INFO, &Log::SyncStarted);
+
     let last_config_path = config.private_root.join("last-config.dat");
     let min_prepare_type =
         match fs::File::open(&last_config_path).and_then(|mut file| {
@@ -1114,6 +1376,8 @@ fn run_sync<
             perrln!("Server cleanup failed: {}", err);
         }
     }
+
+    context.log.log(INFO, &Log::SyncFinished);
 
     Ok(())
 }

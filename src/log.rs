@@ -65,6 +65,8 @@ pub enum ErrorOperation<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Log<'a> {
+    SyncStarted,
+    SyncFinished,
     Inspect(&'a OsStr, &'a OsStr, Reconciliation, Conflict),
     Create(ReplicaSide, &'a OsStr, &'a OsStr, &'a FileData),
     Update(
