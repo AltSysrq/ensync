@@ -497,7 +497,7 @@ pub fn put<S: Storage + ?Sized, P1: AsRef<Path>, P2: AsRef<Path>>(
         })?;
         let ft = md.file_type();
         if ft.is_dir() {
-            let new_fd = FileData::Directory(md.mode());
+            let new_fd = FileData::Directory(md.mode() & 0o777);
             if let Some(existing) = existing {
                 replica.update(dir, &name, existing, &new_fd, None)
             } else {
@@ -533,7 +533,7 @@ pub fn put<S: Storage + ?Sized, P1: AsRef<Path>, P2: AsRef<Path>>(
             }
         } else if ft.is_file() {
             let new_fd = FileData::Regular(
-                md.mode(),
+                md.mode() & 0o777,
                 md.size(),
                 md.mtime(),
                 UNKNOWN_HASH,

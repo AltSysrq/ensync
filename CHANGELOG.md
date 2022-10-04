@@ -1,3 +1,7 @@
+# Unreleased
+
+- Fix `ensync put` copying extraneous mode bits on files and directories.
+
 # 1.0.1
 
 - Fix `esync sync` spuriously detecting the internal state as having been
