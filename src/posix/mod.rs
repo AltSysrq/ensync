@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, Jason Lingle
+// Copyright (c) 2016, 2017, 2024, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -51,7 +51,7 @@
 //! This top-level module also has some miscellaneous functions for working
 //! with POSIX filesystems.
 
-use libc::{c_long, futimes, timeval, utimes};
+use libc::{c_long, futimens, timespec, timeval, utimes};
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStringExt;
@@ -71,16 +71,17 @@ pub use self::replica::PosixReplica;
 /// seconds.
 pub fn set_mtime(file: &impl AsRawFd, mtime: FileTime) -> io::Result<()> {
     let access_modified = [
-        timeval {
+        timespec {
             tv_sec: mtime as c_long,
-            tv_usec: 0,
+            tv_nsec: 0,
         },
-        timeval {
+        timespec {
             tv_sec: mtime as c_long,
-            tv_usec: 0,
+            tv_nsec: 0,
         },
     ];
-    let code = unsafe { futimes(file.as_raw_fd(), &access_modified[0]) };
+    // Using futimens because ulibc doesn't have futimes
+    let code = unsafe { futimens(file.as_raw_fd(), &access_modified[0]) };
 
     if 0 == code {
         Ok(())
@@ -107,6 +108,7 @@ pub fn set_mtime_path<P: AsRef<Path>>(
     let path =
         CString::new(path.as_ref().to_owned().into_os_string().into_vec())
             .expect("set_mtime_path path argument contains NUL");
+    // But apparently there's no utimens and everyone does have utimes.
     let code = unsafe { utimes(path.as_ptr(), &access_modified[0]) };
 
     if 0 == code {
