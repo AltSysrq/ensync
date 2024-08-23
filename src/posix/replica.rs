@@ -1,5 +1,5 @@
 //-
-// Copyright (c) 2016, 2017, 2021, Jason Lingle
+// Copyright (c) 2016, 2017, 2021, 2024, Jason Lingle
 //
 // This file is part of Ensync.
 //
@@ -1453,7 +1453,13 @@ mod test {
     }
 
     fn spit<P: AsRef<Path>>(path: P, text: &str) {
-        let mut out = fs::File::create(path).unwrap();
+        let mut out = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o644)
+            .open(path)
+            .unwrap();
         out.write_all(text.as_bytes()).unwrap();
     }
 
