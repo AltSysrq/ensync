@@ -1,6 +1,7 @@
-# Unreleased
+# 1.0.2
 
 - Fix `ensync put` copying extraneous mode bits on files and directories.
+- Ensync now compiles on Android. https://github.com/AltSysrq/ensync/issues/9
 
 # 1.0.1
 
