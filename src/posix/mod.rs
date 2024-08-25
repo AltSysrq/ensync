@@ -64,6 +64,7 @@ mod dao;
 mod dir;
 mod replica;
 
+#[allow(unused_imports)]
 pub use self::dir::DirHandle;
 pub use self::replica::PosixReplica;
 

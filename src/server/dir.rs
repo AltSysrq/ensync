@@ -749,7 +749,6 @@ impl<S: Storage + ?Sized + 'static> Dir<S> {
                     Ok(ContentAddressableSource {
                         blocks: BlockList {
                             total: actual,
-                            size: 0, // Not used
                             blocks: blocks.iter().map(|v| v.0).collect(),
                         },
                         block_size: block_size as usize,

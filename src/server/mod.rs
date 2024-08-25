@@ -27,6 +27,7 @@ pub mod storage;
 mod transfer;
 
 pub use self::crypt::KeyChain;
+#[allow(unused_imports)]
 pub use self::dir::{DIRID_KEYS, DIRID_PROOT};
 pub use self::local_storage::LocalStorage;
 pub use self::replica::ServerReplica;

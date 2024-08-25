@@ -104,7 +104,6 @@ impl fmt::Display for SyncMode {
 #[derive(Clone, Copy, Debug)]
 pub struct SyncModeParseError {
     pub message: &'static str,
-    pub offset: usize,
 }
 
 impl fmt::Display for SyncModeParseError {
@@ -195,14 +194,12 @@ impl FromStr for SyncMode {
 
         if 7 != chars.len() {
             return Err(SyncModeParseError {
-                offset: 0,
                 message: "Sync mode must be 7 characters, like \"cud/cud\"",
             });
         }
 
         if '/' != chars[3] {
             return Err(SyncModeParseError {
-                offset: 3,
                 message: "Sync mode must have a '/' at position 3, \
                           like in \"cud/cud\"",
             });
@@ -212,7 +209,6 @@ impl FromStr for SyncMode {
             on: char,
             force: char,
             actual: char,
-            off: usize,
         ) -> Result<SyncModeSetting, SyncModeParseError> {
             if '-' == actual {
                 Ok(SyncModeSetting::Off)
@@ -222,7 +218,6 @@ impl FromStr for SyncMode {
                 Ok(SyncModeSetting::Force)
             } else {
                 Err(SyncModeParseError {
-                    offset: off,
                     message: "Illegal character in sync mode; must be in \
                               format like \"cud/cud\", \"---/---\", or \
                               \"CUD/CUD\"",
@@ -232,14 +227,14 @@ impl FromStr for SyncMode {
 
         Ok(SyncMode {
             inbound: HalfSyncMode {
-                create: conv('c', 'C', chars[0], 0)?,
-                update: conv('u', 'U', chars[1], 1)?,
-                delete: conv('d', 'D', chars[2], 2)?,
+                create: conv('c', 'C', chars[0])?,
+                update: conv('u', 'U', chars[1])?,
+                delete: conv('d', 'D', chars[2])?,
             },
             outbound: HalfSyncMode {
-                create: conv('c', 'C', chars[4], 4)?,
-                update: conv('u', 'U', chars[5], 5)?,
-                delete: conv('d', 'D', chars[6], 6)?,
+                create: conv('c', 'C', chars[4])?,
+                update: conv('u', 'U', chars[5])?,
+                delete: conv('d', 'D', chars[6])?,
             },
         })
     }

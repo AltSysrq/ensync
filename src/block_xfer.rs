@@ -79,8 +79,6 @@ pub struct BlockList {
     /// The HMACs of the component blocks of the stream. This will be empty if
     /// the stream itself was empty.
     pub blocks: Vec<HashId>,
-    /// The total number of bytes that were read from the stream.
-    pub size: FileSize,
 }
 
 /// Computes the hash of the given block using the same method used internally
@@ -123,7 +121,6 @@ pub fn stream_to_blocks<F: FnMut(&HashId, &[u8]) -> Result<()>, R: io::Read>(
 ) -> Result<BlockList> {
     let mut blocks = Vec::new();
     let mut hash = [0u8; 32];
-    let mut size: FileSize = 0;
     let mut total_kc = Keccak::new_sha3_256();
     total_kc.update(secret);
 
@@ -156,14 +153,12 @@ pub fn stream_to_blocks<F: FnMut(&HashId, &[u8]) -> Result<()>, R: io::Read>(
         block_out(&hash, &block_data[0..off])?;
         total_kc.update(&hash);
         blocks.push(hash);
-        size += off as FileSize;
     }
 
     total_kc.finalize(&mut hash);
     Ok(BlockList {
         total: hash,
         blocks: blocks,
-        size: size,
     })
 }
 
@@ -311,7 +306,6 @@ mod test {
         let (blocklist, blocks) = to_blocklist(text, &b"secret"[..]);
         assert_eq!(3, blocks.len());
         assert_eq!(3, blocklist.blocks.len());
-        assert_eq!(11, blocklist.size);
 
         assert_eq!(b"hell", &blocks[&blocklist.blocks[0]][..]);
         assert_eq!(b"o wo", &blocks[&blocklist.blocks[1]][..]);
